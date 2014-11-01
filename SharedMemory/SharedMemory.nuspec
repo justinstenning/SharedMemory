@@ -20,6 +20,6 @@ It features:
         </dependencies>
     </metadata>
     <files>
-        <file src="SharedMemory.dll" target="SharedMemory.dll" />
+        <file src="bin\Release\SharedMemory.dll" target="lib\net40\SharedMemory.dll" />
     </files>
 </package>

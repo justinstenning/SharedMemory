@@ -20,3 +20,4 @@ obj/
 [Rr]elease*/
 _ReSharper*/
 TestResults*/
+*.nupkg
