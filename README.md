@@ -3,6 +3,8 @@ SharedMemory
 
 C# shared memory classes for sharing data between processes (Array, Buffer and Circular Buffer)
 
+[![Build status](https://ci.appveyor.com/api/projects/status/uc32kwm1281y4sie?svg=true)](https://ci.appveyor.com/project/spazzarama/sharedmemory)
+
 About
 -----
 
