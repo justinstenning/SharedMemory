@@ -1,7 +1,4 @@
 SharedMemory
-============
-
-C# Shared Memory for inter-process communication (Array, Buffer and Circular Buffer)
 
 Copyright (c) 2014 Justin Stenning
 http://spazzarama.com
