@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd">
+    <metadata>
+        <id>SharedMemory</id>
+        <version>1.0.0</version>
+        <title>SharedMemory</title>
+        <authors>Justin Stenning</authors>
+        <projectUrl>https://sharedmemory.codeplex.com/</projectUrl>
+        <requireLicenseAcceptance>false</requireLicenseAcceptance>
+        <description>The SharedMemory class library provides a set of C# classes that utilise a .NET 4 MemoryMappedFile class for fast low-level inter-process communication (IPC) - specifically for sharing data between processes.
+
+It features:
+ * a lock-free FIFO circular buffer
+ * a simple fixed-size generic shared memory array class
+ * an implementation of a shared memory buffer for read/write.</description>
+        <summary>Shared memory classes for sharing data between processes (Array, Buffer and Circular Buffer)</summary>
+        <copyright>Copyright (c) 2014 Justin Stenning</copyright>
+        <dependencies>
+            <group targetFramework=".NETFramework4.0" />
+        </dependencies>
+    </metadata>
+    <files>
+        <file src="SharedMemory.dll" target="SharedMemory.dll" />
+    </files>
+</package>

@@ -21,6 +21,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-The SharedMemory library is inspired by the following Code Project article:
+The SharedMemory library was inspired by the following Code Project article:
   "Fast IPC Communication Using Shared Memory and InterlockedCompareExchange"
   http://www.codeproject.com/Articles/14740/Fast-IPC-Communication-Using-Shared-Memory-and-Int
