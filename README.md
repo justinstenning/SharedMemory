@@ -19,4 +19,66 @@ Classes
  * **SharedMemory.BufferReadWrite** - provides read/write access to a shared memory buffer, with various overloads to support reading and writing structures, copying to and from IntPtr and so on. Inherits from SharedMemory.BufferWithLocks to provide support for thread synchronisation.
  * **SharedMemory.CircularBuffer** - lock-free FIFO circular buffer implementation (aka ring buffer). Supporting 2 or more nodes, this implementation supports multiple readers and writers. The lock-free approach is implemented using Interlocked.Exchange and EventWaitHandles.
  
- 
+Example Usage
+-------------
+
+The output from the of the following examples is:
+
+    SharedMemory.Array:
+    123
+    456
+    SharedMemory.CircularBuffer:
+    123
+    456
+    SharedMemory.BufferReadWrite:
+    123
+    456
+
+**SharedMemory.Array**
+
+    Console.WriteLine("SharedMemory.Array:");
+    using (var producer = new SharedMemory.Array<int>("MySharedArray", 10))
+    using (var consumer = new SharedMemory.Array<int>("MySharedArray"))
+    {
+        producer[0] = 123;
+        producer[producer.Length - 1] = 456;
+        
+        Console.WriteLine(consumer[0]);
+        Console.WriteLine(consumer[consumer.Length - 1]);
+    }
+
+**SharedMemory.CircularBuffer**
+
+    Console.WriteLine("SharedMemory.CircularBuffer:");
+    using (var producer = new SharedMemory.CircularBuffer(name: "MySharedMemory", nodeCount: 3, nodeBufferSize: 4))
+    using (var consumer = new SharedMemory.CircularBuffer(name: "MySharedMemory"))
+    {
+        // nodeCount must be one larger than the number
+        // of writes that must fit in the buffer at any one time
+        producer.Write<int>(new int[] { 123 });
+        producer.Write<int>(new int[] { 456 });
+       
+        int[] data = new int[1];
+        consumer.Read<int>(data);
+        Console.WriteLine(data[0]);
+        consumer.Read<int>(data);
+        Console.WriteLine(data[0]);
+    }
+
+**SharedMemory.BufferReadWrite**
+
+    Console.WriteLine("SharedMemory.BufferReadWrite:");
+    using (var producer = new SharedMemory.BufferReadWrite(name: "MySharedBuffer", bufferSize: 1024))
+    using (var consumer = new SharedMemory.BufferReadWrite(name: "MySharedBuffer"))
+    {
+        int data = 123;
+        producer.Write<int>(ref data);
+        data = 456;
+        producer.Write<int>(ref data, 1000);
+        
+        int readData;
+        consumer.Read<int>(out readData);
+        Console.WriteLine(readData);
+        consumer.Read<int>(out readData, 1000);
+        Console.WriteLine(readData);
+    }
