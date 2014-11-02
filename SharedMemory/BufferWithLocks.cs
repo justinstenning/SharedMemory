@@ -36,7 +36,7 @@ namespace SharedMemory
     /// <summary>
     /// <para>Extends <see cref="Buffer"/> to support simple thread-synchronisation for read/write 
     /// to the buffer by allowing callers to acquire and release read/write locks.</para>
-    /// <para>All buffer read/write operations have been overloaded to first perform a <see cref="EventWaitHandle.WaitOne"/> 
+    /// <para>All buffer read/write operations have been overloaded to first perform a <see cref="System.Threading.WaitHandle.WaitOne()"/> 
     /// using the <see cref="ReadWaitEvent"/> and <see cref="WriteWaitEvent"/> respectively.</para>
     /// <para>By default all read/write operations will not block, it is necessary to first acquire locks 
     /// through calls to <see cref="AcquireReadLock"/> and <see cref="AcquireWriteLock"/> as appropriate, with corresponding 
@@ -74,7 +74,7 @@ namespace SharedMemory
         #region Synchronisation
 
         /// <summary>
-        /// Blocks the current thread until it is able to acquire a read lock. If succesfull all subsequent writes will be blocked until after a call to <paramref name="ReleaseReadLock"/>.
+        /// Blocks the current thread until it is able to acquire a read lock. If succesfull all subsequent writes will be blocked until after a call to <see cref="ReleaseReadLock"/>.
         /// </summary>
         /// <param name="millisecondsTimeout">The number of milliseconds to wait, or <see cref="System.Threading.Timeout.Infinite" /> (-1) to wait indefinitely.</param>
         /// <returns>true if the read lock was able to be acquired, otherwise false.</returns>
@@ -97,7 +97,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Blocks the current thread until it is able to acquire a write lock. If succesfull all subsequent reads will be blocked until after a call to <paramref name="ReleaseWriteLock"/>.
+        /// Blocks the current thread until it is able to acquire a write lock. If succesfull all subsequent reads will be blocked until after a call to <see cref="ReleaseWriteLock"/>.
         /// </summary>
         /// <param name="millisecondsTimeout">The number of milliseconds to wait, or System.Threading.Timeout.Infinite (-1) to wait indefinitely.</param>
         /// <returns>true if the write lock was able to be acquired, otherwise false.</returns>
@@ -139,7 +139,7 @@ namespace SharedMemory
         /// Writes an array of <typeparamref name="T"/> into the buffer
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
-        /// <param name="data">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
+        /// <param name="buffer">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
         protected override void Write<T>(T[] buffer, long bufferPosition = 0)
         {
@@ -190,7 +190,7 @@ namespace SharedMemory
         /// Reads an array of <typeparamref name="T"/> from the buffer
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
-        /// <param name="data">Array that will contain the values read from the buffer. The length of this array controls the number of elements to read.</param>
+        /// <param name="buffer">Array that will contain the values read from the buffer. The length of this array controls the number of elements to read.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected override void Read<T>(T[] buffer, long bufferPosition = 0)
         {
@@ -225,6 +225,10 @@ namespace SharedMemory
 
         #region IDisposable
 
+        /// <summary>
+        /// IDisposable pattern
+        /// </summary>
+        /// <param name="disposeManagedResources">true to release managed resources</param>
         protected override void Dispose(bool disposeManagedResources)
         {
             if (disposeManagedResources)

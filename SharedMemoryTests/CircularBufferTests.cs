@@ -45,7 +45,7 @@ namespace SharedMemoryTests
             string name = String.Empty;
             try
             {
-                using (var smr = new CircularBuffer(name, 2, 1, true))
+                using (var smr = new CircularBuffer(name, 2, 1))
                 {
                     // Allowed String.Empty name
                     Assert.Fail();
@@ -58,26 +58,26 @@ namespace SharedMemoryTests
             }
         }
 
-        [TestMethod]
-        public void Constructor_ConsumerNodeCount1_ValueIgnored()
-        {
-            string name = Guid.NewGuid().ToString();
-            using (var smr = new CircularBuffer(name, 1, 0, false))
-            {
-                Assert.AreEqual(0, smr.NodeCount);
-                Assert.AreEqual(0, smr.BufferSize);
-            }
-        }
+        //[TestMethod]
+        //public void Constructor_ConsumerNodeCount1_ValueIgnored()
+        //{
+        //    string name = Guid.NewGuid().ToString();
+        //    using (var smr = new CircularBuffer(name, 1, 0, false))
+        //    {
+        //        Assert.AreEqual(0, smr.NodeCount);
+        //        Assert.AreEqual(0, smr.BufferSize);
+        //    }
+        //}
 
-        [TestMethod]
-        public void Constructor_ConsumerBufferSize1_ValueIgnored()
-        {
-            string name = Guid.NewGuid().ToString();
-            using (var smr = new CircularBuffer(name, 0, 1, false))
-            {
-                Assert.AreEqual(0, smr.BufferSize);
-            }
-        }
+        //[TestMethod]
+        //public void Constructor_ConsumerBufferSize1_ValueIgnored()
+        //{
+        //    string name = Guid.NewGuid().ToString();
+        //    using (var smr = new CircularBuffer(name, 0, 1, false))
+        //    {
+        //        Assert.AreEqual(0, smr.BufferSize);
+        //    }
+        //}
 
         [TestMethod]
         public void Constructor_ProducerNodeCount1_ExceptionThrown()
@@ -85,7 +85,7 @@ namespace SharedMemoryTests
             string name = Guid.NewGuid().ToString();
             try
             {
-                using (var smr = new CircularBuffer(name, 1, 1, true))
+                using (var smr = new CircularBuffer(name, 1, 1))
                 {
                     // Allowed single element circular buffer
                     Assert.Fail();
@@ -104,7 +104,7 @@ namespace SharedMemoryTests
             string name = Guid.NewGuid().ToString();
             try
             {
-                using (var smr = new CircularBuffer(name, 0, 1, true))
+                using (var smr = new CircularBuffer(name, 0, 1))
                 {
                     // Allowed zero element circular buffer
                     Assert.Fail();
@@ -122,63 +122,57 @@ namespace SharedMemoryTests
         #region Open/Close tests
 
         [TestMethod]
-        public void Open_Producer_True()
+        public void Constructor_Producer_True()
         {
             string name = Guid.NewGuid().ToString();
-            using (var smr = new CircularBuffer(name, 2, 1, true))
+            using (var smr = new CircularBuffer(name, 2, 1))
             {
-                Assert.IsTrue(smr.Open());
-
             }
         }
 
         [TestMethod]
-        public void Open_ConsumerWithoutProducer_FileNotFoundException()
+        public void Constructor_ConsumerWithoutProducer_FileNotFoundException()
         {
             string name = Guid.NewGuid().ToString();
-            using (var smr = new CircularBuffer(name, 0, 0, false))
+            try
             {
-                try
+                using (var smr = new CircularBuffer(name))
                 {
-                    smr.Open();
                 }
-                catch (System.IO.FileNotFoundException)
-                {
-                    return;
-                }
-                Assert.Fail("Trying to open non-existant MMF did not throw FileNotFoundException");
             }
+            catch (System.IO.FileNotFoundException)
+            {
+                return;
+            }
+            Assert.Fail("Trying to open non-existant MMF did not throw FileNotFoundException");
         }
 
         [TestMethod]
-        public void Open_DuplicateProducer_IOException()
+        public void Constructor_DuplicateProducer_IOException()
         {
             string name = Guid.NewGuid().ToString();
-            using (var smr = new CircularBuffer(name, 2, 1, true))
-            using (var smr2 = new CircularBuffer(name, 2, 1, true))
+            try
             {
-                Assert.IsTrue(smr.Open());
-                try
+                using (var smr = new CircularBuffer(name, 2, 1))
+                using (var smr2 = new CircularBuffer(name, 2, 1))
                 {
-                    smr2.Open();
                 }
-                catch (System.IO.IOException)
-                {
-                    return;
-                }
-                Assert.Fail("Trying to create duplicate MMF did not throw IOException");
             }
+            catch (System.IO.IOException)
+            {
+                return;
+            }
+            Assert.Fail("Trying to create duplicate MMF did not throw IOException");
         }
 
         [TestMethod]
-        public void Open_ProducerAndConsumer_True()
+        public void Constructor_ProducerAndConsumer_True()
         {
             string name = Guid.NewGuid().ToString();
-            using (var producer = new CircularBuffer(name, 2, 1, true))
+            using (var producer = new CircularBuffer(name, 2, 1))
             using (var consumer = new CircularBuffer(name))
             {
-                Assert.IsTrue(producer.Open());
-                Assert.IsTrue(consumer.Open());
+
             }
         }
 
@@ -186,12 +180,9 @@ namespace SharedMemoryTests
         public void Close_CheckShuttingDown_True()
         {
             string name = Guid.NewGuid().ToString();
-            using (var producer = new CircularBuffer(name, 2, 1, true))
+            using (var producer = new CircularBuffer(name, 2, 1))
             using (var consumer = new CircularBuffer(name))
             {
-                Assert.IsTrue(producer.Open());
-                Assert.IsTrue(consumer.Open());
-
                 producer.Close();
 
                 Assert.IsTrue(consumer.ShuttingDown);
@@ -199,22 +190,22 @@ namespace SharedMemoryTests
         }
 
         [TestMethod]
-        public void Open_BufferTooLarge_ArgumentOutOfRangeException()
+        public void Constructor_BufferTooLarge_ArgumentOutOfRangeException()
         {
             string name = Guid.NewGuid().ToString();
-            using (var smr = new CircularBuffer(name, 4, int.MaxValue, true))
+            try
             {
-                try
+                using (var smr = new CircularBuffer(name, 4, int.MaxValue))
                 {
-                    smr.Open();
                 }
-                catch (ArgumentOutOfRangeException)
-                {
-                    // Success
-                    return;
-                }
-                Assert.Fail("Opening memory mapped file did not throw ArgumentOutOfRangeException for large memory buffer.");
             }
+            catch (ArgumentOutOfRangeException)
+            {
+                // Success
+                return;
+            }
+            Assert.Fail("Opening memory mapped file did not throw ArgumentOutOfRangeException for large memory buffer.");
+
         }
 
         #endregion
@@ -255,9 +246,8 @@ namespace SharedMemoryTests
             // Fill with random data
             r.NextBytes(data);
             
-            using (var smr = new CircularBuffer(name, 2, bufSize, true))
+            using (var smr = new CircularBuffer(name, 2, bufSize))
             {
-                Assert.IsTrue(smr.Open(), "Failed to open shared memory");
                 Assert.AreEqual(bufSize, smr.Write(data), String.Format("Failed to write {0} bytes", bufSize));
                 Assert.AreEqual(bufSize, smr.Read(readBuf), String.Format("Failed to read {0} bytes", bufSize));
 
@@ -288,10 +278,8 @@ namespace SharedMemoryTests
             // Fill with random data
             r.NextBytes(data);
 
-            using (var smr = new CircularBuffer(name, 2, bufSize, true))
+            using (var smr = new CircularBuffer(name, 2, bufSize))
             {
-                Assert.IsTrue(smr.Open(), "Failed to open shared memory");
-
                 header = smr.ReadNodeHeader();
                 Assert.AreEqual(0, header.WriteStart, "Initial WriteStart");
                 Assert.AreEqual(0, header.WriteEnd, "Intial WriteEnd");
@@ -327,6 +315,46 @@ namespace SharedMemoryTests
             }
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        struct MyTestStruct
+        {
+            public int Prop1;
+            public int Prop2;
+            public int Prop3;
+            public int Prop4;
+        }
+
+        [TestMethod]
+        public void ReadWrite_MyTestStruct_DataMatches()
+        {
+            string name = Guid.NewGuid().ToString();
+            int nodeSize = Marshal.SizeOf(typeof(MyTestStruct));
+
+            using (var smr = new CircularBuffer(name, 2, nodeSize))
+            using (var sm2 = new CircularBuffer(name))
+            {
+                MyTestStruct obj = new MyTestStruct
+                {
+                    Prop1 = 1,
+                    Prop2 = 2,
+                    Prop3 = 3,
+                    Prop4 = 4
+                };
+
+                smr.Write(ref obj);
+
+                MyTestStruct read;
+                if (sm2.Read(out read) > 0)
+                {
+                    Assert.AreEqual(obj, read);
+                }
+                else
+                {
+                    Assert.Fail();
+                }
+            }
+        }
+
         [TestMethod]
         public void ReadWrite_1000NodesIn2NodeRing_DataMatches()
         {
@@ -345,10 +373,8 @@ namespace SharedMemoryTests
                 r.NextBytes(data[i]);
             }
 
-            using (var smr = new CircularBuffer(name, 2, bufSize, true))
+            using (var smr = new CircularBuffer(name, 2, bufSize))
             {
-                Assert.IsTrue(smr.Open(), "Failed to open shared memory");
-
                 for (var iteration = 0; iteration < iterations; iteration++)
                 {
                     writeBuf = data[iteration];
@@ -453,12 +479,9 @@ namespace SharedMemoryTests
                 r.NextBytes(data[i]);
             }
 
-            using (var producer = new CircularBuffer(name, 2, bufSize, true))
+            using (var producer = new CircularBuffer(name, 2, bufSize))
             using (var consumer = new CircularBuffer(name))
             {
-                Assert.IsTrue(producer.Open(), "Producer failed to open shared memory");
-                Assert.IsTrue(consumer.Open(), "Consumer failed to open shared memory");
-
                 Action writer = () =>
                 {
                     long totalBytesWritten = WriteMultiple(producer, data, out timeouts);
@@ -500,12 +523,9 @@ namespace SharedMemoryTests
                 r.NextBytes(data[i]);
             }
 
-            using (var producer = new CircularBuffer(name, 2, bufSize, true))
+            using (var producer = new CircularBuffer(name, 2, bufSize))
             using (var consumer = new CircularBuffer(name))
             {
-                Assert.IsTrue(producer.Open(), "Producer failed to open shared memory");
-                Assert.IsTrue(consumer.Open(), "Consumer failed to open shared memory");
-
                 Action writer = () =>
                 {
                     int writeTimeouts = 0;
@@ -548,12 +568,9 @@ namespace SharedMemoryTests
                 r.NextBytes(data[i]);
             }
 
-            using (var producer = new CircularBuffer(name, 2, bufSize, true))
+            using (var producer = new CircularBuffer(name, 2, bufSize))
             using (var consumer = new CircularBuffer(name))
             {
-                Assert.IsTrue(producer.Open(), "Producer failed to open shared memory");
-                Assert.IsTrue(consumer.Open(), "Consumer failed to open shared memory");
-
                 Action writer = () =>
                 {
                     int writeTimeouts = 0;
@@ -601,10 +618,8 @@ namespace SharedMemoryTests
             // Fill with random data
             r.NextBytes(data);
 
-            using (var smr = new CircularBuffer(name, 5, bufSize, true))
+            using (var smr = new CircularBuffer(name, 5, bufSize))
             {
-                Assert.IsTrue(smr.Open(), "Failed to open shared memory");
-
                 header = smr.ReadNodeHeader();
                 Assert.AreEqual(0, header.WriteStart, "Initial WriteStart");
                 Assert.AreEqual(0, header.WriteEnd, "Intial WriteEnd");
@@ -712,10 +727,8 @@ namespace SharedMemoryTests
                 data[i].Value2 = r.Next();
             }
 
-            using (var smr = new CircularBuffer(name, 2, bufSize, true))
+            using (var smr = new CircularBuffer(name, 2, bufSize))
             {
-                smr.Open();
-
                 smr.Write(data);
                 smr.Read(readBuff);
 

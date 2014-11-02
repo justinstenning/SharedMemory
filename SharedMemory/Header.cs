@@ -45,7 +45,7 @@ namespace SharedMemory
         public long SharedMemorySize;
 
         /// <summary>
-        /// Flag indicating whether the owner of the buffer has closed its <see cref="MemoryMappedFile"/> and <see cref="MemoryMappedViewAccessor"/>.
+        /// Flag indicating whether the owner of the buffer has closed its <see cref="System.IO.MemoryMappedFiles.MemoryMappedFile"/> and <see cref="System.IO.MemoryMappedFiles.MemoryMappedViewAccessor"/>.
         /// </summary>
         public volatile int Shutdown;
 

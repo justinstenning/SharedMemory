@@ -204,12 +204,11 @@ namespace SharedMemory
         #region Constructors
 
         /// <summary>
-        /// Create a new <see cref="CircularBuffer"/> instance with the specified name, node count and buffer size per node
+        /// Creates and opens a new <see cref="CircularBuffer"/> instance with the specified name, node count and buffer size per node.
         /// </summary>
-        /// <param name="name">The name of the shared memory</param>
+        /// <param name="name">The name of the shared memory to be created</param>
         /// <param name="nodeCount">The number of nodes within the circular linked-list (minimum of 2)</param>
         /// <param name="nodeBufferSize">The buffer size per node in bytes. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.Header) + Marshal.SizeOf(CircularBuffer.NodeHeader) + (Marshal.SizeOf(CircularBuffer.Node) * nodeCount) + (bufferSize * nodeCount)</code></param>
-        /// <param name="ownsSharedMemory">Whether or not the current instance owns the shared memory. If true a new shared memory will be created and initialised otherwise an existing one is opened.</param>
         /// <remarks>
         /// <para>The maximum total shared memory size is dependant upon the system and current memory fragmentation.</para>
         /// <para>The shared memory layout on 32-bit and 64-bit architectures is:<br />
@@ -221,7 +220,23 @@ namespace SharedMemory
         /// </code>
         /// </para>
         /// </remarks>
-        public CircularBuffer(string name, int nodeCount, int nodeBufferSize, bool ownsSharedMemory)
+        public CircularBuffer(string name, int nodeCount, int nodeBufferSize)
+            : this(name, nodeCount, nodeBufferSize, true)
+        {
+            Open();
+        }
+
+        /// <summary>
+        /// Opens an existing <see cref="CircularBuffer"/> with the specified name.
+        /// </summary>
+        /// <param name="name">The name of an existing <see cref="CircularBuffer"/> previously created with <see cref="Buffer.IsOwnerOfSharedMemory"/>=true</param>
+        public CircularBuffer(string name)
+            : this(name, 0, 0, false)
+        {
+            Open();
+        }
+
+        private CircularBuffer(string name, int nodeCount, int nodeBufferSize, bool ownsSharedMemory)
             : base(name, Marshal.SizeOf(typeof(NodeHeader)) + (Marshal.SizeOf(typeof(Node)) * nodeCount) + (nodeCount * (long)nodeBufferSize), ownsSharedMemory)
         {
             #region Argument validation
@@ -238,16 +253,6 @@ namespace SharedMemory
                 NodeCount = nodeCount;
                 NodeBufferSize = nodeBufferSize;
             }
-        }
-
-        /// <summary>
-        /// Opens an existing <see cref="CircularBuffer"/> with the specified name. The <see cref="NodeCount"/> and <see cref="BufferSize"/> will
-        /// remain uninitialised until a successful call to <see cref="Open"/>.
-        /// </summary>
-        /// <param name="name">The name of an existing <see cref="CircularBuffer"/> previously created with <see cref="IsOwnerOfSharedMemory"/>=true</param>
-        public CircularBuffer(string name)
-            : this(name, 0, 0, false)
-        {
         }
 
         #endregion
@@ -287,7 +292,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Initialises the node header within the shared memory. Only applicable if <see cref="IsOwnerOfSharedMemory"/> is true.
+        /// Initialises the node header within the shared memory. Only applicable if <see cref="Buffer.IsOwnerOfSharedMemory"/> is true.
         /// </summary>
         private void InitialiseNodeHeader()
         {
@@ -305,9 +310,8 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Initialise the nodes of the circular linked-list. Only applicable if <see cref="IsOwnerOfSharedMemory"/> is true.
+        /// Initialise the nodes of the circular linked-list. Only applicable if <see cref="Buffer.IsOwnerOfSharedMemory"/> is true.
         /// </summary>
-        /// <param name="nodes"></param>
         private void InitialiseLinkedListNodes()
         {
             if (!IsOwnerOfSharedMemory)
@@ -432,7 +436,7 @@ namespace SharedMemory
         /// <param name="buffer">Reference to the buffer to write</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for writing (default 1000ms)</param>
         /// <returns>The number of bytes written</returns>
-        /// <remarks>The maximum number of bytes that can be written is the minimum of the length of <paramref name="buffer"/> and <see cref="BufferSize"/>.</remarks>
+        /// <remarks>The maximum number of bytes that can be written is the minimum of the length of <paramref name="buffer"/> and <see cref="NodeBufferSize"/>.</remarks>
         public virtual int Write(byte[] buffer, int timeout = 1000)
         {
             // Grab a node for writing
@@ -455,7 +459,7 @@ namespace SharedMemory
         /// <param name="buffer">Reference to the buffer to write</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for writing (default 1000ms)</param>
         /// <returns>The number of bytes written</returns>
-        /// <remarks>The maximum number of bytes that can be written is the minimum of the length of <paramref name="buffer"/> multiplied by <code>Marshal.SizeOf(typeof(T))</code> and <see cref="BufferSize"/>.</remarks>        
+        /// <remarks>The maximum number of bytes that can be written is the minimum of the length of <paramref name="buffer"/> multiplied by <code>Marshal.SizeOf(typeof(T))</code> and <see cref="NodeBufferSize"/>.</remarks>        
         public virtual int Write<T>(T[] buffer, int timeout = 1000)
             where T : struct
         {
@@ -474,13 +478,41 @@ namespace SharedMemory
         }
 
         /// <summary>
+        /// Writes the structure to the next available node for writing
+        /// </summary>
+        /// <typeparam name="T">The structure type to be written</typeparam>
+        /// <param name="data">The structure to be written</param>
+        /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for writing (default 1000ms)</param>
+        /// <returns>The number of bytes written - larger than 0 if successful</returns>
+        /// <exception cref="ArgumentOutOfRangeException">If the size of the <typeparamref name="T"/> structure is larger than <see cref="NodeBufferSize"/>.</exception>
+        public virtual int Write<T>(ref T data, int timeout = 1000)
+            where T : struct
+        {
+            int structSize = Marshal.SizeOf(typeof(T));
+            if (structSize > NodeBufferSize)
+                throw new ArgumentOutOfRangeException("T", "The sizeof struct " + typeof(T).Name + " is larger than NodeBufferSize");
+
+            // Attempt to retrieve a node for writing
+            Node* node = GetNodeForWriting(timeout);
+            if (node == null) return 0;
+
+            // Copy the data using the MemoryMappedViewAccessor
+            View.Write<T>(node->Offset, ref data);
+
+            // Return the node for further writing
+            PostNode(node);
+
+            return structSize;
+        }
+
+        /// <summary>
         /// Writes <paramref name="length"/> bytes from <paramref name="bufferPtr"/> to the next available node for writing
         /// </summary>
         /// <param name="bufferPtr">Pointer to the buffer to copy</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available (default 1000ms)</param>
         /// <param name="length">The number of bytes to attempt to write</param>
         /// <returns>The number of bytes written</returns>
-        /// <remarks>The maximum number of bytes that can be written is the minimum of <paramref name="length"/> and <see cref="BufferSize"/>.</remarks>        
+        /// <remarks>The maximum number of bytes that can be written is the minimum of <paramref name="length"/> and <see cref="NodeBufferSize"/>.</remarks>        
         public virtual int Write(IntPtr bufferPtr, int length, int timeout = 1000)
         {
             // Grab a node for writing
@@ -608,7 +640,7 @@ namespace SharedMemory
         /// <param name="buffer">Reference to the buffer</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of bytes read</returns>
-        /// <remarks>The maximum number of bytes that can be read is the minimum of the length of <paramref name="buffer"/> and <see cref="BufferSize"/>.</remarks>
+        /// <remarks>The maximum number of bytes that can be read is the minimum of the length of <paramref name="buffer"/> and <see cref="NodeBufferSize"/>.</remarks>
         public virtual int Read(byte[] buffer, int timeout = 1000)
         {
             Node* node = GetNodeForReading(timeout);
@@ -629,10 +661,11 @@ namespace SharedMemory
         /// <summary>
         /// Reads the next available node for reading into the specified struct array
         /// </summary>
+        /// <typeparam name="T">The structure type to be read</typeparam>
         /// <param name="buffer">Reference to the buffer</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of bytes read</returns>
-        /// <remarks>The maximum number of bytes that can be read is the minimum of the length of <paramref name="buffer"/> multiplied by <code>Marshal.SizeOf(typeof(T))</code> and <see cref="BufferSize"/>.</remarks>
+        /// <remarks>The maximum number of bytes that can be read is the minimum of the length of <paramref name="buffer"/> multiplied by <code>Marshal.SizeOf(typeof(T))</code> and <see cref="NodeBufferSize"/>.</remarks>
         public virtual int Read<T>(T[] buffer, int timeout = 1000)
             where T : struct
         {
@@ -650,13 +683,45 @@ namespace SharedMemory
         }
 
         /// <summary>
+        /// Reads the next available node for reading into the a structure
+        /// </summary>
+        /// <typeparam name="T">The structure type to be read</typeparam>
+        /// <param name="data">The resulting structure if successful otherwise default(T)</param>
+        /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
+        /// <returns>The number of bytes read</returns>
+        /// <exception cref="ArgumentOutOfRangeException">If the size of <typeparamref name="T"/> is larger than <see cref="NodeBufferSize"/>.</exception>
+        public virtual int Read<T>(out T data, int timeout = 1000)
+            where T: struct
+        {
+            int structSize = Marshal.SizeOf(typeof(T));
+            if (structSize > NodeBufferSize)
+                throw new ArgumentOutOfRangeException("T", "The sizeof struct " + typeof(T).Name + " is larger than NodeBufferSize");
+
+            // Attempt to retrieve a node
+            Node* node = GetNodeForReading(timeout);
+            if (node == null)
+            {
+                data = default(T);
+                return 0;
+            }
+
+            // Copy the data using the MemoryMappedViewAccessor
+            View.Read<T>(node->Offset, out data);
+
+            // Return the node for further writing
+            ReturnNode(node);
+
+            return structSize;
+        }
+
+        /// <summary>
         /// Reads the next available node for reading into the specified memory location with the specified length
         /// </summary>
         /// <param name="buffer">Pointer to the buffer</param>
         /// <param name="length">The maximum length of <paramref name="buffer"/></param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of bytes read</returns>
-        /// <remarks>The maximum number of bytes that can be read is the minimum of the <paramref name="length"/> and <see cref="BufferSize"/>.</remarks>
+        /// <remarks>The maximum number of bytes that can be read is the minimum of the <paramref name="length"/> and <see cref="NodeBufferSize"/>.</remarks>
         public virtual int Read(IntPtr buffer, int length, int timeout = 1000)
         {
             Node* node = GetNodeForReading(timeout);
@@ -675,7 +740,7 @@ namespace SharedMemory
         /// <summary>
         /// Reserves a node for reading and then calls the provided <paramref name="readFunc"/> to perform the read operation.
         /// </summary>
-        /// <param name="writeFunc">A function used to read from the node's buffer. The first parameter is a pointer to the node's buffer. 
+        /// <param name="readFunc">A function used to read from the node's buffer. The first parameter is a pointer to the node's buffer. 
         /// The provided function should return the number of bytes read.</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of bytes read</returns>

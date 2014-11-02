@@ -87,7 +87,7 @@ namespace SharedMemory
         /// Opens an existing shared memory array with the name as specified by <paramref name="name"/>.
         /// </summary>
         /// <param name="name">The name of the shared memory array to open.</param>
-        /// <exception cref="ArgumentOutOfRangeException">If the shared memory location specified by <paramref name="name"/> does not have a <see cref="BufferSize"/> that is evenly divisable by the size of <typeparamref name="T"/>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">If the shared memory location specified by <paramref name="name"/> does not have a <see cref="Buffer.BufferSize"/> that is evenly divisable by the size of <typeparamref name="T"/>.</exception>
         public Array(string name)
             : base(name, 0, false)
         {
@@ -98,9 +98,12 @@ namespace SharedMemory
 
         #endregion
 
+        /// <summary>
+        /// Perform any initialisation required when opening the shared memory array
+        /// </summary>
+        /// <returns>true if successful</returns>
         protected override bool DoOpen()
         {
-
             if (!IsOwnerOfSharedMemory)
             {
                 if (BufferSize % _elementSize != 0)
@@ -131,7 +134,7 @@ namespace SharedMemory
         /// </summary>
         /// <param name="buffer">The source array to copy elements from.</param>
         /// <param name="startIndex">The zero-based index of the shared memory array element to begin writing to.</param>
-        /// <exception cref="IndexOutOfRangeException"><paramref name="startIndex"/> is less than 0 -or- <see cref="buffer.Length"/> + <paramref name="startIndex"/> is greater than <see cref="Length"/>.</exception>
+        /// <exception cref="IndexOutOfRangeException"><paramref name="startIndex"/> is less than 0 -or- length of <paramref name="buffer"/> + <paramref name="startIndex"/> is greater than <see cref="Length"/>.</exception>
         /// <exception cref="ArgumentNullException"><paramref name="buffer"/> must not be null</exception>
         public void Write(T[] buffer, int startIndex = 0)
         {
@@ -167,7 +170,7 @@ namespace SharedMemory
         /// </summary>
         /// <param name="buffer">The destination array to copy the elements into.</param>
         /// <param name="startIndex">The zero-based index of the shared memory array element to begin reading from.</param>
-        /// <exception cref="IndexOutOfRangeException"><paramref name="startIndex"/> is less than 0 -or- <see cref="buffer.Length"/> + <paramref name="startIndex"/> is greater than <see cref="Length"/>.</exception>
+        /// <exception cref="IndexOutOfRangeException"><paramref name="startIndex"/> is less than 0 -or- length of <paramref name="buffer"/> + <paramref name="startIndex"/> is greater than <see cref="Length"/>.</exception>
         /// <exception cref="ArgumentNullException"><paramref name="buffer"/> must not be null</exception>
         public void CopyTo(T[] buffer, int startIndex = 0)
         {

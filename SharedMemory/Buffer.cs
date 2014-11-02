@@ -112,9 +112,21 @@ namespace SharedMemory
 
         #region Protected field members
 
+        /// <summary>
+        /// Memory mapped file
+        /// </summary>
         protected MemoryMappedFile Mmf;
+        /// <summary>
+        /// Memory mapped view
+        /// </summary>
         protected MemoryMappedViewAccessor View;
+        /// <summary>
+        /// Pointer to the memory mapped view
+        /// </summary>
         protected byte* ViewPtr = null;
+        /// <summary>
+        /// Pointer to the header within shared memory
+        /// </summary>
         protected Header* Header = null;
 
         #endregion
@@ -158,6 +170,9 @@ namespace SharedMemory
             }
         }
 
+        /// <summary>
+        /// Destructor - for Dispose(false)
+        /// </summary>
         ~Buffer()
         {
             Dispose(false);
@@ -168,15 +183,17 @@ namespace SharedMemory
         #region Open / Close
 
         /// <summary>
-        /// Create a new or open an existing shared memory buffer with the name of <see cref="Name"/>. 
+        /// Creates a new or opens an existing shared memory buffer with the name of <see cref="Name"/> depending on the value of <see cref="IsOwnerOfSharedMemory"/>. 
         /// </summary>
         /// <returns>True if the memory was successfully mapped</returns>
         /// <remarks>If <see cref="IsOwnerOfSharedMemory"/> is true then the shared memory buffer will be created, opening will fail in this case if the shared memory already exists. Otherwise if IsOwnerOfSharedMemory is false then the shared memory buffer will be opened, which will fail if it doesn't already exist.</remarks>
         /// <exception cref="System.IO.IOException">If trying to create a new shared memory buffer with a duplicate name as buffer owner.</exception>
         /// <exception cref="System.IO.FileNotFoundException">If trying to open a new shared memory buffer that does not exist as a consumer of existing buffer.</exception>
         /// <exception cref="System.ArgumentOutOfRangeException">If trying to create a new shared memory buffer with a size larger than the logical addressable space.</exception>
-        public bool Open()
+        protected bool Open()
         {
+            Close();
+
             try
             {
                 // Attempts to create or open the shared memory with a name of this.Name
@@ -325,7 +342,7 @@ namespace SharedMemory
         /// Writes an array of <typeparamref name="T"/> into the buffer
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
-        /// <param name="data">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
+        /// <param name="buffer">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
         protected virtual void Write<T>(T[] buffer, long bufferPosition = 0)
             where T : struct
@@ -374,7 +391,7 @@ namespace SharedMemory
         /// Reads an array of <typeparamref name="T"/> from the buffer
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
-        /// <param name="data">Array that will contain the values read from the buffer. The length of this array controls the number of elements to read.</param>
+        /// <param name="buffer">Array that will contain the values read from the buffer. The length of this array controls the number of elements to read.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected virtual void Read<T>(T[] buffer, long bufferPosition = 0)
             where T : struct
@@ -407,11 +424,18 @@ namespace SharedMemory
 
         #region IDisposable
 
+        /// <summary>
+        /// Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
+        /// </summary>
         public void Dispose()
         {
             Dispose(true);
         }
 
+        /// <summary>
+        /// IDisposable pattern - dispose of managed/unmanaged resources
+        /// </summary>
+        /// <param name="disposeManagedResources">true to dispose of managed resources as well as unmanaged.</param>
         protected virtual void Dispose(bool disposeManagedResources)
         {
             if (disposeManagedResources)
@@ -425,7 +449,7 @@ namespace SharedMemory
         #region Native Imports
 
         /// <summary>
-        /// Allow copying memory from one IntPtr to another. Required as the <see cref="Marshal.Copy"/> implementation does not provide an appropriate override.
+        /// Allow copying memory from one IntPtr to another. Required as the <see cref="System.Runtime.InteropServices.Marshal.Copy(System.IntPtr, System.IntPtr[], int, int)"/> implementation does not provide an appropriate override.
         /// </summary>
         /// <param name="dest"></param>
         /// <param name="src"></param>

@@ -44,8 +44,6 @@ namespace ClientTest
             Console.WriteLine("Open existing shared memory circular buffer");
             using (SharedMemory.CircularBuffer theClient = new SharedMemory.CircularBuffer("TEST"))
             {
-                theClient.Open();
-
                 Console.WriteLine("Buffer {0} opened, NodeBufferSize: {1}, NodeCount: {2}", theClient.Name, theClient.NodeBufferSize, theClient.NodeCount);
 
                 long bufferSize = theClient.NodeBufferSize;

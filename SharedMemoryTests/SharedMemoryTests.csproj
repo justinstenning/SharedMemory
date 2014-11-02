@@ -58,6 +58,7 @@
     <Compile Include="CircularBufferTests.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="ArrayTests.cs" />
+    <Compile Include="BufferReadWriteTests.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Examples\ClientTest\ClientTest.csproj">

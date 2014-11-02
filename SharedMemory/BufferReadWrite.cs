@@ -39,14 +39,25 @@ namespace SharedMemory
     {
         #region Constructors
 
-        public BufferReadWrite(string name, int bufferSize, bool ownsSharedMemory)
-            : base(name, bufferSize, ownsSharedMemory)
+        /// <summary>
+        /// Creates a new shared memory buffer with the specified name and size
+        /// </summary>
+        /// <param name="name">The name of the shared memory to create</param>
+        /// <param name="bufferSize">The size of the buffer</param>
+        public BufferReadWrite(string name, int bufferSize)
+            : base(name, bufferSize, true)
         {
+            Open();
         }
 
+        /// <summary>
+        /// Opens an existing shared memory buffer with the specified name
+        /// </summary>
+        /// <param name="name">The name of the shared memory to open</param>
         public BufferReadWrite(string name)
             : base(name, 0, false)
         {
+            Open();
         }
 
         #endregion
@@ -69,7 +80,7 @@ namespace SharedMemory
         /// Writes an array of <typeparamref name="T"/> into the buffer
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
-        /// <param name="data">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
+        /// <param name="buffer">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
         new public void Write<T>(T[] buffer, long bufferPosition = 0)
             where T : struct
@@ -118,7 +129,7 @@ namespace SharedMemory
         /// Reads an array of <typeparamref name="T"/> from the buffer
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
-        /// <param name="data">Array that will contain the values read from the buffer. The length of this array controls the number of elements to read.</param>
+        /// <param name="buffer">Array that will contain the values read from the buffer. The length of this array controls the number of elements to read.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         new public void Read<T>(T[] buffer, long bufferPosition = 0)
             where T : struct

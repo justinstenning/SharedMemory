@@ -50,13 +50,7 @@ namespace SingleProcess
 
             long bytesRead = 0;
 
-            var server = new SharedMemory.CircularBuffer("TEST", count, size, true);
-            if (!server.Open())
-            {
-                Console.WriteLine("Unable to allocate memory.");
-                Console.ReadLine();
-                return;
-            }
+            var server = new SharedMemory.CircularBuffer("TEST", count, size);
             
             Stopwatch sw = Stopwatch.StartNew();
 
@@ -65,7 +59,6 @@ namespace SingleProcess
                 byte[] testData = new byte[size];
 
                 var client = new SharedMemory.CircularBuffer("TEST");
-                client.Open();
 
                 Stopwatch clientTime = new Stopwatch();
                 clientTime.Start();

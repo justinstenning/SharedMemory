@@ -60,10 +60,8 @@ namespace ServerTest
 
 
             Console.WriteLine("Create shared memory circular buffer");
-            using (var theServer = new SharedMemory.CircularBuffer("TEST", count, size, true))
+            using (var theServer = new SharedMemory.CircularBuffer("TEST", count, size))
             {
-                theServer.Open();
-
                 Console.WriteLine("Circular buffer producer created.");
                 Console.WriteLine("Ready for client...");
                 Thread.Sleep(1000);
