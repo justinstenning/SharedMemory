@@ -358,7 +358,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
         protected virtual void Write(IntPtr ptr, int length, long bufferPosition = 0)
         {
-            CopyMemory(new IntPtr(ViewPtr + BufferOffset + bufferPosition), ptr, (uint)length);
+            UnsafeNativeMethods.CopyMemory(new IntPtr(ViewPtr + BufferOffset + bufferPosition), ptr, (uint)length);
         }
 
         /// <summary>
@@ -407,7 +407,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected virtual void Read(IntPtr destination, int length, long bufferPosition = 0)
         {
-            CopyMemory(destination, new IntPtr(ViewPtr + BufferOffset + bufferPosition), (uint)length);
+            UnsafeNativeMethods.CopyMemory(destination, new IntPtr(ViewPtr + BufferOffset + bufferPosition), (uint)length);
         }
 
         /// <summary>
@@ -443,19 +443,6 @@ namespace SharedMemory
                 this.Close();
             }
         }
-
-        #endregion
-
-        #region Native Imports
-
-        /// <summary>
-        /// Allow copying memory from one IntPtr to another. Required as the <see cref="System.Runtime.InteropServices.Marshal.Copy(System.IntPtr, System.IntPtr[], int, int)"/> implementation does not provide an appropriate override.
-        /// </summary>
-        /// <param name="dest"></param>
-        /// <param name="src"></param>
-        /// <param name="count"></param>
-        [DllImport("kernel32.dll", EntryPoint = "CopyMemory", SetLastError = false)]
-        protected static extern void CopyMemory(IntPtr dest, IntPtr src, uint count);
 
         #endregion
     }
