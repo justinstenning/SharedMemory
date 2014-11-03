@@ -104,7 +104,7 @@ namespace SharedMemory
             get
             {
                 if (i < 0 || i >= NodeCount)
-                    throw new IndexOutOfRangeException();
+                    throw new ArgumentOutOfRangeException();
 
                 return ((Node*)(ViewPtr + NodeOffset)) + i;
             }
@@ -521,7 +521,7 @@ namespace SharedMemory
 
             // Copy the data
             int amount = Math.Min(length, NodeBufferSize);
-            CopyMemory(new IntPtr(ViewPtr + node->Offset), bufferPtr, (uint)amount);
+            base.Write(bufferPtr, amount, (long)(ViewPtr + node->Offset));
 
             // Writing is complete, make readable
             PostNode(node);
@@ -649,7 +649,6 @@ namespace SharedMemory
             int amount = Math.Min(buffer.Length, NodeBufferSize);
             
             // Copy the data
-            //View.ReadArray(node->Offset, buffer, 0, amount);
             Marshal.Copy(new IntPtr(ViewPtr + node->Offset), buffer, 0, amount);
 
             // Return the node for further writing
@@ -729,7 +728,7 @@ namespace SharedMemory
 
             int amount = Math.Min(length, NodeBufferSize);
             // Copy the data
-            CopyMemory(buffer, new IntPtr(ViewPtr + node->Offset), (uint)amount);
+            base.Read(buffer, amount, (long)(ViewPtr + node->Offset));
 
             // Return node for further writing
             ReturnNode(node);

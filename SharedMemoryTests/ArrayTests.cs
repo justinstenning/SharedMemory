@@ -64,24 +64,24 @@ namespace SharedMemoryTests
                 {
                     sma[-1] = 0;
                 }
-                catch (IndexOutOfRangeException)
+                catch (ArgumentOutOfRangeException)
                 {
                     exceptionThrown = true;
                 }
 
-                Assert.IsTrue(exceptionThrown, "Index of -1 should result in IndexOutOfRangeException");
+                Assert.IsTrue(exceptionThrown, "Index of -1 should result in ArgumentOutOfRangeException");
 
                 try
                 {
                     exceptionThrown = false;
                     sma[sma.Length] = 0;
                 }
-                catch (IndexOutOfRangeException)
+                catch (ArgumentOutOfRangeException)
                 {
                     exceptionThrown = true;
                 }
 
-                Assert.IsTrue(exceptionThrown, "Index of Length should result in IndexOutOfRangeException");
+                Assert.IsTrue(exceptionThrown, "Index of Length should result in ArgumentOutOfRangeException");
             }
         }
 

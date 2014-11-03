@@ -6,6 +6,7 @@
         <title>SharedMemory</title>
         <authors>Justin Stenning</authors>
         <owners>Justin Stenning</owners>
+        <licenseUrl>https://sharedmemory.codeplex.com/license</licenseUrl>
         <projectUrl>https://sharedmemory.codeplex.com/</projectUrl>
         <requireLicenseAcceptance>false</requireLicenseAcceptance>
         <description>The SharedMemory class library provides a set of C# classes that utilise a .NET 4 MemoryMappedFile class for fast low-level inter-process communication (IPC) - specifically for sharing data between processes.
@@ -13,7 +14,9 @@
 It features:
  * a lock-free FIFO circular buffer
  * a simple fixed-size generic shared memory array class
- * an implementation of a shared memory buffer for read/write.</description>
+ * an implementation of a shared memory buffer for read/write.
+
+Usage: http://sharedmemory.codeplex.com/documentation</description>
         <summary>Shared memory classes for sharing data between processes (Array, Buffer and Circular Buffer)</summary>
         <releaseNotes>1. Improved usage consistency by changing Buffer.Open to protected (breaking change)
 2. BufferReadWrite now opens buffer in constructor
@@ -21,6 +24,7 @@ It features:
 4. Added read/write single structure overloads to CircularBuffer
 5. Added XML documentation to NuGet package</releaseNotes>
         <copyright>Copyright (c) 2014 Justin Stenning</copyright>
+        <tags>IPC memory mapped file shared data circular ring buffer</tags>
         <dependencies>
             <group targetFramework=".NETFramework4.0" />
         </dependencies>

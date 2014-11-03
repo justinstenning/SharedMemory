@@ -50,7 +50,7 @@ namespace SharedMemory
         /// </summary>
         /// <param name="index">The zero-based index of the element to get or set.</param>
         /// <returns>The element at the specified index.</returns>
-        /// <exception cref="IndexOutOfRangeException"><paramref name="index"/> is less than 0 -or- index is equal to or greater than <see cref="Length"/>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is less than 0 -or- index is equal to or greater than <see cref="Length"/>.</exception>
         public T this[int index]
         {
             get
@@ -124,7 +124,7 @@ namespace SharedMemory
         public void Write(ref T data, int index)
         {
             if (index > Length - 1 || index < 0)
-                throw new IndexOutOfRangeException();
+                throw new ArgumentOutOfRangeException("index");
 
             base.Write(ref data, index * _elementSize);
         }
@@ -134,14 +134,14 @@ namespace SharedMemory
         /// </summary>
         /// <param name="buffer">The source array to copy elements from.</param>
         /// <param name="startIndex">The zero-based index of the shared memory array element to begin writing to.</param>
-        /// <exception cref="IndexOutOfRangeException"><paramref name="startIndex"/> is less than 0 -or- length of <paramref name="buffer"/> + <paramref name="startIndex"/> is greater than <see cref="Length"/>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is less than 0 -or- length of <paramref name="buffer"/> + <paramref name="startIndex"/> is greater than <see cref="Length"/>.</exception>
         /// <exception cref="ArgumentNullException"><paramref name="buffer"/> must not be null</exception>
         public void Write(T[] buffer, int startIndex = 0)
         {
             if (buffer == null)
                 throw new ArgumentNullException("buffer");
             if (buffer.Length + startIndex > Length || startIndex < 0)
-                throw new IndexOutOfRangeException();
+                throw new ArgumentOutOfRangeException("startIndex");
 
             base.Write(buffer, startIndex * _elementSize);
         }
@@ -156,11 +156,11 @@ namespace SharedMemory
         /// <param name="data">The element at the specified index.</param>
         /// <param name="index">The zero-based index of the element to get.</param>
         /// <returns>The element at the specified index.</returns>
-        /// <exception cref="IndexOutOfRangeException"><paramref name="index"/> is less than 0 -or- index is equal to or greater than <see cref="Length"/>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is less than 0 -or- index is equal to or greater than <see cref="Length"/>.</exception>
         public void Read(out T data, int index)
         {
             if (index > Length - 1 || index < 0)
-                throw new IndexOutOfRangeException();
+                throw new ArgumentOutOfRangeException("index");
 
             base.Read(out data, index * _elementSize);
         }
@@ -170,14 +170,14 @@ namespace SharedMemory
         /// </summary>
         /// <param name="buffer">The destination array to copy the elements into.</param>
         /// <param name="startIndex">The zero-based index of the shared memory array element to begin reading from.</param>
-        /// <exception cref="IndexOutOfRangeException"><paramref name="startIndex"/> is less than 0 -or- length of <paramref name="buffer"/> + <paramref name="startIndex"/> is greater than <see cref="Length"/>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is less than 0 -or- length of <paramref name="buffer"/> + <paramref name="startIndex"/> is greater than <see cref="Length"/>.</exception>
         /// <exception cref="ArgumentNullException"><paramref name="buffer"/> must not be null</exception>
         public void CopyTo(T[] buffer, int startIndex = 0)
         {
             if (buffer == null)
                 throw new ArgumentNullException("buffer");
             if (buffer.Length + startIndex > Length || startIndex < 0)
-                throw new IndexOutOfRangeException();
+                throw new ArgumentOutOfRangeException("startIndex");
 
             base.Read(buffer, startIndex * _elementSize);
         }

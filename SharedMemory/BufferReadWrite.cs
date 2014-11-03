@@ -70,6 +70,7 @@ namespace SharedMemory
         /// <typeparam name="T">A structure type</typeparam>
         /// <param name="data">A reference to an instance of <typeparamref name="T"/> to be written</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Write<T>(ref T data, long bufferPosition = 0)
             where T : struct
         {
@@ -82,6 +83,7 @@ namespace SharedMemory
         /// <typeparam name="T">A structure type</typeparam>
         /// <param name="buffer">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Write<T>(T[] buffer, long bufferPosition = 0)
             where T : struct
         {
@@ -94,6 +96,7 @@ namespace SharedMemory
         /// <param name="ptr">A managed pointer to the memory location to be copied into the buffer</param>
         /// <param name="length">The number of bytes to be copied</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Write(IntPtr ptr, int length, long bufferPosition = 0)
         {
             base.Write(ptr, length, bufferPosition);
@@ -104,6 +107,7 @@ namespace SharedMemory
         /// </summary>
         /// <param name="writeFunc">A function used to write to the buffer. The IntPtr parameter is a pointer to the buffer offset by <paramref name="bufferPosition"/>.</param>
         /// <param name="bufferPosition">The offset within the buffer region to start writing from.</param>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Write(Action<IntPtr> writeFunc, long bufferPosition = 0)
         {
             base.Write(writeFunc, bufferPosition);
@@ -119,6 +123,7 @@ namespace SharedMemory
         /// <typeparam name="T">A structure type</typeparam>
         /// <param name="data">Output parameter that will contain the value read from the buffer</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Read<T>(out T data, long bufferPosition = 0)
             where T : struct
         {
@@ -131,6 +136,7 @@ namespace SharedMemory
         /// <typeparam name="T">A structure type</typeparam>
         /// <param name="buffer">Array that will contain the values read from the buffer. The length of this array controls the number of elements to read.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Read<T>(T[] buffer, long bufferPosition = 0)
             where T : struct
         {
@@ -143,6 +149,7 @@ namespace SharedMemory
         /// <param name="destination">A managed pointer to the memory location to copy data into from the buffer</param>
         /// <param name="length">The number of bytes to be copied</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Read(IntPtr destination, int length, long bufferPosition = 0)
         {
             base.Read(destination, length, bufferPosition);
@@ -153,6 +160,7 @@ namespace SharedMemory
         /// </summary>
         /// <param name="readFunc">A function used to read from the buffer. The IntPtr parameter is a pointer to the buffer offset by <paramref name="bufferPosition"/>.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Read(Action<IntPtr> readFunc, long bufferPosition = 0)
         {
             base.Read(readFunc, bufferPosition);
