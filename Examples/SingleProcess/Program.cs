@@ -31,7 +31,9 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+#if NET40Plus
 using System.Threading.Tasks;
+#endif
 
 namespace SingleProcess
 {
@@ -48,9 +50,10 @@ namespace SingleProcess
             int size = sizeof(byte) * 1048576;
             int count = 2; // node count within buffer
 
+            long bytesWritten = 0;
             long bytesRead = 0;
-
-            var server = new SharedMemory.CircularBuffer("TEST", count, size);
+            string name = Guid.NewGuid().ToString();
+            var server = new SharedMemory.CircularBuffer(name, count, size);
             
             Stopwatch sw = Stopwatch.StartNew();
 
@@ -58,7 +61,7 @@ namespace SingleProcess
             {
                 byte[] testData = new byte[size];
 
-                var client = new SharedMemory.CircularBuffer("TEST");
+                var client = new SharedMemory.CircularBuffer(name);
 
                 Stopwatch clientTime = new Stopwatch();
                 clientTime.Start();
@@ -68,7 +71,9 @@ namespace SingleProcess
                 for (; ; )
                 {
                     startTick = clientTime.ElapsedTicks;
-                    if (client.Read(testData, 100) == 0)
+                    int amount = client.Read(testData, 100);
+                    bytesRead += amount;
+                    if (amount == 0)
                         Interlocked.Increment(ref clientWaitCount);
                     else
                         Interlocked.Increment(ref readCount);
@@ -78,6 +83,7 @@ namespace SingleProcess
                         break;
                 }
             };
+#if NET40Plus
             Task c1 = Task.Factory.StartNew(clientAction);
             Task c2 = Task.Factory.StartNew(clientAction);
             Task c3 = Task.Factory.StartNew(clientAction);
@@ -85,21 +91,26 @@ namespace SingleProcess
             //Task c5 = Task.Factory.StartNew(clientAction);
             //Task c6 = Task.Factory.StartNew(clientAction);
             //Task c7 = Task.Factory.StartNew(clientAction);
-
+#else
+            ThreadPool.QueueUserWorkItem((o) => { clientAction(); });
+            ThreadPool.QueueUserWorkItem((o) => { clientAction(); });
+            ThreadPool.QueueUserWorkItem((o) => { clientAction(); });
+            ThreadPool.QueueUserWorkItem((o) => { clientAction(); });
+#endif
             int index = 0;
 
             Action serverWrite = () =>
             {
                 int serverIndex = Interlocked.Increment(ref index);
 
-                var writer = (serverIndex == 1 ? server : new SharedMemory.CircularBuffer("TEST"));
+                var writer = (serverIndex == 1 ? server : new SharedMemory.CircularBuffer(name));
 
                 for (; ; )
                 {
                     if (writeCount <= 100000)
                     {
                         int amount = writer.Write(readData, 100);
-                        bytesRead += amount;
+                        bytesWritten += amount;
                         if (amount == 0)
                             Interlocked.Increment(ref serverWaitCount);
                         else
@@ -109,7 +120,7 @@ namespace SingleProcess
                     if (serverIndex == 1 && sw.ElapsedTicks - lastTick > 1000000)
                     {
                         lastTick = sw.ElapsedTicks;
-                        Console.WriteLine("Write: {0}, Read: {1}, Diff: {5}, Wait(cli/svr): {3}/{2}, {4}MB/s", writeCount, readCount, serverWaitCount, clientWaitCount, (int)(((bytesRead / 1048576.0) / sw.ElapsedMilliseconds) * 1000), writeCount - readCount);
+                        Console.WriteLine("Write: {0}, Read: {1}, Diff: {5}, Wait(cli/svr): {3}/{2}, {4}MB/s", writeCount, readCount, serverWaitCount, clientWaitCount, (int)((((bytesWritten + bytesRead) / 1048576.0) / sw.ElapsedMilliseconds) * 1000), writeCount - readCount);
 
                         if (writeCount > 100000 && writeCount - readCount == 0)
                             break;
@@ -117,14 +128,17 @@ namespace SingleProcess
                 }
             };
 
+#if NET40Plus
             Task s1 = Task.Factory.StartNew(serverWrite);
-            //Task s2 = Task.Factory.StartNew(serverRead);
-            //Task s3 = Task.Factory.StartNew(serverRead);
-            //Task s4 = Task.Factory.StartNew(serverRead);
-            //Task s5 = Task.Factory.StartNew(serverRead);
-            //Task s6 = Task.Factory.StartNew(serverRead);
-            //Task s7 = Task.Factory.StartNew(serverRead);
-
+            //Task s2 = Task.Factory.StartNew(serverWrite);
+            //Task s3 = Task.Factory.StartNew(serverWrite);
+            //Task s4 = Task.Factory.StartNew(serverWrite);
+            //Task s5 = Task.Factory.StartNew(serverWrite);
+            //Task s6 = Task.Factory.StartNew(serverWrite);
+            //Task s7 = Task.Factory.StartNew(serverWrite);
+#else
+            ThreadPool.QueueUserWorkItem((o) => { serverWrite(); });
+#endif
             Console.ReadLine();
         }
     }

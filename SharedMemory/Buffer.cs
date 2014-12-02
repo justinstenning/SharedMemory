@@ -29,6 +29,7 @@ using System.Collections.Generic;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Permissions;
 using System.Text;
 using System.Threading;
 
@@ -38,6 +39,8 @@ namespace SharedMemory
     /// Abstract base class that provides client/server support for reading/writing structures to a buffer within a <see cref="MemoryMappedFile" />.
     /// A header structure allows clients to open the buffer without knowing the size.
     /// </summary>
+    [PermissionSet(SecurityAction.LinkDemand)]
+    [PermissionSet(SecurityAction.InheritanceDemand)]
     public abstract unsafe class Buffer : IDisposable
     {
         #region Public/Protected properties
@@ -104,11 +107,11 @@ namespace SharedMemory
         {
             get
             {
-                return Marshal.SizeOf(typeof(Header));
+                return HeaderOffset + Marshal.SizeOf(typeof(Header));
             }
         }
 
-        #endregion        
+        #endregion
 
         #region Protected field members
 
@@ -124,6 +127,10 @@ namespace SharedMemory
         /// Pointer to the memory mapped view
         /// </summary>
         protected byte* ViewPtr = null;
+        /// <summary>
+        /// Pointer to the start of the buffer region of the memory mapped view
+        /// </summary>
+        protected byte* BufferStartPtr = null;
         /// <summary>
         /// Pointer to the header within shared memory
         /// </summary>
@@ -190,6 +197,7 @@ namespace SharedMemory
         /// <exception cref="System.IO.IOException">If trying to create a new shared memory buffer with a duplicate name as buffer owner.</exception>
         /// <exception cref="System.IO.FileNotFoundException">If trying to open a new shared memory buffer that does not exist as a consumer of existing buffer.</exception>
         /// <exception cref="System.ArgumentOutOfRangeException">If trying to create a new shared memory buffer with a size larger than the logical addressable space.</exception>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA2202:Do not dispose objects multiple times")]
         protected bool Open()
         {
             Close();
@@ -206,7 +214,7 @@ namespace SharedMemory
                     View = Mmf.CreateViewAccessor(0, SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
                     View.SafeMemoryMappedViewHandle.AcquirePointer(ref ViewPtr);
                     Header = (Header*)(ViewPtr + HeaderOffset);
-
+                    BufferStartPtr = ViewPtr + BufferOffset;
                     // Initialise the header
                     InitialiseHeader();
                 }
@@ -229,6 +237,7 @@ namespace SharedMemory
                     View = Mmf.CreateViewAccessor(0, SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
                     View.SafeMemoryMappedViewHandle.AcquirePointer(ref ViewPtr);
                     Header = (Header*)(ViewPtr + HeaderOffset);
+                    BufferStartPtr = ViewPtr + HeaderOffset + Marshal.SizeOf(typeof(Header));
                 }
             }
             catch
@@ -310,6 +319,7 @@ namespace SharedMemory
             }
             Header = null;
             ViewPtr = null;
+            BufferStartPtr = null;
             View = null;
             Mmf = null;
         }
@@ -347,7 +357,22 @@ namespace SharedMemory
         protected virtual void Write<T>(T[] buffer, long bufferPosition = 0)
             where T : struct
         {
-            View.WriteArray(BufferOffset + bufferPosition, buffer, 0, buffer.Length);
+            FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), buffer, 0, buffer.Length);
+            //View.WriteArray(BufferOffset + bufferPosition, buffer, 0, buffer.Length);
+        }
+
+        /// <summary>
+        /// Writes an array of <typeparamref name="T"/> into the buffer
+        /// </summary>
+        /// <typeparam name="T">A structure type</typeparam>
+        /// <param name="bufferPosition">The destination offset within the buffer region of the shared memory.</param>
+        /// <param name="buffer">The source buffer</param>
+        /// <param name="index">The start index within <paramref name="buffer"/>.</param>
+        /// <param name="count">The number of elements to write.</param>
+        protected virtual void WriteArray<T>(long bufferPosition, T[] buffer, int index, int count)
+            where T : struct
+        {
+            FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), buffer, 0, buffer.Length);
         }
 
         /// <summary>
@@ -358,7 +383,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
         protected virtual void Write(IntPtr ptr, int length, long bufferPosition = 0)
         {
-            UnsafeNativeMethods.CopyMemory(new IntPtr(ViewPtr + BufferOffset + bufferPosition), ptr, (uint)length);
+            UnsafeNativeMethods.CopyMemory(new IntPtr(BufferStartPtr + bufferPosition), ptr, (uint)length);
         }
 
         /// <summary>
@@ -368,7 +393,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region to start writing from.</param>
         protected virtual void Write(Action<IntPtr> writeFunc, long bufferPosition = 0)
         {
-            writeFunc(new IntPtr(ViewPtr + BufferOffset + bufferPosition));
+            writeFunc(new IntPtr(BufferStartPtr + bufferPosition));
         }
 
         #endregion
@@ -396,18 +421,33 @@ namespace SharedMemory
         protected virtual void Read<T>(T[] buffer, long bufferPosition = 0)
             where T : struct
         {
-            View.ReadArray(BufferOffset + bufferPosition, buffer, 0, buffer.Length);
+            FastStructure.ReadArray<T>(buffer, (IntPtr)(BufferStartPtr + bufferPosition), 0, buffer.Length);
+            //View.ReadArray(BufferOffset + bufferPosition, buffer, 0, buffer.Length);
         }
 
         /// <summary>
-        /// Reads <paramref name="length"/> bytes into the memory location <paramref name="destination"/> from the shared memory buffer.
+        /// Reads a number of elements from a memory location into the provided buffer starting at the specified index.
+        /// </summary>
+        /// <typeparam name="T">The structure type</typeparam>
+        /// <param name="buffer">The destination buffer.</param>
+        /// <param name="bufferPosition">The source offset within the buffer region of the shared memory.</param>
+        /// <param name="index">The start index within <paramref name="buffer"/>.</param>
+        /// <param name="count">The number of elements to read.</param>
+        protected virtual void ReadArray<T>(T[] buffer, long bufferPosition, int index, int count)
+            where T : struct
+        {
+            FastStructure.ReadArray<T>(buffer, (IntPtr)(BufferStartPtr + bufferPosition), 0, count);
+        }
+
+        /// <summary>
+        /// Reads <paramref name="length"/> bytes into the memory location <paramref name="destination"/> from the buffer region of the shared memory.
         /// </summary>
         /// <param name="destination">A managed pointer to the memory location to copy data into from the buffer</param>
         /// <param name="length">The number of bytes to be copied</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected virtual void Read(IntPtr destination, int length, long bufferPosition = 0)
         {
-            UnsafeNativeMethods.CopyMemory(destination, new IntPtr(ViewPtr + BufferOffset + bufferPosition), (uint)length);
+            UnsafeNativeMethods.CopyMemory(destination, new IntPtr(BufferStartPtr + bufferPosition), (uint)length);
         }
 
         /// <summary>
@@ -417,7 +457,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected virtual void Read(Action<IntPtr> readFunc, long bufferPosition = 0)
         {
-            readFunc(new IntPtr(ViewPtr + BufferOffset + bufferPosition));
+            readFunc(new IntPtr(BufferStartPtr + bufferPosition));
         }
 
         #endregion

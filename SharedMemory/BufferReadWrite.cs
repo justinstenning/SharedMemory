@@ -1,4 +1,4 @@
-﻿// SharedMemory (File: SharedMemory\BufferReadWrite.cs)
+﻿// SharedMemory (File: SharedMemory\bufferreadwrite.cs)
 // Copyright (c) 2014 Justin Stenning
 // http://spazzarama.com
 //
@@ -28,6 +28,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Permissions;
 using System.Text;
 
 namespace SharedMemory
@@ -35,6 +36,7 @@ namespace SharedMemory
     /// <summary>
     /// Read/Write buffer with support for simple inter-process read/write synchronisation.
     /// </summary>
+    [PermissionSet(SecurityAction.LinkDemand)]
     public unsafe class BufferReadWrite : BufferWithLocks
     {
         #region Constructors

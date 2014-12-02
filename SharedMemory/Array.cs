@@ -28,6 +28,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Permissions;
 using System.Text;
 using System.Threading;
 
@@ -37,6 +38,8 @@ namespace SharedMemory
     /// A generic fixed-length shared memory array of structures with support for simple inter-process read/write synchronisation.
     /// </summary>
     /// <typeparam name="T">The struct type that will be stored in the elements of this fixed array buffer.</typeparam>
+    [PermissionSet(SecurityAction.LinkDemand)]
+    [PermissionSet(SecurityAction.InheritanceDemand)]
     public class Array<T> : BufferWithLocks, IEnumerable<T>
             where T : struct
     {

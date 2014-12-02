@@ -1,4 +1,4 @@
-﻿// SharedMemory (File: SharedMemory\AssemblyInfo.cs)
+﻿// SharedMemory (File: SharedMemory\MemoryMappedFileRights.cs)
 // Copyright (c) 2014 Justin Stenning
 // http://spazzarama.com
 //
@@ -23,34 +23,26 @@
 // The SharedMemory library is inspired by the following Code Project article:
 //   "Fast IPC Communication Using Shared Memory and InterlockedCompareExchange"
 //   http://www.codeproject.com/Articles/14740/Fast-IPC-Communication-Using-Shared-Memory-and-Int
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 
-using System.Reflection;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-
-// General Information about an assembly is controlled through the following 
-// set of attributes. Change these attribute values to modify the information
-// associated with an assembly.
-[assembly: AssemblyTitle("SharedMemory")]
-[assembly: AssemblyDescription("")]
-#if DEBUG
-[assembly: AssemblyConfiguration("Debug")]
-#else
-[assembly:AssemblyConfiguration("Release")]
+namespace System.IO.MemoryMappedFiles
+{
+#if !NET40Plus
+    /// <summary>
+    /// Used for opening a memory-mapped file
+    /// </summary>
+    [Flags]
+    public enum MemoryMappedFileRights: uint
+    {
+        /// <summary>The right to add data to a file or remove data from a file.</summary>
+        Write = 0x02,
+        /// <summary>The right to open and copy a file as read-only.</summary>
+        Read = 0x04,
+        /// <summary>The right to open and copy a file, and the right to add data to a file or remove data from a file.</summary>
+        ReadWrite = MemoryMappedFileRights.Write | MemoryMappedFileRights.Read,
+    }
 #endif
-[assembly: AssemblyCompany("Justin Stenning")]
-[assembly: AssemblyProduct("SharedMemory")]
-[assembly: AssemblyCopyright("Copyright © 2014 Justin Stenning")]
-[assembly: AssemblyTrademark("")]
-[assembly: AssemblyCulture("")]
-
-// Setting ComVisible to false makes the types in this assembly not visible 
-// to COM components.  If you need to access a type in this assembly from 
-// COM, set the ComVisible attribute to true on that type.
-[assembly: ComVisible(false)]
-
-// The following GUID is for the ID of the typelib if this project is exposed to COM
-[assembly: Guid("c19482c8-8222-4314-97d5-ac3502419f97")]
-
-[assembly: AssemblyVersion("1.0.1.0")]
-[assembly: AssemblyFileVersion("1.0.1.0")]
+}

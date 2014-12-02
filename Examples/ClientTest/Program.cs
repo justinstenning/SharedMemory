@@ -30,7 +30,11 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using SharedMemory;
+
+#if NET40Plus
 using System.Threading.Tasks;
+#endif
 
 namespace ClientTest
 {
@@ -39,6 +43,7 @@ namespace ClientTest
         static void Main(string[] args)
         {
             Console.WriteLine("Press <enter> to start client");
+
             Console.ReadLine();
 
             Console.WriteLine("Open existing shared memory circular buffer");
@@ -47,8 +52,8 @@ namespace ClientTest
                 Console.WriteLine("Buffer {0} opened, NodeBufferSize: {1}, NodeCount: {2}", theClient.Name, theClient.NodeBufferSize, theClient.NodeCount);
 
                 long bufferSize = theClient.NodeBufferSize;
-                byte[] readDataProof;
-                byte[] readData = new byte[bufferSize];
+                byte[] writeDataProof;
+                byte[] writeData = new byte[bufferSize];
 
                 List<byte[]> dataList = new List<byte[]>();
 
@@ -77,7 +82,8 @@ namespace ClientTest
                     bool finalLine = false;
                     for (; ; )
                     {
-                        int amount = theClient.Read(readData, 100);
+                        int amount = theClient.Read(writeData, 100);
+                        //int amount = theClient.Read<byte>(writeData, 100);
 
                         if (amount == 0)
                         {
@@ -90,10 +96,10 @@ namespace ClientTest
                             {
                                 bool mismatch = false;
 
-                                readDataProof = dataList[((int)Interlocked.Read(ref iterations)) % 255];
-                                for (var i = 0; i < readDataProof.Length; i++)
+                                writeDataProof = dataList[((int)Interlocked.Read(ref iterations)) % 255];
+                                for (var i = 0; i < writeDataProof.Length; i++)
                                 {
-                                    if (readData[i] != readDataProof[i])
+                                    if (writeData[i] != writeDataProof[i])
                                     {
                                         mismatch = true;
                                         Console.WriteLine("Buffers don't match!");
@@ -135,13 +141,19 @@ namespace ClientTest
                 iterations = 0;
                 totalBytes = 0;
                 lastTick = 0;
-                sw.Restart();
+                sw.Reset();
+                sw.Start();
                 Console.WriteLine("Testing data throughput (low CPU, high bandwidth)...");
+#if NET40Plus                
                 Task c1 = Task.Factory.StartNew(reader);
                 Task c2 = Task.Factory.StartNew(reader);
                 Task c3 = Task.Factory.StartNew(reader);
                 //Task c4 = Task.Factory.StartNew(reader);
-
+#else
+                ThreadPool.QueueUserWorkItem((o) => { reader(); });
+                ThreadPool.QueueUserWorkItem((o) => { reader(); });
+                ThreadPool.QueueUserWorkItem((o) => { reader(); });
+#endif
                 Console.ReadLine();
             }
         }

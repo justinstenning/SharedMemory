@@ -28,6 +28,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Permissions;
 using System.Text;
 using System.Threading;
 
@@ -42,6 +43,8 @@ namespace SharedMemory
     /// through calls to <see cref="AcquireReadLock"/> and <see cref="AcquireWriteLock"/> as appropriate, with corresponding 
     /// calls to <see cref="ReleaseReadLock"/> and <see cref="ReleaseWriteLock"/> to release the locks.</para>
     /// </summary>
+    [PermissionSet(SecurityAction.LinkDemand)]
+    [PermissionSet(SecurityAction.InheritanceDemand)]
     public abstract class BufferWithLocks : Buffer
     {
         /// <summary>
@@ -233,8 +236,8 @@ namespace SharedMemory
         {
             if (disposeManagedResources)
             {
-                WriteWaitEvent.Dispose();
-                ReadWaitEvent.Dispose();
+                (WriteWaitEvent as IDisposable).Dispose();
+                (ReadWaitEvent as IDisposable).Dispose();
             }
             base.Dispose(disposeManagedResources);
         }

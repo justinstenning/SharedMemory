@@ -29,6 +29,7 @@ using System.Collections.Generic;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Permissions;
 using System.Text;
 using System.Threading;
 
@@ -37,6 +38,8 @@ namespace SharedMemory
     /// <summary>
     /// A lock-free FIFO shared memory circular buffer (or ring buffer) utilising a <see cref="MemoryMappedFile"/>.
     /// </summary>
+    [PermissionSet(SecurityAction.LinkDemand)]
+    [PermissionSet(SecurityAction.InheritanceDemand)]
     public unsafe class CircularBuffer : Buffer
     {
         #region Public/Protected properties
@@ -62,18 +65,18 @@ namespace SharedMemory
         protected EventWaitHandle NodeAvailable { get; set; }
 
         /// <summary>
-        /// The absolute offset where the node header starts within the shared memory buffer
+        /// The offset relative to <see cref="Buffer.BufferStartPtr"/> where the node header starts within the buffer region of the shared memory
         /// </summary>
         protected virtual long NodeHeaderOffset
         {
             get
             {
-                return HeaderOffset + Marshal.SizeOf(typeof(Header));
+                return 0;
             }
         }
             
         /// <summary>
-        /// Where the linked-list nodes are located within the shared memory
+        /// Where the linked-list nodes are located within the buffer
         /// </summary>
         protected virtual long NodeOffset
         {
@@ -106,7 +109,7 @@ namespace SharedMemory
                 if (i < 0 || i >= NodeCount)
                     throw new ArgumentOutOfRangeException();
 
-                return ((Node*)(ViewPtr + NodeOffset)) + i;
+                return ((Node*)(BufferStartPtr + NodeOffset)) + i;
             }
         }
 
@@ -184,7 +187,7 @@ namespace SharedMemory
             public volatile int DoneWrite;
 
             /// <summary>
-            /// Represents the absolute offset within the shared memory where the data for this node can be found.
+            /// Represents the offset relative to <see cref="Buffer.BufferStartPtr"/> where the data for this node can be found.
             /// </summary>
             public long Offset;
             
@@ -272,7 +275,7 @@ namespace SharedMemory
             if (IsOwnerOfSharedMemory)
             {
                 // Retrieve pointer to node header
-                _nodeHeader = (NodeHeader*)(ViewPtr + NodeHeaderOffset);
+                _nodeHeader = (NodeHeader*)(BufferStartPtr + NodeHeaderOffset);
 
                 // Initialise the node header
                 InitialiseNodeHeader();
@@ -283,7 +286,7 @@ namespace SharedMemory
             else
             {
                 // Load the NodeHeader
-                _nodeHeader = (NodeHeader*)(ViewPtr + NodeHeaderOffset);
+                _nodeHeader = (NodeHeader*)(BufferStartPtr + NodeHeaderOffset);
                 NodeCount = _nodeHeader->NodeCount;
                 NodeBufferSize = _nodeHeader->NodeBufferSize;
             }
@@ -306,7 +309,7 @@ namespace SharedMemory
             header.WriteStart = 0;
             header.NodeBufferSize = NodeBufferSize;
             header.NodeCount = NodeCount;
-            View.Write<NodeHeader>(NodeHeaderOffset, ref header);
+            base.Write<NodeHeader>(ref header, NodeHeaderOffset);
         }
 
         /// <summary>
@@ -341,7 +344,7 @@ namespace SharedMemory
             nodes[N].Index = N;
 
             // Write the nodes to the shared memory
-            View.WriteArray<Node>(NodeOffset, nodes, 0, nodes.Length);
+            base.WriteArray<Node>(NodeOffset, nodes, 0, nodes.Length);
         }
 
         /// <summary>
@@ -351,9 +354,9 @@ namespace SharedMemory
         {
             if (DataExists != null)
             {
-                DataExists.Dispose();
+                (DataExists as IDisposable).Dispose();
                 DataExists = null;
-                NodeAvailable.Dispose();
+                (NodeAvailable as IDisposable).Dispose();
                 NodeAvailable = null;
             }
 
@@ -445,7 +448,8 @@ namespace SharedMemory
 
             // Copy the data
             int amount = Math.Min(buffer.Length, NodeBufferSize);
-            Marshal.Copy(buffer, 0, new IntPtr(ViewPtr + node->Offset), amount);
+            
+            Marshal.Copy(buffer, 0, new IntPtr(BufferStartPtr + node->Offset), amount);
 
             // Writing is complete, make readable
             PostNode(node);
@@ -467,9 +471,9 @@ namespace SharedMemory
             Node* node = GetNodeForWriting(timeout);
             if (node == null) return 0;
 
-            // Write the data using the MemoryMappedViewAccessor
-            int amount = Math.Min(buffer.Length, NodeBufferSize);
-            View.WriteArray<T>(node->Offset, buffer, 0, amount);
+            // Write the data using the FastStructure class (much faster than the MemoryMappedViewAccessor WriteArray<T> method)
+            int amount = Math.Min(buffer.Length, NodeBufferSize / FastStructure.SizeOf<T>());
+            base.WriteArray<T>(node->Offset, buffer, 0, amount);
 
             // Writing is complete, make node readable
             PostNode(node);
@@ -497,7 +501,7 @@ namespace SharedMemory
             if (node == null) return 0;
 
             // Copy the data using the MemoryMappedViewAccessor
-            View.Write<T>(node->Offset, ref data);
+            base.Write<T>(ref data, node->Offset);
 
             // Return the node for further writing
             PostNode(node);
@@ -521,7 +525,7 @@ namespace SharedMemory
 
             // Copy the data
             int amount = Math.Min(length, NodeBufferSize);
-            base.Write(bufferPtr, amount, (long)(ViewPtr + node->Offset));
+            base.Write(bufferPtr, amount, node->Offset);
 
             // Writing is complete, make readable
             PostNode(node);
@@ -546,7 +550,7 @@ namespace SharedMemory
             try
             {
                 // Pass destination IntPtr to custom write function
-                amount = writeFunc(new IntPtr(ViewPtr + node->Offset));
+                amount = writeFunc(new IntPtr(BufferStartPtr + node->Offset));
             }
             finally
             {
@@ -649,7 +653,7 @@ namespace SharedMemory
             int amount = Math.Min(buffer.Length, NodeBufferSize);
             
             // Copy the data
-            Marshal.Copy(new IntPtr(ViewPtr + node->Offset), buffer, 0, amount);
+            Marshal.Copy(new IntPtr(BufferStartPtr + node->Offset), buffer, 0, amount);
 
             // Return the node for further writing
             ReturnNode(node);
@@ -671,9 +675,9 @@ namespace SharedMemory
             Node* node = GetNodeForReading(timeout);
             if (node == null) return 0;
 
-            // Copy the data using the MemoryMappedViewAccessor
-            int amount = Math.Min(buffer.Length, NodeBufferSize);
-            View.ReadArray<T>(node->Offset, buffer, 0, amount);
+            // Copy the data using the FastStructure class (much faster than the MemoryMappedViewAccessor ReadArray<T> method)
+            int amount = Math.Min(buffer.Length, NodeBufferSize / FastStructure.SizeOf<T>());
+            base.ReadArray<T>(buffer, node->Offset, 0, amount);
 
             // Return the node for further writing
             ReturnNode(node);
@@ -705,7 +709,7 @@ namespace SharedMemory
             }
 
             // Copy the data using the MemoryMappedViewAccessor
-            View.Read<T>(node->Offset, out data);
+            base.Read<T>(out data, node->Offset);
 
             // Return the node for further writing
             ReturnNode(node);
@@ -728,7 +732,7 @@ namespace SharedMemory
 
             int amount = Math.Min(length, NodeBufferSize);
             // Copy the data
-            base.Read(buffer, amount, (long)(ViewPtr + node->Offset));
+            base.Read(buffer, amount, node->Offset);
 
             // Return node for further writing
             ReturnNode(node);
@@ -752,7 +756,7 @@ namespace SharedMemory
             try
             {
                 // Pass pointer to buffer directly to custom read function
-                amount = readFunc(new IntPtr(ViewPtr + node->Offset));
+                amount = readFunc(new IntPtr(BufferStartPtr + node->Offset));
             }
             finally
             {

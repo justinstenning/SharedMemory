@@ -30,7 +30,9 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading;
+#if NET40Plus
 using System.Threading.Tasks;
+#endif
 
 namespace ServerTest
 {
@@ -82,6 +84,7 @@ namespace ServerTest
                         readData = dataList[iterations % 255];
 
                         int amount = theServer.Write(readData, 100);
+                        //int amount = theServer.Write<byte>(readData, 100);
 
                         if (amount == 0)
                         {
@@ -116,13 +119,20 @@ namespace ServerTest
                 iterations = 0;
                 totalBytes = 0;
                 lastTick = 0;
-                sw.Restart();
+                sw.Reset();
+                sw.Start();
 
                 Console.WriteLine("Testing throughput...");
+#if NET40Plus
                 Task s1 = Task.Factory.StartNew(writer);
                 //Task s2 = Task.Factory.StartNew(writer);
                 //Task s3 = Task.Factory.StartNew(writer);
-
+#else
+                ThreadPool.QueueUserWorkItem((o) =>
+                {
+                    writer();
+                });
+#endif
                 Console.ReadLine();
             }
         }

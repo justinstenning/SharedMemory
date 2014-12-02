@@ -195,7 +195,7 @@ namespace SharedMemoryTests
             string name = Guid.NewGuid().ToString();
             try
             {
-                using (var smr = new CircularBuffer(name, 4, int.MaxValue))
+                using (var smr = new CircularBuffer(name, 6, int.MaxValue))
                 {
                 }
             }
@@ -734,6 +734,103 @@ namespace SharedMemoryTests
 
                 for (var i = 0; i < data.Length; i++)
                     Assert.AreEqual(data[i], readBuff[i], String.Format("Data written does not match data read at index {0}", i));
+            }
+        }
+
+        [TestMethod]
+        public unsafe void ReadWrite_IntPtr_DataMatches()
+        {
+            string name = Guid.NewGuid().ToString();
+            Random r = new Random();
+            int bufSize = 32;
+            int iterations = 1;
+            byte[][] data = new byte[iterations][];
+            byte[] readBuf = new byte[bufSize];
+            byte[] writeBuf = null;
+
+            // Fill with random data
+            for (var i = 0; i < data.Length; i++)
+            {
+                data[i] = new byte[bufSize];
+                r.NextBytes(data[i]);
+            }
+
+            using (var smr = new CircularBuffer(name, 2, bufSize))
+            {
+                for (var iteration = 0; iteration < iterations; iteration++)
+                {
+                    writeBuf = data[iteration];
+                    fixed (byte* wPtr = &writeBuf[0])
+                    {
+                        Assert.AreEqual(bufSize, smr.Write((IntPtr)wPtr, bufSize), String.Format("Failed to write {0} bytes", bufSize));
+                    }
+                    fixed (byte* rPtr = &readBuf[0])
+                    {
+                        Assert.AreEqual(bufSize, smr.Read((IntPtr)rPtr, bufSize), String.Format("Failed to write {0} bytes", bufSize));
+                    }
+
+                    for (var i = 0; i < writeBuf.Length; i++)
+                        Assert.AreEqual(writeBuf[i], readBuf[i], String.Format("Data written does not match data read at index {0}", i));
+                }
+            }
+        }
+
+        [TestMethod]
+        public unsafe void ReadWrite_DelegateIntPtr_DataMatches()
+        {
+            string name = Guid.NewGuid().ToString();
+            Random r = new Random();
+            int bufSize = 32;
+            int iterations = 1;
+            byte[][] data = new byte[iterations][];
+            byte[] readBuf = new byte[bufSize];
+            byte[] writeBuf = null;
+
+            // Fill with random data
+            for (var i = 0; i < data.Length; i++)
+            {
+                data[i] = new byte[bufSize];
+                r.NextBytes(data[i]);
+            }
+
+            // create write delegate
+            Func<IntPtr,int> writeFunc = (addr) =>
+            {
+                int indx = 0;
+                int count = writeBuf.Length;
+                while (count > 0)
+                {
+                    var b = writeBuf[indx++];
+                    Marshal.WriteByte(addr, indx, b);
+                    count--;
+                }
+                return writeBuf.Length;
+            };
+
+            // create read delegate
+            Func<IntPtr, int> readFunc = (addr) =>
+            {
+                int indx = 0;
+                int count = readBuf.Length;
+                while (count > 0)
+                {
+                    readBuf[indx++] = Marshal.ReadByte(addr, indx);
+                    count--;
+                }
+                return readBuf.Length;
+            };
+
+            using (var smr = new CircularBuffer(name, 2, bufSize))
+            {
+                for (var iteration = 0; iteration < iterations; iteration++)
+                {
+                    writeBuf = data[iteration];
+                    Assert.AreEqual(bufSize, smr.Write(writeFunc), String.Format("Failed to write {0} bytes", bufSize));
+                    Assert.AreEqual(bufSize, smr.Read(readFunc), String.Format("Failed to write {0} bytes", bufSize));
+
+                    for (var i = 0; i < writeBuf.Length; i++)
+                        Assert.AreEqual(writeBuf[i], readBuf[i], String.Format("Data written does not match data read at index {0}", i));
+                }
             }
         }
 
