@@ -79,8 +79,8 @@ configuration:
 
 build:
   project: SharedMemory.sln       # path to Visual Studio solution or project
-#  publish_nuget: true             # package projects with .nuspec files and push to artifacts
-#  publish_nuget_symbols: true     # generate and publish NuGet symbol packages
+  publish_nuget: true             # package projects with .nuspec files and push to artifacts
+  publish_nuget_symbols: true     # generate and publish NuGet symbol packages
 
   # MSBuild verbosity level
   verbosity: minimal
@@ -117,12 +117,12 @@ artifacts:
 
 # providers: Local, FTP, WebDeploy, AzureCS, AzureBlob, S3, NuGet, Environment
 # provider names are case-sensitive!
-#deploy:
-#    # Deploying to NuGet feed
-#  - provider: NuGet
-#    api_key:
-#      secure: GNkrc/dcRF9/eobXlHAQZQGQeJr0XwseyCPVlwotQE0/hNHBabu1a/E1V4d3S4Ub
-#    skip_symbols: false
+# deploy:
+  # # Deploying to NuGet feed
+  # - provider: NuGet
+    # api_key:
+      # secure: GNkrc/dcRF9/eobXlHAQZQGQeJr0XwseyCPVlwotQE0/hNHBabu1a/E1V4d3S4Ub
+    # skip_symbols: false
 
 # scripts to run before deployment
 before_deploy:
