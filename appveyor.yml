@@ -85,7 +85,7 @@ before_build:
 
 # scripts to run after build
 after_build:
-  - nuget pack "%APPVEYOR_BUILD_FOLDER%\SharedMemory.nuspec" -Symbols -Version %APPVEYOR_BUILD_VERSION%
+  - nuget pack "%APPVEYOR_BUILD_FOLDER%\SharedMemory\SharedMemory.nuspec" -Symbols -Version %APPVEYOR_BUILD_VERSION%
 # to run your custom scripts instead of automatic MSBuild
 build_script:
 
