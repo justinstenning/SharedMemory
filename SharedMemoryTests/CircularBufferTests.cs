@@ -497,7 +497,7 @@ namespace SharedMemoryTests
                 Task tWriter = Task.Factory.StartNew(writer);
                 Task tReader = Task.Factory.StartNew(reader);
 
-                if (!Task.WaitAll(new Task[] { tWriter, tReader }, 1000))
+                if (!Task.WaitAll(new Task[] { tWriter, tReader }, 5000))
                 {
                     Assert.Fail("Reader or writer took too long");
                 }
@@ -542,7 +542,7 @@ namespace SharedMemoryTests
                 Task tWriter = Task.Factory.StartNew(writer);
                 Task tReader = Task.Factory.StartNew(reader);
 
-                if (!Task.WaitAll(new Task[] { tWriter, tReader }, 1000))
+                if (!Task.WaitAll(new Task[] { tWriter, tReader }, 5000))
                 {
                     Assert.Fail("Reader or writer took too long");
                 }

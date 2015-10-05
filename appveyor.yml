@@ -46,16 +46,13 @@ install:
         [IO.File]::WriteAllBytes($env:StrongNameKeyPath, [Convert]::FromBase64String($env:StrongNameKey))
         Write-Host "Retrieved sign key from secure environment variable"
   # Update NuGet version strings
-  - ps: |
-        $root = $env:APPVEYOR_BUILD_FOLDER
-        $versionStr = $env:APPVEYOR_BUILD_VERSION
-        Write-Host "Setting .nuspec version tag to $versionStr"
-        $content = (Get-Content $root\SharedMemory\SharedMemory.nuspec)
-        $content = $content -replace '\$version\$',$versionStr
-        $content | Out-File $root\SharedMemory\SharedMemory.nuspec
-        $content = (Get-Content $root\SharedMemory\SharedMemory.symbols.nuspec)
-        $content = $content -replace '\$version\$',$versionStr
-        $content | Out-File $root\SharedMemory\SharedMemory.symbols.nuspec
+  # - ps: |
+        # $root = $env:APPVEYOR_BUILD_FOLDER
+        # $versionStr = $env:APPVEYOR_BUILD_VERSION
+        # Write-Host "Setting .nuspec version tag to $versionStr"
+        # $content = (Get-Content $root\SharedMemory\SharedMemory.nuspec)
+        # $content = $content -replace '\$version\$',$versionStr
+        # $content | Out-File $root\SharedMemory\SharedMemory.nuspec
 
 # enable patching of AssemblyInfo.* files
 assembly_info:
@@ -79,8 +76,6 @@ configuration:
 
 build:
   project: SharedMemory.sln       # path to Visual Studio solution or project
-#  publish_nuget: true             # package projects with .nuspec files and push to artifacts
-#  publish_nuget_symbols: true     # generate and publish NuGet symbol packages
 
   # MSBuild verbosity level
   verbosity: minimal
@@ -117,16 +112,16 @@ artifacts:
 
 # providers: Local, FTP, WebDeploy, AzureCS, AzureBlob, S3, NuGet, Environment
 # provider names are case-sensitive!
-#deploy:
-#    # Deploying to NuGet feed
-#  - provider: NuGet
-#    api_key:
-#      secure: GNkrc/dcRF9/eobXlHAQZQGQeJr0XwseyCPVlwotQE0/hNHBabu1a/E1V4d3S4Ub
-#    skip_symbols: false
+# deploy:
+  # # Deploying to NuGet feed
+  # - provider: NuGet
+    # api_key:
+      # secure: GNkrc/dcRF9/eobXlHAQZQGQeJr0XwseyCPVlwotQE0/hNHBabu1a/E1V4d3S4Ub
+    # skip_symbols: false
 
 # scripts to run before deployment
 before_deploy:
-
+#  - nuget pack "%APPVEYOR_BUILD_FOLDER%\SharedMemory\SharedMemory.nuspec" -Symbols -Version %APPVEYOR_BUILD_VERSION%
 # scripts to run after deployment
 after_deploy:
 
