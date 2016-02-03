@@ -199,7 +199,6 @@ namespace SharedMemory
             /// <summary>
             /// Holds the number of bytes written into this node.
             /// </summary>
-            //int _padding0;
             public int AmountWritten;
         }
 
