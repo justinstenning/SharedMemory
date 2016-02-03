@@ -197,9 +197,9 @@ namespace SharedMemory
             public int Index;
 
             /// <summary>
-            /// Pad out the structure to 32-bytes.
+            /// Holds the number of bytes written into this node.
             /// </summary>
-            int _padding0;
+            public int AmountWritten;
         }
 
         #endregion
@@ -450,6 +450,8 @@ namespace SharedMemory
             int amount = Math.Min(buffer.Length, NodeBufferSize);
             
             Marshal.Copy(buffer, 0, new IntPtr(BufferStartPtr + node->Offset), amount);
+            node->AmountWritten = amount;
+            
 
             // Writing is complete, make readable
             PostNode(node);
@@ -474,6 +476,7 @@ namespace SharedMemory
             // Write the data using the FastStructure class (much faster than the MemoryMappedViewAccessor WriteArray<T> method)
             int amount = Math.Min(buffer.Length, NodeBufferSize / FastStructure.SizeOf<T>());
             base.WriteArray<T>(node->Offset, buffer, 0, amount);
+            node->AmountWritten = amount * FastStructure.SizeOf<T>();
 
             // Writing is complete, make node readable
             PostNode(node);
@@ -502,6 +505,7 @@ namespace SharedMemory
 
             // Copy the data using the MemoryMappedViewAccessor
             base.Write<T>(ref data, node->Offset);
+            node->AmountWritten = structSize;
 
             // Return the node for further writing
             PostNode(node);
@@ -526,6 +530,7 @@ namespace SharedMemory
             // Copy the data
             int amount = Math.Min(length, NodeBufferSize);
             base.Write(bufferPtr, amount, node->Offset);
+            node->AmountWritten = amount;
 
             // Writing is complete, make readable
             PostNode(node);
@@ -551,6 +556,7 @@ namespace SharedMemory
             {
                 // Pass destination IntPtr to custom write function
                 amount = writeFunc(new IntPtr(BufferStartPtr + node->Offset));
+                node->AmountWritten = amount;
             }
             finally
             {
@@ -613,6 +619,9 @@ namespace SharedMemory
             // Set the finished reading flag for this node (the node is reserved so no need for locks)
             node->DoneRead = 1;
 
+            // Keep it clean and reset AmountWritten to prepare it for next Write
+            node->AmountWritten = 0;
+
             // Move the read pointer forward as far as possible
             // always starting from ReadEnd to make all contiguous
             // read nodes available for writing.
@@ -650,8 +659,9 @@ namespace SharedMemory
             Node* node = GetNodeForReading(timeout);
             if (node == null) return 0;
 
-            int amount = Math.Min(buffer.Length, NodeBufferSize);
-            
+            //int amount = Math.Min(buffer.Length, NodeBufferSize);
+            int amount = Math.Min(buffer.Length, node->AmountWritten);
+
             // Copy the data
             Marshal.Copy(new IntPtr(BufferStartPtr + node->Offset), buffer, 0, amount);
 
@@ -676,7 +686,8 @@ namespace SharedMemory
             if (node == null) return 0;
 
             // Copy the data using the FastStructure class (much faster than the MemoryMappedViewAccessor ReadArray<T> method)
-            int amount = Math.Min(buffer.Length, NodeBufferSize / FastStructure.SizeOf<T>());
+            //int amount = Math.Min(buffer.Length, NodeBufferSize / FastStructure.SizeOf<T>());
+            int amount = Math.Min(buffer.Length, node->AmountWritten / FastStructure.SizeOf<T>());
             base.ReadArray<T>(buffer, node->Offset, 0, amount);
 
             // Return the node for further writing
@@ -730,7 +741,9 @@ namespace SharedMemory
             Node* node = GetNodeForReading(timeout);
             if (node == null) return 0;
 
-            int amount = Math.Min(length, NodeBufferSize);
+            //int amount = Math.Min(length, NodeBufferSize);
+            int amount = Math.Min(length, node->AmountWritten);
+
             // Copy the data
             base.Read(buffer, amount, node->Offset);
 
