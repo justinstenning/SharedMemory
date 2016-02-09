@@ -437,19 +437,20 @@ namespace SharedMemory
         /// Writes the byte array buffer to the next available node for writing
         /// </summary>
         /// <param name="buffer">Reference to the buffer to write</param>
+        /// <param name="startIndex">The index within the buffer to start writing from</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for writing (default 1000ms)</param>
         /// <returns>The number of bytes written</returns>
         /// <remarks>The maximum number of bytes that can be written is the minimum of the length of <paramref name="buffer"/> and <see cref="NodeBufferSize"/>.</remarks>
-        public virtual int Write(byte[] buffer, int timeout = 1000)
+        public virtual int Write(byte[] buffer, int startIndex = 0, int timeout = 1000)
         {
             // Grab a node for writing
             Node* node = GetNodeForWriting(timeout);
             if (node == null) return 0;
 
             // Copy the data
-            int amount = Math.Min(buffer.Length, NodeBufferSize);
+            int amount = Math.Min(buffer.Length - startIndex, NodeBufferSize);
             
-            Marshal.Copy(buffer, 0, new IntPtr(BufferStartPtr + node->Offset), amount);
+            Marshal.Copy(buffer, startIndex, new IntPtr(BufferStartPtr + node->Offset), amount);
             node->AmountWritten = amount;
             
 
@@ -463,10 +464,11 @@ namespace SharedMemory
         /// Writes the struct array buffer to the next available node for writing
         /// </summary>
         /// <param name="buffer">Reference to the buffer to write</param>
+        /// <param name="startIndex">The index within the buffer to start writing from</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for writing (default 1000ms)</param>
         /// <returns>The number of bytes written</returns>
         /// <remarks>The maximum number of bytes that can be written is the minimum of the length of <paramref name="buffer"/> multiplied by <code>Marshal.SizeOf(typeof(T))</code> and <see cref="NodeBufferSize"/>.</remarks>        
-        public virtual int Write<T>(T[] buffer, int timeout = 1000)
+        public virtual int Write<T>(T[] buffer, int startIndex = 0, int timeout = 1000)
             where T : struct
         {
             // Grab a node for writing
@@ -475,7 +477,7 @@ namespace SharedMemory
 
             // Write the data using the FastStructure class (much faster than the MemoryMappedViewAccessor WriteArray<T> method)
             int amount = Math.Min(buffer.Length, NodeBufferSize / FastStructure.SizeOf<T>());
-            base.WriteArray<T>(node->Offset, buffer, 0, amount);
+            base.WriteArray<T>(node->Offset, buffer, startIndex, amount);
             node->AmountWritten = amount * FastStructure.SizeOf<T>();
 
             // Writing is complete, make node readable
@@ -651,19 +653,20 @@ namespace SharedMemory
         /// Reads the next available node for reading into the specified byte array
         /// </summary>
         /// <param name="buffer">Reference to the buffer</param>
+        /// <param name="startIndex">The index within the buffer to start writing from</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of bytes read</returns>
         /// <remarks>The maximum number of bytes that can be read is the minimum of the length of <paramref name="buffer"/> and <see cref="NodeBufferSize"/>.</remarks>
-        public virtual int Read(byte[] buffer, int timeout = 1000)
+        public virtual int Read(byte[] buffer, int startIndex = 0, int timeout = 1000)
         {
             Node* node = GetNodeForReading(timeout);
             if (node == null) return 0;
 
             //int amount = Math.Min(buffer.Length, NodeBufferSize);
-            int amount = Math.Min(buffer.Length, node->AmountWritten);
+            int amount = Math.Min(buffer.Length - startIndex, node->AmountWritten);
 
             // Copy the data
-            Marshal.Copy(new IntPtr(BufferStartPtr + node->Offset), buffer, 0, amount);
+            Marshal.Copy(new IntPtr(BufferStartPtr + node->Offset), buffer, startIndex, amount);
 
             // Return the node for further writing
             ReturnNode(node);
@@ -676,10 +679,11 @@ namespace SharedMemory
         /// </summary>
         /// <typeparam name="T">The structure type to be read</typeparam>
         /// <param name="buffer">Reference to the buffer</param>
+        /// <param name="startIndex">The index within the buffer to start writing from</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of bytes read</returns>
         /// <remarks>The maximum number of bytes that can be read is the minimum of the length of <paramref name="buffer"/> multiplied by <code>Marshal.SizeOf(typeof(T))</code> and <see cref="NodeBufferSize"/>.</remarks>
-        public virtual int Read<T>(T[] buffer, int timeout = 1000)
+        public virtual int Read<T>(T[] buffer, int startIndex = 0, int timeout = 1000)
             where T : struct
         {
             Node* node = GetNodeForReading(timeout);
@@ -688,7 +692,7 @@ namespace SharedMemory
             // Copy the data using the FastStructure class (much faster than the MemoryMappedViewAccessor ReadArray<T> method)
             //int amount = Math.Min(buffer.Length, NodeBufferSize / FastStructure.SizeOf<T>());
             int amount = Math.Min(buffer.Length, node->AmountWritten / FastStructure.SizeOf<T>());
-            base.ReadArray<T>(buffer, node->Offset, 0, amount);
+            base.ReadArray<T>(buffer, node->Offset, startIndex, amount);
 
             // Return the node for further writing
             ReturnNode(node);
