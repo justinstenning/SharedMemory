@@ -112,9 +112,10 @@ namespace SharedMemoryTests
                         {
                             *(n + indx) = c;
                             indx++;
-                            if (indx >= MAXLENGTH)
+                            if (indx >= MAXLENGTH - 1)
                                 break;
                         }
+                        *(n + indx) = '\0';
                     }
                 }
             }
