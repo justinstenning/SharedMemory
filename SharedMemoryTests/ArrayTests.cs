@@ -25,6 +25,7 @@
 //   http://www.codeproject.com/Articles/14740/Fast-IPC-Communication-Using-Shared-Memory-and-Int
 
 using System;
+using System.Collections.Generic;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SharedMemory;
 using System.Runtime.InteropServices;
@@ -50,6 +51,20 @@ namespace SharedMemoryTests
                     Assert.AreEqual(3, smr[0], "");
                     Assert.AreEqual(10, smr[4], "");
                 }
+
+                IList<int> a = sma;
+                a[0] = 3;
+                a[4] = 10;
+
+                using (var smr = new Array<int>(name))
+                {
+                    IList<int> r = smr;
+
+                    Assert.AreEqual(0, r[1], "");
+                    Assert.AreEqual(3, r[0], "");
+                    Assert.AreEqual(10, r[4], "");
+                }
+
             }
         }
 
@@ -71,10 +86,36 @@ namespace SharedMemoryTests
 
                 Assert.IsTrue(exceptionThrown, "Index of -1 should result in ArgumentOutOfRangeException");
 
+                exceptionThrown = false;
+                IList<int> a = sma;
+                try
+                {
+                    a[-1] = 0;
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    exceptionThrown = true;
+                }
+
+                Assert.IsTrue(exceptionThrown, "Index of -1 should result in ArgumentOutOfRangeException");
+
                 try
                 {
                     exceptionThrown = false;
                     sma[sma.Length] = 0;
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    exceptionThrown = true;
+                }
+
+                Assert.IsTrue(exceptionThrown, "Index of Length should result in ArgumentOutOfRangeException");
+
+
+                try
+                {
+                    exceptionThrown = false;
+                    a[a.Count] = 0;
                 }
                 catch (ArgumentOutOfRangeException)
                 {
@@ -295,6 +336,52 @@ namespace SharedMemoryTests
 
                     smr.ReleaseReadLock();
                 }
+            }
+        }
+
+        [TestMethod]
+        public void IList_Contains()
+        {
+            var name = Guid.NewGuid().ToString();
+            using (var sma = new Array<int>(name, 10))
+            {
+                sma[0] = 3;
+                sma[4] = 10;
+
+                IList<int> a = sma;
+
+                Assert.IsTrue(a.Contains(10));
+                Assert.IsFalse(a.Contains(11));
+            }
+        }
+
+        [TestMethod]
+        public void IList_IndexOf()
+        {
+            var name = Guid.NewGuid().ToString();
+            using (var sma = new Array<int>(name, 10))
+            {
+                sma[0] = 3;
+                sma[4] = 10;
+
+                IList<int> a = sma;
+
+                Assert.AreEqual(4, a.IndexOf(10));
+                Assert.AreEqual(-1, a.IndexOf(11));
+            }
+        }
+
+        [TestMethod]
+        public void IList_IsReadOnly()
+        {
+            var name = Guid.NewGuid().ToString();
+            using (var sma = new Array<int>(name, 10))
+            {
+                sma[0] = 3;
+                sma[4] = 10;
+
+                IList<int> a = sma;
+                Assert.IsTrue(a.IsReadOnly);
             }
         }
     }
