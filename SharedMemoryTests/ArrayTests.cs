@@ -121,6 +121,15 @@ namespace SharedMemoryTests
         }
 
         [TestMethod]
+        public void Test_MyTestStruct()
+        {
+            var my = new MyTestStruct();
+            my.Name = "long string long string";
+            my.Name = "short string";
+            Assert.AreEqual("short string", my.Name);
+        }
+
+        [TestMethod]
         public void Indexer_ReadWriteComplexStruct_DataMatches()
         {
             var name = Guid.NewGuid().ToString();
