@@ -26,11 +26,8 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Permissions;
-using System.Text;
-using System.Threading;
 
 namespace SharedMemory
 {
@@ -40,7 +37,7 @@ namespace SharedMemory
     /// <typeparam name="T">The struct type that will be stored in the elements of this fixed array buffer.</typeparam>
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
-    public class Array<T> : BufferWithLocks, IEnumerable<T>
+    public class Array<T> : BufferWithLocks, IList<T>
             where T : struct
     {
         /// <summary>
@@ -211,5 +208,56 @@ namespace SharedMemory
         }
 
         #endregion
+
+        #region IList<T>
+        public void Add(T item)
+        {
+            throw new NotImplementedException();
+        }
+
+        public void Clear()
+        {
+            throw new NotImplementedException();
+        }
+
+        public bool Contains(T item)
+        {
+            return IndexOf(item) >= 0;
+        }
+
+        public bool Remove(T item)
+        {
+            throw new NotImplementedException();
+        }
+
+        public int Count
+        {
+            get { return Length; }
+        }
+
+        public bool IsReadOnly
+        {
+            get { return true; }
+        }
+        public int IndexOf(T item)
+        {
+            for (var i = 0; i < Count; i++)
+            {
+                if (this[i].Equals(item)) return i;
+            }
+            return -1;
+        }
+
+        public void Insert(int index, T item)
+        {
+            throw new NotImplementedException();
+        }
+
+        public void RemoveAt(int index)
+        {
+            throw new NotImplementedException();
+        }
+        #endregion
+
     }
 }
