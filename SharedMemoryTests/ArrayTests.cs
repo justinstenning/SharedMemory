@@ -52,17 +52,31 @@ namespace SharedMemoryTests
                     Assert.AreEqual(10, smr[4], "");
                 }
 
-                IList<int> a = sma;
-                a[0] = 3;
-                a[4] = 10;
+                IList<int> list = sma;
+                list[0] = 5;
+                list[4] = 55;
 
                 using (var smr = new Array<int>(name))
                 {
                     IList<int> r = smr;
 
                     Assert.AreEqual(0, r[1], "");
-                    Assert.AreEqual(3, r[0], "");
-                    Assert.AreEqual(10, r[4], "");
+                    Assert.AreEqual(5, r[0], "");
+                    Assert.AreEqual(55, r[4], "");
+                }
+
+                list[3] = 68;
+                IList<int> arraySlice = new ArraySlice<int>(list, 1, 8);
+                arraySlice[0] = 67;
+
+                using (var smr = new Array<int>(name))
+                {
+                    IList<int> r = smr;
+                    IList<int> rarraySlice = new ArraySlice<int>(r, 1, 8);
+
+                    Assert.AreEqual(67, rarraySlice[0], "");
+                    Assert.AreEqual(68, rarraySlice[2], "");
+                    Assert.AreEqual(55, rarraySlice[3], "");
                 }
 
             }
