@@ -42,6 +42,7 @@
     <Compile Include="Array.cs" />
     <Compile Include="Buffer.cs" />
     <Compile Include="UnsafeNativeMethods.cs" />
+    <Compile Include="Utilities\ArraySlice.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="publickey.snk" />
