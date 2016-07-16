@@ -192,6 +192,11 @@ namespace SharedMemoryTests
         [TestMethod]
         public void Constructor_BufferTooLarge_ArgumentOutOfRangeException()
         {
+            // If it's not 32-bit build, then we can't test for out-of-range.
+            // Test below always succeeds on 64-bit systems.
+
+            if (IntPtr.Size != sizeof(int)) return;
+
             string name = Guid.NewGuid().ToString();
             try
             {
