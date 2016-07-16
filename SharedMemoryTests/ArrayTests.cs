@@ -30,6 +30,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SharedMemory;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using SharedMemory.Utilities;
 
 namespace SharedMemoryTests
 {
