@@ -357,7 +357,7 @@ namespace SharedMemory
         protected virtual void Write<T>(T[] buffer, long bufferPosition = 0)
             where T : struct
         {
-            Write<T>(buffer, 0, buffer.Length);
+            Write<T>(buffer, 0, bufferPosition);
             //View.WriteArray(BufferOffset + bufferPosition, buffer, 0, buffer.Length);
         }
 
@@ -366,12 +366,12 @@ namespace SharedMemory
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
         /// <param name="buffer">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
-        /// <param name="offset">The offset within the array to start writing from.</param>
+        /// <param name="index">The index within the array to start writing from.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
-        protected virtual void Write<T>(T[] buffer, int offset, long bufferPosition = 0)
+        protected virtual void Write<T>(T[] buffer, int index, long bufferPosition = 0)
             where T : struct
         {
-            FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), buffer, offset, buffer.Length - offset);
+            FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), buffer, index, buffer.Length - index);
             //View.WriteArray(BufferOffset + bufferPosition, buffer, 0, buffer.Length);
         }
 
