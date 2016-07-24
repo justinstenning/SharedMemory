@@ -41,12 +41,12 @@ namespace SharedMemoryTests
         public void Indexer_ReadWriteInteger_DataMatches()
         {
             var name = Guid.NewGuid().ToString();
-            using (var sma = new Array<int>(name, 10))
+            using (var sma = new SharedArray<int>(name, 10))
             {
                 sma[0] = 3;
                 sma[4] = 10;
 
-                using (var smr = new Array<int>(name))
+                using (var smr = new SharedArray<int>(name))
                 {
                     Assert.AreEqual(0, smr[1], "");
                     Assert.AreEqual(3, smr[0], "");
@@ -57,7 +57,7 @@ namespace SharedMemoryTests
                 list[0] = 5;
                 list[4] = 55;
 
-                using (var smr = new Array<int>(name))
+                using (var smr = new SharedArray<int>(name))
                 {
                     IList<int> r = smr;
 
@@ -70,7 +70,7 @@ namespace SharedMemoryTests
                 IList<int> arraySlice = new ArraySlice<int>(list, 1, 8);
                 arraySlice[0] = 67;
 
-                using (var smr = new Array<int>(name))
+                using (var smr = new SharedArray<int>(name))
                 {
                     IList<int> r = smr;
                     IList<int> rarraySlice = new ArraySlice<int>(r, 1, 8);
@@ -87,7 +87,7 @@ namespace SharedMemoryTests
         public void Indexer_OutOfRange_ThrowsException()
         {
             var name = Guid.NewGuid().ToString();
-            using (var sma = new Array<int>(name, 10))
+            using (var sma = new SharedArray<int>(name, 10))
             {
                 bool exceptionThrown = false;
                 try
@@ -190,12 +190,12 @@ namespace SharedMemoryTests
         public void Indexer_ReadWriteComplexStruct_DataMatches()
         {
             var name = Guid.NewGuid().ToString();
-            using (var sma = new Array<MyTestStruct>(name, 10))
+            using (var sma = new SharedArray<MyTestStruct>(name, 10))
             {
                 sma[0] = new MyTestStruct { ValueA = 3, Name = "My Test Name" };
                 sma[4] = new MyTestStruct { ValueA = 10, Name = "My Test Name2" };
 
-                using (var smr = new Array<MyTestStruct>(name))
+                using (var smr = new SharedArray<MyTestStruct>(name))
                 {
                     Assert.AreEqual(0, smr[1].ValueA, "");
                     Assert.AreEqual(3, smr[0].ValueA, "");
@@ -210,7 +210,7 @@ namespace SharedMemoryTests
         public void CopyTo_NullArray_ThrowsException()
         {
             var name = Guid.NewGuid().ToString();
-            using (var sma = new Array<int>(name, 10))
+            using (var sma = new SharedArray<int>(name, 10))
             {
                 bool exceptionThrown = false;
                 try
@@ -229,7 +229,7 @@ namespace SharedMemoryTests
         public void Write_NullArray_ThrowsException()
         {
             var name = Guid.NewGuid().ToString();
-            using (var sma = new Array<int>(name, 10))
+            using (var sma = new SharedArray<int>(name, 10))
             {
                 bool exceptionThrown = false;
                 try
@@ -252,7 +252,7 @@ namespace SharedMemoryTests
             int bufSize = 1024;
             byte[] data = new byte[bufSize];
             byte[] readBuf = new byte[bufSize];
-            using (var sma = new Array<byte>(name, bufSize))
+            using (var sma = new SharedArray<byte>(name, bufSize))
             {
                 sma.Write(data);
 
@@ -281,11 +281,11 @@ namespace SharedMemoryTests
             // Fill with random data
             r.NextBytes(data);
 
-            using (var sma = new Array<byte>(name, bufSize))
+            using (var sma = new SharedArray<byte>(name, bufSize))
             {
                 // Acquire write lock early
                 sma.AcquireWriteLock();
-                using (var smr = new Array<byte>(name))
+                using (var smr = new SharedArray<byte>(name))
                 {
                     var t1 = Task.Factory.StartNew(() =>
                         {
@@ -332,9 +332,9 @@ namespace SharedMemoryTests
         public void AcquireReadWriteLocks_ReadWrite_Blocks()
         {
             var name = Guid.NewGuid().ToString();
-            using (var sma = new Array<byte>(name, 10))
+            using (var sma = new SharedArray<byte>(name, 10))
             {
-                using (var smr = new Array<byte>(name))
+                using (var smr = new SharedArray<byte>(name))
                 {
                     // Acquire write lock
                     sma.AcquireWriteLock();
@@ -358,7 +358,7 @@ namespace SharedMemoryTests
         public void IList_Contains()
         {
             var name = Guid.NewGuid().ToString();
-            using (var sma = new Array<int>(name, 10))
+            using (var sma = new SharedArray<int>(name, 10))
             {
                 sma[0] = 3;
                 sma[4] = 10;
@@ -374,7 +374,7 @@ namespace SharedMemoryTests
         public void IList_IndexOf()
         {
             var name = Guid.NewGuid().ToString();
-            using (var sma = new Array<int>(name, 10))
+            using (var sma = new SharedArray<int>(name, 10))
             {
                 sma[0] = 3;
                 sma[4] = 10;
@@ -390,7 +390,7 @@ namespace SharedMemoryTests
         public void IList_IsReadOnly()
         {
             var name = Guid.NewGuid().ToString();
-            using (var sma = new Array<int>(name, 10))
+            using (var sma = new SharedArray<int>(name, 10))
             {
                 sma[0] = 3;
                 sma[4] = 10;

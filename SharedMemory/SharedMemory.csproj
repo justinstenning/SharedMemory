@@ -40,7 +40,7 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="BufferReadWrite.cs" />
     <Compile Include="Array.cs" />
-    <Compile Include="Buffer.cs" />
+    <Compile Include="SharedBuffer.cs" />
     <Compile Include="UnsafeNativeMethods.cs" />
     <Compile Include="Utilities\ArraySlice.cs" />
   </ItemGroup>
