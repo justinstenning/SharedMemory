@@ -147,7 +147,7 @@ namespace SharedMemory
         /// <param name="bufferSize">The buffer size in bytes. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.Header) + bufferSize</code></param>
         /// <param name="ownsSharedMemory">Whether or not the current instance owns the shared memory. If true a new shared memory will be created and initialised otherwise an existing one is opened.</param>
         /// <remarks>
-        /// <para>The maximum total shared memory size is dependant upon the system and current memory fragmentation.</para>
+        /// <para>The maximum total shared memory size is dependent upon the system and current memory fragmentation.</para>
         /// <para>The shared memory layout on 32-bit and 64-bit is:<br />
         /// <code>
         /// |       Header       |    Buffer    |<br />

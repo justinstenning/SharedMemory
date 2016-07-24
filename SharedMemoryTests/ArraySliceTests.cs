@@ -1,4 +1,4 @@
-﻿// SharedMemory (File: SharedMemoryTests\ArrayTests.cs)
+﻿// SharedMemory (File: SharedMemoryTests\ArraySliceTests.cs)
 // Copyright (c) 2014 Justin Stenning
 // http://spazzarama.com
 //

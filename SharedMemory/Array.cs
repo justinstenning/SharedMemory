@@ -34,7 +34,7 @@ namespace SharedMemory
     /// <summary>
     /// A generic fixed-length shared memory array of structures with support for simple inter-process read/write synchronisation.
     /// </summary>
-    /// <typeparam name="T">The struct type that will be stored in the elements of this fixed array buffer.</typeparam>
+    /// <typeparam name="T">The structure type that will be stored in the elements of this fixed array buffer.</typeparam>
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
     public class Array<T> : BufferWithLocks, IList<T>
@@ -87,7 +87,7 @@ namespace SharedMemory
         /// Opens an existing shared memory array with the name as specified by <paramref name="name"/>.
         /// </summary>
         /// <param name="name">The name of the shared memory array to open.</param>
-        /// <exception cref="ArgumentOutOfRangeException">If the shared memory location specified by <paramref name="name"/> does not have a <see cref="Buffer.BufferSize"/> that is evenly divisable by the size of <typeparamref name="T"/>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">If the shared memory location specified by <paramref name="name"/> does not have a <see cref="Buffer.BufferSize"/> that is evenly divisible by the size of <typeparamref name="T"/>.</exception>
         public Array(string name)
             : base(name, 0, false)
         {
@@ -107,7 +107,7 @@ namespace SharedMemory
             if (!IsOwnerOfSharedMemory)
             {
                 if (BufferSize % _elementSize != 0)
-                    throw new ArgumentOutOfRangeException("name", "BufferSize is not evenly divisable by the size of " + typeof(T).Name);
+                    throw new ArgumentOutOfRangeException("name", "BufferSize is not evenly divisible by the size of " + typeof(T).Name);
 
                 Length = (int)(BufferSize / _elementSize);
             }
@@ -210,35 +210,65 @@ namespace SharedMemory
         #endregion
 
         #region IList<T>
+        /// <summary>
+        /// Operation not supported. Throws <see cref="System.NotImplementedException"/>
+        /// </summary>
+        /// <param name="item"></param>
         public void Add(T item)
         {
             throw new NotImplementedException();
         }
 
+        /// <summary>
+        /// Operation not supported. Throws <see cref="System.NotImplementedException"/>
+        /// </summary>
         public void Clear()
         {
             throw new NotImplementedException();
         }
 
+        /// <summary>
+        /// Checks if the list contains the specified item.
+        /// </summary>
+        /// <param name="item"></param>
+        /// <returns>True if found</returns>
         public bool Contains(T item)
         {
             return IndexOf(item) >= 0;
         }
 
+        /// <summary>
+        /// Operation not supported. Throws <see cref="System.NotImplementedException"/>
+        /// </summary>
+        /// <param name="item"></param>
+        /// <returns></returns>
         public bool Remove(T item)
         {
             throw new NotImplementedException();
         }
 
+        /// <summary>
+        /// The number of elements in the array
+        /// </summary>
         public int Count
         {
             get { return Length; }
         }
 
+
+        /// <summary>
+        /// The elements are not read-only
+        /// </summary>
         public bool IsReadOnly
         {
             get { return true; }
         }
+
+        /// <summary>
+        /// Return the index of the specified item.
+        /// </summary>
+        /// <param name="item"></param>
+        /// <returns>The index of the item if found, otherwise -1.</returns>
         public int IndexOf(T item)
         {
             for (var i = 0; i < Count; i++)
@@ -248,15 +278,25 @@ namespace SharedMemory
             return -1;
         }
 
+        /// <summary>
+        /// Operation not supported. Throws <see cref="System.NotImplementedException"/>
+        /// </summary>
+        /// <param name="index"></param>
+        /// <param name="item"></param>
         public void Insert(int index, T item)
         {
             throw new NotImplementedException();
         }
 
+        /// <summary>
+        /// Operation not supported. Throws <see cref="System.NotImplementedException"/>
+        /// </summary>
+        /// <param name="index"></param>
         public void RemoveAt(int index)
         {
             throw new NotImplementedException();
         }
+
         #endregion
 
     }

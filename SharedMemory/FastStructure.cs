@@ -57,7 +57,7 @@ namespace SharedMemory
         /// }
         /// </code>
         /// </summary>
-        /// <typeparam name="T">Any value/struct type</typeparam>
+        /// <typeparam name="T">Any value/structure type</typeparam>
         /// <param name="pointer">Unsafe pointer to memory to load the value from</param>
         /// <returns>The newly loaded value</returns>
         public static unsafe T PtrToStructure<T>(IntPtr pointer)
@@ -180,7 +180,7 @@ namespace SharedMemory
         public delegate T PtrToStructureDelegate(IntPtr pointer);
         
         /// <summary>
-        /// Delegate for writing a structure to the specified meemory address
+        /// Delegate for writing a structure to the specified memory address
         /// </summary>
         /// <param name="value"></param>
         /// <param name="pointer"></param>

@@ -55,12 +55,12 @@ namespace SharedMemory
         public int NodeBufferSize { get; private set; }
         
         /// <summary>
-        /// Event signalled when data has been written if the reading index has caught up to the writing index
+        /// Event signaled when data has been written if the reading index has caught up to the writing index
         /// </summary>
         protected EventWaitHandle DataExists { get; set; }
 
         /// <summary>
-        /// Event signalled when a node becomes available after reading if the writing index has caught up to the reading index
+        /// Event signaled when a node becomes available after reading if the writing index has caught up to the reading index
         /// </summary>
         protected EventWaitHandle NodeAvailable { get; set; }
 
@@ -213,7 +213,7 @@ namespace SharedMemory
         /// <param name="nodeCount">The number of nodes within the circular linked-list (minimum of 2)</param>
         /// <param name="nodeBufferSize">The buffer size per node in bytes. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.Header) + Marshal.SizeOf(CircularBuffer.NodeHeader) + (Marshal.SizeOf(CircularBuffer.Node) * nodeCount) + (bufferSize * nodeCount)</code></param>
         /// <remarks>
-        /// <para>The maximum total shared memory size is dependant upon the system and current memory fragmentation.</para>
+        /// <para>The maximum total shared memory size is dependent upon the system and current memory fragmentation.</para>
         /// <para>The shared memory layout on 32-bit and 64-bit architectures is:<br />
         /// <code>
         /// |       Header       |   NodeHeader  | Node[0] | ... | Node[N-1] | buffer[0] | ... | buffer[N-1] |<br />
@@ -263,7 +263,7 @@ namespace SharedMemory
         #region Open / Close
 
         /// <summary>
-        /// Attempts to create the <see cref="EventWaitHandle"/> handles and intitialise the node header and buffers.
+        /// Attempts to create the <see cref="EventWaitHandle"/> handles and initialise the node header and buffers.
         /// </summary>
         /// <returns>True if the events and nodes were initialised successfully.</returns>
         protected override bool DoOpen()
@@ -371,7 +371,7 @@ namespace SharedMemory
         /// Attempts to reserve a node from the linked-list for writing with the specified timeout.
         /// </summary>
         /// <param name="timeout">The number of milliseconds to wait if a node is not immediately available for writing.</param>
-        /// <returns>An unsafe pointer to the node if successfull, otherwise null</returns>
+        /// <returns>An unsafe pointer to the node if successful, otherwise null</returns>
         protected virtual Node* GetNodeForWriting(int timeout)
         {
             for (; ; )
@@ -461,7 +461,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Writes the struct array buffer to the next available node for writing
+        /// Writes the structure array buffer to the next available node for writing
         /// </summary>
         /// <param name="buffer">Reference to the buffer to write</param>
         /// <param name="startIndex">The index within the buffer to start writing from</param>
@@ -499,7 +499,7 @@ namespace SharedMemory
         {
             int structSize = Marshal.SizeOf(typeof(T));
             if (structSize > NodeBufferSize)
-                throw new ArgumentOutOfRangeException("T", "The sizeof struct " + typeof(T).Name + " is larger than NodeBufferSize");
+                throw new ArgumentOutOfRangeException("T", "The size of structure " + typeof(T).Name + " is larger than NodeBufferSize");
 
             // Attempt to retrieve a node for writing
             Node* node = GetNodeForWriting(timeout);
@@ -585,7 +585,7 @@ namespace SharedMemory
         /// Attempts to reserve a node from the linked-list for reading with the specified timeout
         /// </summary>
         /// <param name="timeout">The number of milliseconds to wait if a node is not immediately available for reading.</param>
-        /// <returns>An unsafe pointer to the node if successfull, otherwise null</returns>
+        /// <returns>An unsafe pointer to the node if successful, otherwise null</returns>
         protected virtual Node* GetNodeForReading(int timeout)
         {
             for (; ; )
@@ -675,7 +675,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Reads the next available node for reading into the specified struct array
+        /// Reads the next available node for reading into the specified structure array
         /// </summary>
         /// <typeparam name="T">The structure type to be read</typeparam>
         /// <param name="buffer">Reference to the buffer</param>
@@ -713,7 +713,7 @@ namespace SharedMemory
         {
             int structSize = Marshal.SizeOf(typeof(T));
             if (structSize > NodeBufferSize)
-                throw new ArgumentOutOfRangeException("T", "The sizeof struct " + typeof(T).Name + " is larger than NodeBufferSize");
+                throw new ArgumentOutOfRangeException("T", "The size of structure " + typeof(T).Name + " is larger than NodeBufferSize");
 
             // Attempt to retrieve a node
             Node* node = GetNodeForReading(timeout);

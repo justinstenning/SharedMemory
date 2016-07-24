@@ -1,4 +1,30 @@
-﻿using System;
+﻿// SharedMemory (File: SharedMemory\Utilities\ArraySlice.cs)
+// Copyright (c) 2014 Justin Stenning
+// http://spazzarama.com
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+//
+// The SharedMemory library is inspired by the following Code Project article:
+//   "Fast IPC Communication Using Shared Memory and InterlockedCompareExchange"
+//   http://www.codeproject.com/Articles/14740/Fast-IPC-Communication-Using-Shared-Memory-and-Int
+
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Security.Permissions;
@@ -6,23 +32,22 @@ using System.Security.Permissions;
 namespace SharedMemory.Utilities
 {
     /// <summary>
-    /// Like ArraySegment, but works with any IList, not just array
+    /// Like <see cref="T:System.ArraySegment`1"/>, but works with <see cref="T:System.Collections.Generic.IList`1"/> not just an array.
     /// </summary>
-    /// <typeparam name="T">The type that will be stored in the elements of this fixed array buffer.</typeparam>
+    /// <typeparam name="T">The type that is stored in the elements of the <see cref="T:System.Collections.Generic.IList`1"/>.</typeparam>
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
     public struct ArraySlice<T> : IList<T>
-
     {
         private readonly IList<T> _list;
         private readonly int _offset;
         private readonly int _count;
 
         /// <summary>
-        /// No slicing.  Just mirror the array
+        /// No slicing. Just mirror the list
         /// </summary>
-        /// <param name="list"></param>
-        /// <exception cref="ArgumentNullException"></exception>
+        /// <param name="list">The list to be sliced.</param>
+        /// <exception cref="ArgumentNullException">Thrown if <paramref name="list"/> is null.</exception>
         public ArraySlice(IList<T> list)
         {
             if (list == null)
@@ -34,14 +59,14 @@ namespace SharedMemory.Utilities
         }
 
         /// <summary>
-        /// Slice the array.
+        /// Create a slice of a list (virtually).
         /// </summary>
-        /// <param name="list"></param>
-        /// <param name="offset"></param>
-        /// <param name="count"></param>
-        /// <exception cref="ArgumentNullException"></exception>
-        /// <exception cref="ArgumentOutOfRangeException"></exception>
-        /// <exception cref="ArgumentException"></exception>
+        /// <param name="list">The list to be sliced.</param>
+        /// <param name="offset">The offset into <paramref name="list"/> to start the slice.</param>
+        /// <param name="count">The number of elements to be included in this slice.</param>
+        /// <exception cref="ArgumentNullException">Thrown if <paramref name="list"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown if <paramref name="offset"/> or <paramref name="count"/> are less than zero.</exception>
+        /// <exception cref="ArgumentException">Thrown if the number of elements in <paramref name="list"/> - <paramref name="offset"/> are not less than <paramref name="count"/>.</exception>
         public ArraySlice(IList<T> list, int offset, int count)
         {
             if (list == null)
@@ -59,7 +84,7 @@ namespace SharedMemory.Utilities
         }
 
         /// <summary>
-        /// 
+        /// The list that is being sliced.
         /// </summary>
         public IList<T> List
         {
@@ -70,7 +95,7 @@ namespace SharedMemory.Utilities
         }
 
         /// <summary>
-        /// 
+        /// The offset into the <see cref="T:ArraySlice`1.List"/>.
         /// </summary>
         public int Offset
         {
@@ -80,6 +105,9 @@ namespace SharedMemory.Utilities
             }
         }
 
+        /// <summary>
+        /// The number of elements to be included in this slice.
+        /// </summary>
         public int Count
         {
             get
@@ -88,6 +116,10 @@ namespace SharedMemory.Utilities
             }
         }
 
+        /// <summary>
+        /// Used to determine uniqueness.
+        /// </summary>
+        /// <returns></returns>
         public override int GetHashCode()
         {
             return null == _list

@@ -77,7 +77,7 @@ namespace SharedMemory
         #region Synchronisation
 
         /// <summary>
-        /// Blocks the current thread until it is able to acquire a read lock. If succesfull all subsequent writes will be blocked until after a call to <see cref="ReleaseReadLock"/>.
+        /// Blocks the current thread until it is able to acquire a read lock. If successful all subsequent writes will be blocked until after a call to <see cref="ReleaseReadLock"/>.
         /// </summary>
         /// <param name="millisecondsTimeout">The number of milliseconds to wait, or <see cref="System.Threading.Timeout.Infinite" /> (-1) to wait indefinitely.</param>
         /// <returns>true if the read lock was able to be acquired, otherwise false.</returns>
@@ -100,7 +100,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Blocks the current thread until it is able to acquire a write lock. If succesfull all subsequent reads will be blocked until after a call to <see cref="ReleaseWriteLock"/>.
+        /// Blocks the current thread until it is able to acquire a write lock. If successful all subsequent reads will be blocked until after a call to <see cref="ReleaseWriteLock"/>.
         /// </summary>
         /// <param name="millisecondsTimeout">The number of milliseconds to wait, or System.Threading.Timeout.Infinite (-1) to wait indefinitely.</param>
         /// <returns>true if the write lock was able to be acquired, otherwise false.</returns>
