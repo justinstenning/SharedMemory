@@ -87,7 +87,7 @@ namespace SharedMemory
         /// Opens an existing shared memory array with the name as specified by <paramref name="name"/>.
         /// </summary>
         /// <param name="name">The name of the shared memory array to open.</param>
-        /// <exception cref="ArgumentOutOfRangeException">If the shared memory location specified by <paramref name="name"/> does not have a <see cref="Buffer.BufferSize"/> that is evenly divisible by the size of <typeparamref name="T"/>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">If the shared memory location specified by <paramref name="name"/> does not have a <see cref="SharedBuffer.BufferSize"/> that is evenly divisible by the size of <typeparamref name="T"/>.</exception>
         public Array(string name)
             : base(name, 0, false)
         {

@@ -40,7 +40,7 @@ namespace SharedMemory
     /// </summary>
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
-    public unsafe class CircularBuffer : Buffer
+    public unsafe class CircularBuffer : SharedBuffer
     {
         #region Public/Protected properties
         
@@ -65,7 +65,7 @@ namespace SharedMemory
         protected EventWaitHandle NodeAvailable { get; set; }
 
         /// <summary>
-        /// The offset relative to <see cref="Buffer.BufferStartPtr"/> where the node header starts within the buffer region of the shared memory
+        /// The offset relative to <see cref="SharedBuffer.BufferStartPtr"/> where the node header starts within the buffer region of the shared memory
         /// </summary>
         protected virtual long NodeHeaderOffset
         {
@@ -187,7 +187,7 @@ namespace SharedMemory
             public volatile int DoneWrite;
 
             /// <summary>
-            /// Represents the offset relative to <see cref="Buffer.BufferStartPtr"/> where the data for this node can be found.
+            /// Represents the offset relative to <see cref="SharedBuffer.BufferStartPtr"/> where the data for this node can be found.
             /// </summary>
             public long Offset;
             
@@ -232,7 +232,7 @@ namespace SharedMemory
         /// <summary>
         /// Opens an existing <see cref="CircularBuffer"/> with the specified name.
         /// </summary>
-        /// <param name="name">The name of an existing <see cref="CircularBuffer"/> previously created with <see cref="Buffer.IsOwnerOfSharedMemory"/>=true</param>
+        /// <param name="name">The name of an existing <see cref="CircularBuffer"/> previously created with <see cref="SharedBuffer.IsOwnerOfSharedMemory"/>=true</param>
         public CircularBuffer(string name)
             : this(name, 0, 0, false)
         {
@@ -295,7 +295,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Initialises the node header within the shared memory. Only applicable if <see cref="Buffer.IsOwnerOfSharedMemory"/> is true.
+        /// Initialises the node header within the shared memory. Only applicable if <see cref="SharedBuffer.IsOwnerOfSharedMemory"/> is true.
         /// </summary>
         private void InitialiseNodeHeader()
         {
@@ -313,7 +313,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Initialise the nodes of the circular linked-list. Only applicable if <see cref="Buffer.IsOwnerOfSharedMemory"/> is true.
+        /// Initialise the nodes of the circular linked-list. Only applicable if <see cref="SharedBuffer.IsOwnerOfSharedMemory"/> is true.
         /// </summary>
         private void InitialiseLinkedListNodes()
         {

@@ -35,7 +35,7 @@ using System.Threading;
 namespace SharedMemory
 {
     /// <summary>
-    /// <para>Extends <see cref="Buffer"/> to support simple thread-synchronisation for read/write 
+    /// <para>Extends <see cref="SharedBuffer"/> to support simple thread-synchronisation for read/write 
     /// to the buffer by allowing callers to acquire and release read/write locks.</para>
     /// <para>All buffer read/write operations have been overloaded to first perform a <see cref="System.Threading.WaitHandle.WaitOne()"/> 
     /// using the <see cref="ReadWaitEvent"/> and <see cref="WriteWaitEvent"/> respectively.</para>
@@ -45,7 +45,7 @@ namespace SharedMemory
     /// </summary>
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
-    public abstract class BufferWithLocks : Buffer
+    public abstract class BufferWithLocks : SharedBuffer
     {
         /// <summary>
         /// An event handle used for blocking write operations.

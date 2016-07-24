@@ -32,7 +32,7 @@ using System.Text;
 namespace SharedMemory
 {
     /// <summary>
-    /// A structure that is always located at the start of the shared memory in a <see cref="Buffer"/> instance. 
+    /// A structure that is always located at the start of the shared memory in a <see cref="SharedBuffer"/> instance. 
     /// This allows the shared memory to be opened by other instances without knowing its size before hand.
     /// </summary>
     /// <remarks>This structure is the same size on 32-bit and 64-bit architectures.</remarks>

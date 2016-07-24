@@ -1,4 +1,4 @@
-﻿// SharedMemory (File: SharedMemory\Buffer.cs)
+﻿// SharedMemory (File: SharedMemory\SharedBuffer.cs)
 // Copyright (c) 2014 Justin Stenning
 // http://spazzarama.com
 //
@@ -41,7 +41,7 @@ namespace SharedMemory
     /// </summary>
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
-    public abstract unsafe class Buffer : IDisposable
+    public abstract unsafe class SharedBuffer : IDisposable
     {
         #region Public/Protected properties
 
@@ -141,7 +141,7 @@ namespace SharedMemory
         #region Constructor / destructor
 
         /// <summary>
-        /// Create a new <see cref="Buffer"/> instance with the specified name and buffer size
+        /// Create a new <see cref="SharedBuffer"/> instance with the specified name and buffer size
         /// </summary>
         /// <param name="name">The name of the shared memory</param>
         /// <param name="bufferSize">The buffer size in bytes. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.Header) + bufferSize</code></param>
@@ -155,7 +155,7 @@ namespace SharedMemory
         /// </code>
         /// </para>
         /// </remarks>
-        protected Buffer(string name, long bufferSize, bool ownsSharedMemory)
+        protected SharedBuffer(string name, long bufferSize, bool ownsSharedMemory)
         {
             #region Argument validation
             if (name == String.Empty || name == null)
@@ -180,7 +180,7 @@ namespace SharedMemory
         /// <summary>
         /// Destructor - for Dispose(false)
         /// </summary>
-        ~Buffer()
+        ~SharedBuffer()
         {
             Dispose(false);
         }
@@ -267,7 +267,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Allows any classes that inherit from <see cref="Buffer"/> to perform additional open logic. There is no need to call base.DoOpen() from these implementations.
+        /// Allows any classes that inherit from <see cref="SharedBuffer"/> to perform additional open logic. There is no need to call base.DoOpen() from these implementations.
         /// </summary>
         /// <returns>True if successful, otherwise false.</returns>
         /// <remarks>By throwing an exception or returning false, the call to <see cref="Open"/> will fail and <see cref="Close"/> will be called.</remarks>
@@ -325,7 +325,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Any classes that inherit from <see cref="Buffer"/> should implement any <see cref="Close"/> logic here, <see cref="Mmf"/> and <see cref="View"/> are still active at this point. There is no need to call base.DoClose() from these classes.
+        /// Any classes that inherit from <see cref="SharedBuffer"/> should implement any <see cref="Close"/> logic here, <see cref="Mmf"/> and <see cref="View"/> are still active at this point. There is no need to call base.DoClose() from these classes.
         /// </summary>
         /// <remarks>It is possible for <see cref="Close"/> to be called before <see cref="Open"/> has completed successfully, in this situation <see cref="DoClose"/> should fail gracefully.</remarks>
         protected virtual void DoClose()
