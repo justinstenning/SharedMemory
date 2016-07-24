@@ -70,7 +70,7 @@ namespace SharedMemory
         /// Writes the generic value type <typeparamref name="T"/> to the location specified by a pointer. This is achieved by emitting a <see cref="DynamicMethod"/> that copies the value from the referenced structure into the specified memory location.
         /// <para>There is no exact equivalent possible in C#, the closest possible (generates the same IL) is the following code:</para>
         /// <code>
-        /// unsafe void WriteToPointer(ref Header dest, ref Header src)
+        /// unsafe void WriteToPointer(ref SharedHeader dest, ref SharedHeader src)
         /// {
         ///     dest = src;
         /// }

@@ -220,7 +220,7 @@ namespace SharedMemoryTests
         [TestMethod]
         public void StructSize_SharedMemoryHeader_Is16bytes()
         {
-            Assert.AreEqual(16, Marshal.SizeOf(typeof(Header)));
+            Assert.AreEqual(16, Marshal.SizeOf(typeof(SharedHeader)));
         }
 
         [TestMethod]
@@ -268,7 +268,7 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// Test that the Header is correct before, during and after a single read/write
+        /// Test that the SharedHeader is correct before, during and after a single read/write
         /// </summary>
         [TestMethod]
         public void ReadWrite_SingleNode_HeaderIndexesCorrect()

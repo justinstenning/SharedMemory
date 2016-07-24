@@ -1,4 +1,4 @@
-﻿// SharedMemory (File: SharedMemory\Header.cs)
+﻿// SharedMemory (File: SharedMemory\SharedHeader.cs)
 // Copyright (c) 2014 Justin Stenning
 // http://spazzarama.com
 //
@@ -37,10 +37,10 @@ namespace SharedMemory
     /// </summary>
     /// <remarks>This structure is the same size on 32-bit and 64-bit architectures.</remarks>
     [StructLayout(LayoutKind.Sequential)]
-    public struct Header
+    public struct SharedHeader
     {
         /// <summary>
-        /// The total size of the buffer including <see cref="Header"/>, i.e. <code>BufferSize + Marshal.SizeOf(typeof(SharedMemory.Header))</code>.
+        /// The total size of the buffer including <see cref="SharedHeader"/>, i.e. <code>BufferSize + Marshal.SizeOf(typeof(SharedMemory.SharedHeader))</code>.
         /// </summary>
         public long SharedMemorySize;
 

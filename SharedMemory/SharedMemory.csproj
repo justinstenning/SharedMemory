@@ -28,7 +28,7 @@
   <ItemGroup>
     <Compile Include="BufferWithLocks.cs" />
     <Compile Include="CircularBuffer.cs" />
-    <Compile Include="Header.cs" />
+    <Compile Include="SharedHeader.cs" />
     <Compile Include="MemoryMappedFiles\MemoryMappedFile.cs" />
     <Compile Include="MemoryMappedFiles\MemoryMappedFileAccess.cs" />
     <Compile Include="MemoryMappedFiles\MemoryMappedFileRights.cs" />
@@ -39,7 +39,7 @@
     <Compile Include="FastStructure.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="BufferReadWrite.cs" />
-    <Compile Include="Array.cs" />
+    <Compile Include="SharedArray.cs" />
     <Compile Include="SharedBuffer.cs" />
     <Compile Include="UnsafeNativeMethods.cs" />
     <Compile Include="Utilities\ArraySlice.cs" />

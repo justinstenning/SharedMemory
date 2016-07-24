@@ -211,7 +211,7 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The name of the shared memory to be created</param>
         /// <param name="nodeCount">The number of nodes within the circular linked-list (minimum of 2)</param>
-        /// <param name="nodeBufferSize">The buffer size per node in bytes. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.Header) + Marshal.SizeOf(CircularBuffer.NodeHeader) + (Marshal.SizeOf(CircularBuffer.Node) * nodeCount) + (bufferSize * nodeCount)</code></param>
+        /// <param name="nodeBufferSize">The buffer size per node in bytes. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.SharedHeader) + Marshal.SizeOf(CircularBuffer.NodeHeader) + (Marshal.SizeOf(CircularBuffer.Node) * nodeCount) + (bufferSize * nodeCount)</code></param>
         /// <remarks>
         /// <para>The maximum total shared memory size is dependent upon the system and current memory fragmentation.</para>
         /// <para>The shared memory layout on 32-bit and 64-bit architectures is:<br />

@@ -62,7 +62,7 @@ namespace SharedMemory
         {
             get
             {
-                return HeaderOffset + Marshal.SizeOf(typeof(Header)) + BufferSize;
+                return HeaderOffset + Marshal.SizeOf(typeof(SharedHeader)) + BufferSize;
             }
         }
 
@@ -107,7 +107,7 @@ namespace SharedMemory
         {
             get
             {
-                return HeaderOffset + Marshal.SizeOf(typeof(Header));
+                return HeaderOffset + Marshal.SizeOf(typeof(SharedHeader));
             }
         }
 
@@ -134,7 +134,7 @@ namespace SharedMemory
         /// <summary>
         /// Pointer to the header within shared memory
         /// </summary>
-        protected Header* Header = null;
+        protected SharedHeader* Header = null;
 
         #endregion
 
@@ -144,7 +144,7 @@ namespace SharedMemory
         /// Create a new <see cref="SharedBuffer"/> instance with the specified name and buffer size
         /// </summary>
         /// <param name="name">The name of the shared memory</param>
-        /// <param name="bufferSize">The buffer size in bytes. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.Header) + bufferSize</code></param>
+        /// <param name="bufferSize">The buffer size in bytes. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.SharedHeader) + bufferSize</code></param>
         /// <param name="ownsSharedMemory">Whether or not the current instance owns the shared memory. If true a new shared memory will be created and initialised otherwise an existing one is opened.</param>
         /// <remarks>
         /// <para>The maximum total shared memory size is dependent upon the system and current memory fragmentation.</para>
@@ -213,7 +213,7 @@ namespace SharedMemory
                     // Create a view to the entire region of the shared memory
                     View = Mmf.CreateViewAccessor(0, SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
                     View.SafeMemoryMappedViewHandle.AcquirePointer(ref ViewPtr);
-                    Header = (Header*)(ViewPtr + HeaderOffset);
+                    Header = (SharedHeader*)(ViewPtr + HeaderOffset);
                     BufferStartPtr = ViewPtr + BufferOffset;
                     // Initialise the header
                     InitialiseHeader();
@@ -224,20 +224,20 @@ namespace SharedMemory
                     Mmf = MemoryMappedFile.OpenExisting(Name);
 
                     // Retrieve the header from the shared memory in order to initialise the correct size
-                    using (var headerView = Mmf.CreateViewAccessor(0, HeaderOffset + Marshal.SizeOf(typeof(Header)), MemoryMappedFileAccess.Read))
+                    using (var headerView = Mmf.CreateViewAccessor(0, HeaderOffset + Marshal.SizeOf(typeof(SharedHeader)), MemoryMappedFileAccess.Read))
                     {
                         byte* headerPtr = null;
                         headerView.SafeMemoryMappedViewHandle.AcquirePointer(ref headerPtr);
-                        var header = (Header*)(headerPtr + HeaderOffset);
-                        BufferSize = header->SharedMemorySize - Marshal.SizeOf(typeof(Header));
+                        var header = (SharedHeader*)(headerPtr + HeaderOffset);
+                        BufferSize = header->SharedMemorySize - Marshal.SizeOf(typeof(SharedHeader));
                         headerView.SafeMemoryMappedViewHandle.ReleasePointer();
                     }
 
                     // Create a view to the entire region of the shared memory
                     View = Mmf.CreateViewAccessor(0, SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
                     View.SafeMemoryMappedViewHandle.AcquirePointer(ref ViewPtr);
-                    Header = (Header*)(ViewPtr + HeaderOffset);
-                    BufferStartPtr = ViewPtr + HeaderOffset + Marshal.SizeOf(typeof(Header));
+                    Header = (SharedHeader*)(ViewPtr + HeaderOffset);
+                    BufferStartPtr = ViewPtr + HeaderOffset + Marshal.SizeOf(typeof(SharedHeader));
                 }
             }
             catch
@@ -284,10 +284,10 @@ namespace SharedMemory
             if (!IsOwnerOfSharedMemory)
                 return;
 
-            Header header = new Header();
+            SharedHeader header = new SharedHeader();
             header.SharedMemorySize = SharedMemorySize;
             header.Shutdown = 0;
-            View.Write<Header>(HeaderOffset, ref header);
+            View.Write<SharedHeader>(HeaderOffset, ref header);
         }
 
         /// <summary>
