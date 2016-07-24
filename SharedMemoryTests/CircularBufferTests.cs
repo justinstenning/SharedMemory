@@ -199,6 +199,11 @@ namespace SharedMemoryTests
                 {
                 }
             }
+            catch (System.IO.IOException)
+            {
+                // Success (insufficient resources)
+                return;
+            }
             catch (ArgumentOutOfRangeException)
             {
                 // Success
@@ -400,7 +405,7 @@ namespace SharedMemoryTests
                     Thread.Sleep(delay);
 
                 writeBuf = data[iteration];
-                int written = smr.Write(writeBuf, timeout);
+                int written = smr.Write(writeBuf, timeout: timeout);
                 totalBytesWritten += written;
                 if (written == 0)
                     timeouts++;
@@ -423,7 +428,7 @@ namespace SharedMemoryTests
                 if (delay > 0)
                     Thread.Sleep(delay);
 
-                int read = smr.Read(readBuf, timeout);
+                int read = smr.Read(readBuf, timeout: timeout);
                 totalBytesRead += read;
                 if (read == 0)
                     timeouts++;
@@ -445,7 +450,7 @@ namespace SharedMemoryTests
             timeouts = 0;
             while (iteration < writtenData.Length)
             {
-                int read = smr.Read(readBuf, timeout);
+                int read = smr.Read(readBuf, timeout: timeout);
                 totalBytesRead += read;
                 if (read == 0)
                     timeouts++;
