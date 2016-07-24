@@ -340,71 +340,69 @@ namespace SharedMemory
         /// Writes an instance of <typeparamref name="T"/> into the buffer
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
-        /// <param name="data">A reference to an instance of <typeparamref name="T"/> to be written</param>
+        /// <param name="source">A reference to an instance of <typeparamref name="T"/> to be written into the buffer</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
-        protected virtual void Write<T>(ref T data, long bufferPosition = 0)
+        protected virtual void Write<T>(ref T source, long bufferPosition = 0)
             where T : struct
         {
-            View.Write<T>(BufferOffset + bufferPosition, ref data);
+            View.Write<T>(BufferOffset + bufferPosition, ref source);
         }
 
         /// <summary>
         /// Writes an array of <typeparamref name="T"/> into the buffer
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
-        /// <param name="buffer">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
+        /// <param name="source">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
-        protected virtual void Write<T>(T[] buffer, long bufferPosition = 0)
+        protected virtual void Write<T>(T[] source, long bufferPosition = 0)
             where T : struct
         {
-            Write<T>(buffer, 0, bufferPosition);
-            //View.WriteArray(BufferOffset + bufferPosition, buffer, 0, buffer.Length);
+            Write<T>(source, 0, bufferPosition);
         }
 
         /// <summary>
         /// Writes an array of <typeparamref name="T"/> into the buffer
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
-        /// <param name="buffer">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
+        /// <param name="source">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
         /// <param name="index">The index within the array to start writing from.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
-        protected virtual void Write<T>(T[] buffer, int index, long bufferPosition = 0)
+        protected virtual void Write<T>(T[] source, int index, long bufferPosition = 0)
             where T : struct
         {
-            FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), buffer, index, buffer.Length - index);
-            //View.WriteArray(BufferOffset + bufferPosition, buffer, 0, buffer.Length);
+            FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), source, index, source.Length - index);
         }
 
         /// <summary>
         /// Writes an array of <typeparamref name="T"/> into the buffer
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
-        /// <param name="bufferPosition">The destination offset within the buffer region of the shared memory.</param>
-        /// <param name="buffer">The source buffer</param>
-        /// <param name="index">The start index within <paramref name="buffer"/>.</param>
+        /// <param name="source">The source data to be written to the buffer</param>
+        /// <param name="index">The start index within <paramref name="source"/>.</param>
         /// <param name="count">The number of elements to write.</param>
-        protected virtual void WriteArray<T>(long bufferPosition, T[] buffer, int index, int count)
+        /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
+        protected virtual void WriteArray<T>(T[] source, int index, int count, long bufferPosition = 0)
             where T : struct
         {
-            FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), buffer, index, count);
+            FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), source, index, count);
         }
 
         /// <summary>
-        /// Writes <paramref name="length"/> bytes from the <paramref name="ptr"/> into the shared memory buffer.
+        /// Writes <paramref name="length"/> bytes from the <paramref name="source"/> into the shared memory buffer.
         /// </summary>
-        /// <param name="ptr">A managed pointer to the memory location to be copied into the buffer</param>
+        /// <param name="source">A managed pointer to the memory location to be copied into the buffer</param>
         /// <param name="length">The number of bytes to be copied</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
-        protected virtual void Write(IntPtr ptr, int length, long bufferPosition = 0)
+        protected virtual void Write(IntPtr source, int length, long bufferPosition = 0)
         {
-            UnsafeNativeMethods.CopyMemory(new IntPtr(BufferStartPtr + bufferPosition), ptr, (uint)length);
+            UnsafeNativeMethods.CopyMemory(new IntPtr(BufferStartPtr + bufferPosition), source, (uint)length);
         }
 
         /// <summary>
         /// Prepares an IntPtr to the buffer position and calls <paramref name="writeFunc"/> to perform the writing.
         /// </summary>
-        /// <param name="writeFunc">A function used to write to the buffer. The IntPtr parameter is a pointer to the buffer offset by <paramref name="bufferPosition"/>.</param>
-        /// <param name="bufferPosition">The offset within the buffer region to start writing from.</param>
+        /// <param name="writeFunc">A function used to write to the buffer. The IntPtr parameter is a pointer to the buffer location offset by <paramref name="bufferPosition"/>.</param>
+        /// <param name="bufferPosition">The offset within the buffer region to start writing to.</param>
         protected virtual void Write(Action<IntPtr> writeFunc, long bufferPosition = 0)
         {
             writeFunc(new IntPtr(BufferStartPtr + bufferPosition));
@@ -427,30 +425,29 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Reads an array of <typeparamref name="T"/> from the buffer
+        /// Reads an array of <typeparamref name="T"/> from the buffer.
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
-        /// <param name="buffer">Array that will contain the values read from the buffer. The length of this array controls the number of elements to read.</param>
+        /// <param name="destination">Array that will contain the values read from the buffer. The length of this array controls the number of elements to read.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
-        protected virtual void Read<T>(T[] buffer, long bufferPosition = 0)
+        protected virtual void Read<T>(T[] destination, long bufferPosition = 0)
             where T : struct
         {
-            FastStructure.ReadArray<T>(buffer, (IntPtr)(BufferStartPtr + bufferPosition), 0, buffer.Length);
-            //View.ReadArray(BufferOffset + bufferPosition, buffer, 0, buffer.Length);
+            FastStructure.ReadArray<T>(destination, (IntPtr)(BufferStartPtr + bufferPosition), 0, destination.Length);
         }
 
         /// <summary>
         /// Reads a number of elements from a memory location into the provided buffer starting at the specified index.
         /// </summary>
         /// <typeparam name="T">The structure type</typeparam>
-        /// <param name="buffer">The destination buffer.</param>
-        /// <param name="bufferPosition">The source offset within the buffer region of the shared memory.</param>
-        /// <param name="index">The start index within <paramref name="buffer"/>.</param>
+        /// <param name="destination">The destination buffer.</param>
+        /// <param name="index">The start index within <paramref name="destination"/>.</param>
         /// <param name="count">The number of elements to read.</param>
-        protected virtual void ReadArray<T>(T[] buffer, long bufferPosition, int index, int count)
+        /// <param name="bufferPosition">The source offset within the buffer region of the shared memory.</param>
+        protected virtual void ReadArray<T>(T[] destination, int index, int count, long bufferPosition)
             where T : struct
         {
-            FastStructure.ReadArray<T>(buffer, (IntPtr)(BufferStartPtr + bufferPosition), 0, count);
+            FastStructure.ReadArray<T>(destination, (IntPtr)(BufferStartPtr + bufferPosition), 0, count);
         }
 
         /// <summary>

@@ -344,7 +344,7 @@ namespace SharedMemory
             nodes[N].Index = N;
 
             // Write the nodes to the shared memory
-            base.WriteArray<Node>(NodeOffset, nodes, 0, nodes.Length);
+            base.WriteArray<Node>(nodes, 0, nodes.Length, NodeOffset);
         }
 
         /// <summary>
@@ -477,7 +477,7 @@ namespace SharedMemory
 
             // Write the data using the FastStructure class (much faster than the MemoryMappedViewAccessor WriteArray<T> method)
             int amount = Math.Min(buffer.Length, NodeBufferSize / FastStructure.SizeOf<T>());
-            base.WriteArray<T>(node->Offset, buffer, startIndex, amount);
+            base.WriteArray<T>(buffer, startIndex, amount, node->Offset);
             node->AmountWritten = amount * FastStructure.SizeOf<T>();
 
             // Writing is complete, make node readable
@@ -692,7 +692,7 @@ namespace SharedMemory
             // Copy the data using the FastStructure class (much faster than the MemoryMappedViewAccessor ReadArray<T> method)
             //int amount = Math.Min(buffer.Length, NodeBufferSize / FastStructure.SizeOf<T>());
             int amount = Math.Min(buffer.Length, node->AmountWritten / FastStructure.SizeOf<T>());
-            base.ReadArray<T>(buffer, node->Offset, startIndex, amount);
+            base.ReadArray<T>(buffer, startIndex, amount, node->Offset);
 
             // Return the node for further writing
             ReturnNode(node);
