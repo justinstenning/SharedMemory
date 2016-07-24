@@ -48,7 +48,6 @@
     <None Include="publickey.snk" />
     <None Include="SharedMemory.licenseheader" />
     <None Include="SharedMemory.nuspec" />
-    <None Include="SharedMemory.symbols.nuspec" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
