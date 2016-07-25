@@ -6,8 +6,8 @@
         <title>SharedMemory</title>
         <authors>Justin Stenning</authors>
         <owners>Justin Stenning</owners>
-        <licenseUrl>https://sharedmemory.codeplex.com/license</licenseUrl>
-        <projectUrl>https://sharedmemory.codeplex.com/</projectUrl>
+        <licenseUrl>https://github.com/spazzarama/SharedMemory/blob/master/LICENSE.md</licenseUrl>
+        <projectUrl>https://github.com/spazzarama/SharedMemory</projectUrl>
         <requireLicenseAcceptance>false</requireLicenseAcceptance>
         <description>The SharedMemory class library provides a set of C# classes that utilise a memory-mapped file for fast low-level inter-process communication (IPC) - specifically for sharing data between processes.
 
@@ -21,6 +21,16 @@ It features:
 Usage: http://sharedmemory.codeplex.com/documentation</description>
         <summary>Shared memory classes for sharing data between processes (Array, Buffer and Circular Buffer)</summary>
         <releaseNotes>$version$
+1. Breaking change: Array, Buffer, and Header classes renamed to SharedArray, SharedBuffer, and SharedHeader
+2. Important breaking change! CircularBuffer Read/Write operations now allow an index to be specified. Check existing code as it may be passing a timeout value into index!
+3. Circular buffer keeps track of amount written to a node and uses this during read operations
+4. SharedArray implements IList
+5. ArraySlice implementation added
+6. FastStructure now performs type compatibility check within static constructor
+7. A couple of bug fixes
+8. A number of unit test fixes, minor corrections to comments and changes to make parameter names consistent
+
+1.1.4
 1. Implemented basic memory-mapped file support for .NET 3.5
 2. Added generic FastStructure class for fast reading/writing of structures (using emitted IL with DynamicMethod)
 3. Fixed offset bug in CircularBuffer.Read/Write(IntPtr, int, int)

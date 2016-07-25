@@ -215,7 +215,6 @@ namespace SharedMemory
         /// Performs once of type compatibility check.
         /// </summary>
         /// <exception cref="ArgumentException">Thrown if the type T is incompatible</exception>
-        /// 
         static FastStructure()
         {
             // Performs compatibility checks upon T
