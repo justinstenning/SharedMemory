@@ -25,9 +25,11 @@
 //   http://www.codeproject.com/Articles/14740/Fast-IPC-Communication-Using-Shared-Memory-and-Int
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Security;
 using System.Text;
+using System.Security.AccessControl;
 using Microsoft.Win32.SafeHandles;
 using System.Security.Permissions;
 using System.Runtime;
@@ -47,6 +49,7 @@ namespace System.IO.MemoryMappedFiles
     public sealed class MemoryMappedFile: IDisposable
     {
         SafeMemoryMappedFileHandle _handle;
+        private FileStream _fileStream;
 
         /// <summary>
         /// Gets the file handle of a memory-mapped file.
@@ -67,6 +70,12 @@ namespace System.IO.MemoryMappedFiles
             this._handle = handle;
         }
 
+        private MemoryMappedFile(SafeMemoryMappedFileHandle handle, FileStream fileStream)
+        {
+            this._handle = handle;
+            this._fileStream = fileStream;
+        }
+
         /// <summary>
         /// 
         /// </summary>
@@ -81,15 +90,48 @@ namespace System.IO.MemoryMappedFiles
         /// <param name="mapName"></param>
         /// <param name="capacity"></param>
         /// <returns></returns>
-        public static MemoryMappedFile CreateNew(String mapName, long capacity)
+        public static MemoryMappedFile CreateNew(string mapName, long capacity)
         {
-            if (String.IsNullOrEmpty(mapName))
+            if (string.IsNullOrEmpty(mapName))
                 throw new ArgumentException("mapName cannot be null or empty.");
             if (capacity <= 0)
                 throw new ArgumentOutOfRangeException("capacity", "Value must be larger than 0.");
             if (IntPtr.Size == 4 && capacity > ((1024*1024*1024) * (long)4))
                 throw new ArgumentOutOfRangeException("capacity", "The capacity cannot be greater than the size of the system's logical address space.");
             return new MemoryMappedFile(DoCreate(mapName, capacity));
+        }
+
+        /// <summary>
+        /// Creates memory mapped file from file.
+        /// </summary>
+        /// <param name="path"></param>
+        /// <param name="mode"></param>
+        /// <param name="mapName"></param>
+        /// <param name="capacity"></param>
+        /// <returns></returns>
+        /// <exception cref="ArgumentOutOfRangeException"></exception>
+        public static MemoryMappedFile CreateFromFile(string path, FileMode mode, string mapName, long capacity)
+        {
+            var fileStream = new FileStream(path, mode, FileSystemRights.ReadData | FileSystemRights.WriteData, FileShare.None, 0x1000, FileOptions.None);
+            if (capacity == 0 && fileStream.Length == 0) throw new ArgumentOutOfRangeException("capacity", "The capacity may not be smaller than the file size");
+
+            // split the long into two ints
+            var capacityLow = (int)(capacity & 0x00000000FFFFFFFFL);
+            var capacityHigh = (int)(capacity >> 32);
+
+            var handle = UnsafeNativeMethods.CreateFileMapping(
+                fileStream.SafeFileHandle,
+                IntPtr.Zero, 
+                UnsafeNativeMethods.FileMapProtection.PageReadWrite, 
+                capacityHigh,
+                capacityLow,
+                mapName);
+
+            var errorCode = Marshal.GetLastWin32Error();
+            if (!handle.IsInvalid && errorCode == UnsafeNativeMethods.ERROR_ALREADY_EXISTS) handle.Dispose();
+
+            Trace.Assert(handle != null && !handle.IsInvalid);
+            return new MemoryMappedFile(handle, fileStream);
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Interoperability", "CA1404:CallGetLastErrorImmediatelyAfterPInvoke"), SecurityCritical]
@@ -152,6 +194,12 @@ namespace System.IO.MemoryMappedFiles
             {
                 this._handle.Dispose();
                 this._handle = null;
+            }
+
+            if (this._fileStream != null)
+            {
+                this._fileStream.Dispose();
+                this._fileStream = null;
             }
         }
 

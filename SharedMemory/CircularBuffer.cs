@@ -223,8 +223,14 @@ namespace SharedMemory
         /// </code>
         /// </para>
         /// </remarks>
+        public CircularBuffer(string name, int nodeCount, int nodeBufferSize, string fileName)
+            : this(name, nodeCount, nodeBufferSize, true, fileName)
+        {
+            Open();
+        }
+
         public CircularBuffer(string name, int nodeCount, int nodeBufferSize)
-            : this(name, nodeCount, nodeBufferSize, true)
+            : this(name, nodeCount, nodeBufferSize, true, NoFile)
         {
             Open();
         }
@@ -233,14 +239,20 @@ namespace SharedMemory
         /// Opens an existing <see cref="CircularBuffer"/> with the specified name.
         /// </summary>
         /// <param name="name">The name of an existing <see cref="CircularBuffer"/> previously created with <see cref="Buffer.IsOwnerOfSharedMemory"/>=true</param>
-        public CircularBuffer(string name)
-            : this(name, 0, 0, false)
+        public CircularBuffer(string name, string fileName)
+            : this(name, 0, 0, false, fileName)
         {
             Open();
         }
 
-        private CircularBuffer(string name, int nodeCount, int nodeBufferSize, bool ownsSharedMemory)
-            : base(name, Marshal.SizeOf(typeof(NodeHeader)) + (Marshal.SizeOf(typeof(Node)) * nodeCount) + (nodeCount * (long)nodeBufferSize), ownsSharedMemory)
+        public CircularBuffer(string name)
+            : this(name, 0, 0, false, NoFile)
+        {
+            Open();
+        }
+
+        private CircularBuffer(string name, int nodeCount, int nodeBufferSize, bool ownsSharedMemory, string fileName)
+            : base(name, Marshal.SizeOf(typeof(NodeHeader)) + (Marshal.SizeOf(typeof(Node)) * nodeCount) + (nodeCount * (long)nodeBufferSize), ownsSharedMemory, fileName)
         {
             #region Argument validation
             if (ownsSharedMemory && nodeCount < 2)

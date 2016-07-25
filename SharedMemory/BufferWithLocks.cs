@@ -65,8 +65,8 @@ namespace SharedMemory
         /// <param name="name">The name of the shared memory</param>
         /// <param name="bufferSize">The buffer size in bytes.</param>
         /// <param name="ownsSharedMemory">Whether or not the current instance owns the shared memory. If true a new shared memory will be created and initialised otherwise an existing one is opened.</param>
-        protected BufferWithLocks(string name, long bufferSize, bool ownsSharedMemory)
-            : base(name, bufferSize, ownsSharedMemory)
+        protected BufferWithLocks(string name, long bufferSize, bool ownsSharedMemory, string fileName)
+            : base(name, bufferSize, ownsSharedMemory, fileName)
         {
             WriteWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_write");
             ReadWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_read");

@@ -46,8 +46,29 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The name of the shared memory to create</param>
         /// <param name="bufferSize">The size of the buffer</param>
+        public BufferReadWrite(string name, int bufferSize, string fileName)
+            : base(name, bufferSize, true, fileName)
+        {
+            Open();
+        }
+
+        /// <summary>
+        /// Creates a new shared memory buffer with the specified name and size
+        /// </summary>
+        /// <param name="name">The name of the shared memory to create</param>
+        /// <param name="bufferSize">The size of the buffer</param>
         public BufferReadWrite(string name, int bufferSize)
-            : base(name, bufferSize, true)
+            : base(name, bufferSize, true, NoFile)
+        {
+            Open();
+        }
+
+        /// <summary>
+        /// Opens an existing shared memory buffer with the specified name
+        /// </summary>
+        /// <param name="name">The name of the shared memory to open</param>
+        public BufferReadWrite(string name, string fileName)
+            : base(name, 0, false, fileName)
         {
             Open();
         }
@@ -57,7 +78,7 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The name of the shared memory to open</param>
         public BufferReadWrite(string name)
-            : base(name, 0, false)
+            : base(name, 0, false, NoFile)
         {
             Open();
         }

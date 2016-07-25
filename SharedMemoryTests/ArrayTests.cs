@@ -26,6 +26,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SharedMemory;
 using System.Runtime.InteropServices;
@@ -80,6 +81,33 @@ namespace SharedMemoryTests
                     Assert.AreEqual(55, rarraySlice[3], "");
                 }
 
+            }
+        }
+
+        [TestMethod]
+        public void Indexer_ReadWriteInteger_DataMatches_UsingFile()
+        {
+            var fileName = Path.GetTempFileName();
+            try
+            {
+                var name = Guid.NewGuid().ToString();
+                using (var sma = new Array<int>(name, 10, fileName))
+                {
+                    sma[0] = 3;
+                    sma[4] = 10;
+
+                    using (var smr = new Array<int>(name))
+                    {
+                        Assert.AreEqual(0, smr[1], "");
+                        Assert.AreEqual(3, smr[0], "");
+                        Assert.AreEqual(10, smr[4], "");
+                    }
+                }
+
+            }
+            finally
+            {
+                File.Delete(fileName);
             }
         }
 
