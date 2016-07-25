@@ -447,7 +447,7 @@ namespace SharedMemory
         protected virtual void ReadArray<T>(T[] destination, int index, int count, long bufferPosition)
             where T : struct
         {
-            FastStructure.ReadArray<T>(destination, (IntPtr)(BufferStartPtr + bufferPosition), 0, count);
+            FastStructure.ReadArray<T>(destination, (IntPtr)(BufferStartPtr + bufferPosition), index, count);
         }
 
         /// <summary>
