@@ -354,8 +354,10 @@ namespace SharedMemoryTests
                 smr.Write(ref obj);
 
                 MyTestStruct read;
-                if (sm2.Read(out read) > 0)
+                int bytesRead = sm2.Read(out read);
+                if (bytesRead > 0)
                 {
+                    Assert.AreEqual(FastStructure.SizeOf<MyTestStruct>(), bytesRead);
                     Assert.AreEqual(obj, read);
                 }
                 else
@@ -739,10 +741,54 @@ namespace SharedMemoryTests
 
             using (var smr = new CircularBuffer(name, 2, bufSize))
             {
-                smr.Write(data);
-                smr.Read(readBuff);
+                var writeCount = smr.Write(data);
+                var readCount = smr.Read(readBuff);
+
+                Assert.AreEqual(100, writeCount);
+                Assert.AreEqual(100, readCount);
 
                 for (var i = 0; i < data.Length; i++)
+                    Assert.AreEqual(data[i], readBuff[i], String.Format("Data written does not match data read at index {0}", i));
+            }
+        }
+
+        [TestMethod]
+        public void ReadWrite_StructuredData_ReadWriteStartIndex()
+        {
+            string name = Guid.NewGuid().ToString();
+            Random r = new Random();
+            TestStruct[] data = new TestStruct[88];
+            TestStruct[] readBuff = new TestStruct[88];
+            
+            // Enough room to only fit 3 TestStruct elements
+            int bufSize = Marshal.SizeOf(typeof(TestStruct)) * 3;
+
+            // Fill with random data
+            for (var i = 0; i < data.Length; i++)
+            {
+                data[i].Value1 = r.Next();
+                data[i].Value2 = r.Next();
+            }
+
+            // Tests that writing to the circular buffer using startIndex will correctly write and read the entire
+            // source array, even though its size in bytes is not evenly divisible by the buffer size.
+            using (var smr = new CircularBuffer(name, 2, bufSize))
+            {
+                var totalWriteCount = 0;
+                var iterations = 0;
+                while (totalWriteCount < data.Length)
+                {
+                    var writeCount = smr.Write(data, startIndex: totalWriteCount);
+                    var readCount = smr.Read(readBuff, startIndex: totalWriteCount);
+
+                    Assert.AreEqual(writeCount, readCount);
+
+                    totalWriteCount += writeCount;
+                    iterations++;
+                }
+                Assert.AreEqual(Math.Ceiling((double)(data.Length * Marshal.SizeOf(typeof(TestStruct))) / bufSize), iterations);
+                Assert.AreEqual(data.Length, totalWriteCount);
+                for (var i = 0; i < totalWriteCount; i++)
                     Assert.AreEqual(data[i], readBuff[i], String.Format("Data written does not match data read at index {0}", i));
             }
         }
