@@ -24,6 +24,7 @@
 //   "Fast IPC Communication Using Shared Memory and InterlockedCompareExchange"
 //   http://www.codeproject.com/Articles/14740/Fast-IPC-Communication-Using-Shared-Memory-and-Int
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 
@@ -210,6 +211,17 @@ namespace SharedMemory
         private static DynamicMethod methodLoad;
         private static DynamicMethod methodWrite;
 
+        /// <summary>
+        /// Performs once of type compatibility check.
+        /// </summary>
+        /// <exception cref="ArgumentException">Thrown if the type T is incompatible</exception>
+        /// 
+        static FastStructure()
+        {
+            // Performs compatibility checks upon T
+            CheckTypeCompatibility(typeof(T));
+        }
+
         private unsafe static GetPtrDelegate BuildFunction()
         {
             method = new DynamicMethod("GetStructurePtr<" + typeof(T).FullName + ">",
@@ -248,5 +260,66 @@ namespace SharedMemory
             generator.Emit(OpCodes.Ret);
             return (StructureToPtrDelegate)methodWrite.CreateDelegate(typeof(StructureToPtrDelegate));
         }
+
+        private static void CheckTypeCompatibility(Type t, System.Collections.Generic.HashSet<Type> checkedItems = null)
+        {
+            if (checkedItems == null)
+            {
+                checkedItems = new System.Collections.Generic.HashSet<Type>();
+                checkedItems.Add(typeof(char));
+                checkedItems.Add(typeof(byte));
+                checkedItems.Add(typeof(sbyte));
+                checkedItems.Add(typeof(bool));
+                checkedItems.Add(typeof(double));
+                checkedItems.Add(typeof(float));
+                checkedItems.Add(typeof(decimal));
+                checkedItems.Add(typeof(int));
+                checkedItems.Add(typeof(short));
+                checkedItems.Add(typeof(long));
+                checkedItems.Add(typeof(uint));
+                checkedItems.Add(typeof(ushort));
+                checkedItems.Add(typeof(ulong));
+                checkedItems.Add(typeof(IntPtr));
+                checkedItems.Add(typeof(void*));
+            }
+
+            if (checkedItems.Contains(t))
+                return;
+            else
+                checkedItems.Add(t);
+
+            FieldInfo[] fi = t.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+            foreach (FieldInfo info in fi)
+            {
+                if (!info.FieldType.IsPrimitive && !info.FieldType.IsValueType && !info.FieldType.IsPointer)
+                {
+                    throw new ArgumentException(String.Format("Non-value types are not supported: field {0} is of type {1} in structure {2}", info.Name, info.FieldType.Name, info.DeclaringType.Name));
+                }
+
+                // Example for adding future marshal attributes as incompatible
+                //System.Runtime.InteropServices.MarshalAsAttribute attr;
+                //if (TryGetAttribute<System.Runtime.InteropServices.MarshalAsAttribute>(info, out attr))
+                //{
+                //    if (attr.Value == System.Runtime.InteropServices.UnmanagedType.ByValArray)
+                //    {
+                //        throw new ArgumentException(String.Format("UnmanagedType.ByValArray is not supported on field {0} in type [{1}].", info.Name, typeof(T).FullName));
+                //    }
+                //}
+
+                CheckTypeCompatibility(info.FieldType, checkedItems);
+            }
+        }
+
+        //private static bool TryGetAttribute<T1>(MemberInfo memberInfo, out T1 customAttribute) where T1 : Attribute
+        //{
+        //    var attributes = memberInfo.GetCustomAttributes(typeof(T1), false).FirstOrDefault();
+        //    if (attributes == null)
+        //    {
+        //        customAttribute = null;
+        //        return false;
+        //    }
+        //    customAttribute = (T1)attributes;
+        //    return true;
+        //}
     }
 }
