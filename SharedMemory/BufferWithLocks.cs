@@ -76,6 +76,24 @@ namespace SharedMemory
 
         #region Synchronisation
 
+        private int _readWriteTimeout = 100;
+
+        /// <summary>
+        /// The Read/Write operation timeout in milliseconds (to prevent deadlocks). Defaults to 100ms and must be larger than -1.
+        /// If a Read or Write operation's WaitEvent does not complete within this timeframe a <see cref="TimeoutException"/> will be thrown.
+        /// If using AcquireReadLock/ReleaseReadLock and AcquireWriteLock/ReleaseWriteLock correctly this timeout will never occur.
+        /// </summary>
+        public virtual int ReadWriteTimeout
+        {
+            get { return _readWriteTimeout; }
+            set
+            {
+                if (value < 0)
+                    throw new ArgumentOutOfRangeException("ReadWriteTimeout", "Must be larger than -1.");
+                _readWriteTimeout = value;
+            }
+        }
+
         /// <summary>
         /// Blocks the current thread until it is able to acquire a read lock. If successful all subsequent writes will be blocked until after a call to <see cref="ReleaseReadLock"/>.
         /// </summary>
@@ -127,6 +145,15 @@ namespace SharedMemory
         #region Writing
 
         /// <summary>
+        /// Prevents write operations from deadlocking by throwing a TimeoutException if the WriteWaitEvent is not available within <see cref="ReadWriteTimeout"/> milliseconds
+        /// </summary>
+        private void WriteWait()
+        {
+            if (!WriteWaitEvent.WaitOne(ReadWriteTimeout))
+                throw new TimeoutException("The write operation timed out waiting for the write lock WaitEvent. Check your usage of AcquireWriteLock/ReleaseWriteLock and AcquireReadLock/ReleaseReadLock.");
+        }
+
+        /// <summary>
         /// Writes an instance of <typeparamref name="T"/> into the buffer
         /// </summary>
         /// <typeparam name="T">A structure type</typeparam>
@@ -134,7 +161,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
         protected override void Write<T>(ref T data, long bufferPosition = 0)
         {
-            WriteWaitEvent.WaitOne();
+            WriteWait();
             base.Write<T>(ref data, bufferPosition);
         }
 
@@ -146,7 +173,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
         protected override void Write<T>(T[] buffer, long bufferPosition = 0)
         {
-            WriteWaitEvent.WaitOne();
+            WriteWait();
             base.Write<T>(buffer, bufferPosition);
         }
 
@@ -158,7 +185,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
         protected override void Write(IntPtr ptr, int length, long bufferPosition = 0)
         {
-            WriteWaitEvent.WaitOne();
+            WriteWait();
             base.Write(ptr, length, bufferPosition);
         }
 
@@ -169,13 +196,22 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region to start writing from.</param>
         protected override void Write(Action<IntPtr> writeFunc, long bufferPosition = 0)
         {
-            WriteWaitEvent.WaitOne();
+            WriteWait();
             base.Write(writeFunc, bufferPosition);
         }
 
         #endregion
 
         #region Reading
+
+        /// <summary>
+        /// Prevents read operations from deadlocking by throwing a TimeoutException if the ReadWaitEvent is not available within <see cref="ReadWriteTimeout"/> milliseconds
+        /// </summary>
+        private void ReadWait()
+        {
+            if (!ReadWaitEvent.WaitOne(ReadWriteTimeout))
+                throw new TimeoutException("The read operation timed out waiting for the read lock WaitEvent. Check your usage of AcquireWriteLock/ReleaseWriteLock and AcquireReadLock/ReleaseReadLock.");
+        }
 
         /// <summary>
         /// Reads an instance of <typeparamref name="T"/> from the buffer
@@ -185,7 +221,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected override void Read<T>(out T data, long bufferPosition = 0)
         {
-            ReadWaitEvent.WaitOne();
+            ReadWait();
             base.Read<T>(out data, bufferPosition);
         }
 
@@ -197,7 +233,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected override void Read<T>(T[] buffer, long bufferPosition = 0)
         {
-            ReadWaitEvent.WaitOne();
+            ReadWait();
             base.Read<T>(buffer, bufferPosition);
         }
 
@@ -209,7 +245,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected override void Read(IntPtr destination, int length, long bufferPosition = 0)
         {
-            ReadWaitEvent.WaitOne();
+            ReadWait();
             base.Read(destination, length, bufferPosition);
         }
 
@@ -220,7 +256,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected override void Read(Action<IntPtr> readFunc, long bufferPosition = 0)
         {
-            ReadWaitEvent.WaitOne();
+            ReadWait();
             base.Read(readFunc, bufferPosition);
         }
 

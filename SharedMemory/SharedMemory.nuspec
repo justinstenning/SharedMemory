@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd">
     <metadata>
         <id>SharedMemory</id>
-        <version>$version$</version>
+        <version>2.0.16</version>
         <title>SharedMemory</title>
         <authors>Justin Stenning</authors>
         <owners>Justin Stenning</owners>
@@ -20,7 +20,10 @@ It features:
 
 Usage: http://sharedmemory.codeplex.com/documentation</description>
         <summary>Shared memory classes for sharing data between processes (Array, Buffer and Circular Buffer)</summary>
-        <releaseNotes>$version$
+        <releaseNotes>2.0.16
+1. Prevent possible deadlock situation with incorrect Acquire and Release of read/write locks in BufferWithLocks (affects BufferReadWrite and SharedArray).
+
+2.0.15
 1. Breaking change: Array, Buffer, and Header classes renamed to SharedArray, SharedBuffer, and SharedHeader
 2. Important breaking change! CircularBuffer Read/Write operations now allow an index to be specified. Check existing code as it may be passing a timeout value into index!
 3. Circular buffer keeps track of amount written to a node and uses this during read operations
