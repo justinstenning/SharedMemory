@@ -84,3 +84,14 @@ The output from the of the following examples is:
         consumer.Read<int>(out readData, 1000);
         Console.WriteLine(readData);
     }
+
+Performance
+-----------
+
+The maximum bandwidth achieved was approximately 20GB/s, using 20 nodes of 1MB each with 1 reader and 1 writer. The .NET 3.5 implementation is markedly slower (~14GB/s), I believe this is due to framework level performance improvements.
+
+The following chart shows the bandwidth achieved in MB/s using a variety of circular buffer configurations, ranging from 2 nodes to 50 nodes with a varying number of readers/writers, comparing a 1KB vs 1MB node buffer size on .NET 3.5 and .NET 4.
+
+![Circular buffer bandwidth](http://spazzarama.com/wp-content/uploads/2015/12/SharedMemoryBandwidth.png)
+
+All results are from a machine running Windows 10 64-bit, Intel Core i7-3770K @ 3.50GHz, 16GB DDR3@1200MHz on an ASUS P8Z77-V motherboard. The data transferred was selected randomly from an array of 256 buffers that had been populated with random bytes.
