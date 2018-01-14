@@ -43,6 +43,7 @@
     <Compile Include="SharedBuffer.cs" />
     <Compile Include="UnsafeNativeMethods.cs" />
     <Compile Include="Utilities\ArraySlice.cs" />
+    <Compile Include="Utilities\ExpandingArray.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="publickey.snk" />
