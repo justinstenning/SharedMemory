@@ -57,6 +57,9 @@ Usage: http://sharedmemory.codeplex.com/documentation</description>
         </dependencies>     
     </metadata>
     <files>
+        <file src=".\bin\Release\Net45\SharedMemory.dll" target="lib\net45" />
+        <file src=".\bin\Release\Net45\SharedMemory.pdb" target="lib\net45" />
+        <file src=".\bin\Release\Net45\SharedMemory.xml" target="lib\net45" />
         <file src=".\bin\Release\Net4\SharedMemory.dll" target="lib\net40" />
         <file src=".\bin\Release\Net4\SharedMemory.pdb" target="lib\net40" />
         <file src=".\bin\Release\Net4\SharedMemory.xml" target="lib\net40" />
