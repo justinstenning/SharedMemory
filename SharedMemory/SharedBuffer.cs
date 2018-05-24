@@ -39,8 +39,10 @@ namespace SharedMemory
     /// Abstract base class that provides client/server support for reading/writing structures to a buffer within a <see cref="MemoryMappedFile" />.
     /// A header structure allows clients to open the buffer without knowing the size.
     /// </summary>
+#if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
+#endif
     public abstract unsafe class SharedBuffer : IDisposable
     {
         #region Public/Protected properties
@@ -395,7 +397,11 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
         protected virtual void Write(IntPtr source, int length, long bufferPosition = 0)
         {
+#if NETCORE
+            Buffer.MemoryCopy((void*)source, BufferStartPtr + bufferPosition, BufferSize - bufferPosition, length);
+#else
             UnsafeNativeMethods.CopyMemory(new IntPtr(BufferStartPtr + bufferPosition), source, (uint)length);
+#endif
         }
 
         /// <summary>
@@ -458,7 +464,11 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected virtual void Read(IntPtr destination, int length, long bufferPosition = 0)
         {
+#if NETCORE
+            Buffer.MemoryCopy(BufferStartPtr + bufferPosition, (void*)destination, length, length);
+#else
             UnsafeNativeMethods.CopyMemory(destination, new IntPtr(BufferStartPtr + bufferPosition), (uint)length);
+#endif
         }
 
         /// <summary>

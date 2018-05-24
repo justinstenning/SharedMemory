@@ -39,7 +39,9 @@ namespace System.IO.MemoryMappedFiles
     /// <summary>
     /// 
     /// </summary>
+#if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
+#endif
     public sealed class MemoryMappedViewAccessor : IDisposable
     {
         MemoryMappedView _view;

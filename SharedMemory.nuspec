@@ -2,25 +2,28 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd">
     <metadata>
         <id>SharedMemory</id>
-        <version>2.0.16</version>
+        <version>$version$</version>
         <title>SharedMemory</title>
         <authors>Justin Stenning</authors>
         <owners>Justin Stenning</owners>
         <licenseUrl>https://github.com/spazzarama/SharedMemory/blob/master/LICENSE.md</licenseUrl>
         <projectUrl>https://github.com/spazzarama/SharedMemory</projectUrl>
-        <requireLicenseAcceptance>false</requireLicenseAcceptance>
+        <requireLicenseAcceptance>true</requireLicenseAcceptance>
         <description>The SharedMemory class library provides a set of C# classes that utilise a memory-mapped file for fast low-level inter-process communication (IPC) - specifically for sharing data between processes.
 
 It features:
  * a lock-free FIFO circular buffer
  * a simple fixed-size generic shared memory array class
  * an implementation of a shared memory buffer for read/write.
- * support for memory-mapped files in .NET 3.5 and .NET 4
+ * support for memory-mapped files in .NET 3.5/4/4.5 and .NET Core 2.0
  * fast generic structure reading/writing
 
 Usage: http://sharedmemory.codeplex.com/documentation</description>
         <summary>Shared memory classes for sharing data between processes (Array, Buffer and Circular Buffer)</summary>
-        <releaseNotes>2.0.16
+        <releaseNotes>$version$
+1. Add .NET Core 2 target and update to use dotnet project files (VS2017) (#29)
+        
+2.0.16
 1. Prevent possible deadlock situation with incorrect Acquire and Release of read/write locks in BufferWithLocks (affects BufferReadWrite and SharedArray).
 
 2.0.15
@@ -47,15 +50,21 @@ Usage: http://sharedmemory.codeplex.com/documentation</description>
         <copyright>Copyright (c) 2014 Justin Stenning</copyright>
         <tags>IPC memory mapped file shared data circular ring buffer</tags>
         <dependencies>
-        </dependencies>
+          <group targetFramework=".NETFramework3.5" />
+          <group targetFramework=".NETFramework4.0" />
+          <group targetFramework=".NETFramework4.5" />
+          <group targetFramework=".NETCoreApp2.0" />
+        </dependencies>     
     </metadata>
     <files>
-        <file src="..\bin\Net40\SharedMemory.dll" target="lib\net40" />
-        <file src="..\bin\Net40\SharedMemory.pdb" target="lib\net40" />
-        <file src="..\bin\Net40\SharedMemory.XML" target="lib\net40" />
-        <file src="..\bin\Net35\SharedMemory.dll" target="lib\net35" />
-        <file src="..\bin\Net35\SharedMemory.pdb" target="lib\net35" />
-        <file src="..\bin\Net35\SharedMemory.XML" target="lib\net35" />
-        <file src="**\*.cs" target="src" />
+        <file src=".\bin\Release\Net4\SharedMemory.dll" target="lib\net40" />
+        <file src=".\bin\Release\Net4\SharedMemory.pdb" target="lib\net40" />
+        <file src=".\bin\Release\Net4\SharedMemory.xml" target="lib\net40" />
+        <file src=".\bin\Release\Net35\SharedMemory.dll" target="lib\net35" />
+        <file src=".\bin\Release\Net35\SharedMemory.pdb" target="lib\net35" />
+        <file src=".\bin\Release\Net35\SharedMemory.xml" target="lib\net35" />
+        <file src=".\bin\Release\netcoreapp2.0\SharedMemory.dll" target="lib\netcoreapp2.0" />
+        <file src=".\bin\Release\netcoreapp2.0\SharedMemory.xml" target="lib\netcoreapp2.0" />
+        <file src=".\SharedMemory\**\*.cs" target="src" />
     </files>
 </package>

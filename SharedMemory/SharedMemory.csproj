@@ -1,61 +1,33 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
-  <Import Project="$(SolutionDir)\SharedMemory.PreSettings.targets" />
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
-    <ProjectGuid>{DFA407A8-AEA8-48BB-AE6C-709DF51D276F}</ProjectGuid>
-    <OutputType>Library</OutputType>
-    <RootNamespace>SharedMemory</RootNamespace>
-    <AssemblyName>SharedMemory</AssemblyName>
-    <DocumentationFile>$(AssemblyName).XML</DocumentationFile>
+    <TargetFrameworks>netcoreapp2.0;net45;net4;net35</TargetFrameworks>
+    <OutputPath>..\bin\$(Configuration)\</OutputPath>
+    <DocumentationFile>..\bin\$(Configuration)\$(TargetFramework)\SharedMemory.xml</DocumentationFile>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(APPVEYOR)' == 'True' ">
-    <SignAssembly>true</SignAssembly>
-    <AssemblyOriginatorKeyFile>$(StrongNameKeyPath)</AssemblyOriginatorKeyFile>
+
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <Company />
+    <Authors>Justin Stenning</Authors>
+    <Copyright>Copyright (c) 2018 Justin Stenning</Copyright>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(APPVEYOR)' == '' ">
-    <SignAssembly>true</SignAssembly>
-    <AssemblyOriginatorKeyFile>publickey.snk</AssemblyOriginatorKeyFile>
+
+  <PropertyGroup Condition=" '$(TargetFramework)' == 'netcoreapp2.0'">
+    <DefineConstants>NETCORE;NETCORE2_0;NET40Plus</DefineConstants>
   </PropertyGroup>
-  <ItemGroup>
-    <Reference Include="System" />
-    <Reference Include="System.Core" />
-    <Reference Include="System.Xml.Linq" />
-    <Reference Include="System.Data.DataSetExtensions" />
-    <Reference Include="System.Data" />
-    <Reference Include="System.Xml" />
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Include="BufferWithLocks.cs" />
-    <Compile Include="CircularBuffer.cs" />
-    <Compile Include="SharedHeader.cs" />
-    <Compile Include="MemoryMappedFiles\MemoryMappedFile.cs" />
-    <Compile Include="MemoryMappedFiles\MemoryMappedFileAccess.cs" />
-    <Compile Include="MemoryMappedFiles\MemoryMappedFileRights.cs" />
-    <Compile Include="MemoryMappedFiles\MemoryMappedView.cs" />
-    <Compile Include="MemoryMappedFiles\MemoryMappedViewAccessor.cs" />
-    <Compile Include="MemoryMappedFiles\SafeMemoryMappedViewHandle.cs" />
-    <Compile Include="MemoryMappedFiles\SafeMemoryMappedFileHandle.cs" />
-    <Compile Include="FastStructure.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="BufferReadWrite.cs" />
-    <Compile Include="SharedArray.cs" />
-    <Compile Include="SharedBuffer.cs" />
-    <Compile Include="UnsafeNativeMethods.cs" />
-    <Compile Include="Utilities\ArraySlice.cs" />
-    <Compile Include="Utilities\ExpandingArray.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="publickey.snk" />
-    <None Include="SharedMemory.licenseheader" />
-    <None Include="SharedMemory.nuspec" />
-  </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
-       Other similar extension points exist, see Microsoft.Common.targets.
-  <Target Name="BeforeBuild">
-  </Target>
-  <Target Name="AfterBuild">
-  </Target>
-  -->
+
+  <PropertyGroup Condition=" '$(TargetFramework)' == 'net45'">
+    <DefineConstants>NET45;NETFULL;NET40Plus</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(TargetFramework)' == 'net4'">
+    <DefineConstants>NET40;NETFULL;NET40Plus</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(TargetFramework)' == 'net35'">
+    <DefineConstants>NET35;NETFULL</DefineConstants>
+  </PropertyGroup>
+
 </Project>

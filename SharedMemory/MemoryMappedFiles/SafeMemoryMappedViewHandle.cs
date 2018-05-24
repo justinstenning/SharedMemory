@@ -36,7 +36,9 @@ namespace Microsoft.Win32.SafeHandles
     /// <summary>
     /// Provides a safe handle that represents a view of a block of unmanaged memory for random access.
     /// </summary>
+#if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
+#endif
     public sealed class SafeMemoryMappedViewHandle: SafeHandleZeroOrMinusOneIsInvalid
     {
         [SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]

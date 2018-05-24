@@ -123,7 +123,11 @@ namespace SharedMemory
 
             void* ptr = source.ToPointer();
             byte* p = (byte*)FastStructure.GetPtr<T>(ref buffer[0]);
+#if NETCORE
+            Buffer.MemoryCopy(ptr, p + (index * elementSize), elementSize * count, elementSize * count);
+#else
             UnsafeNativeMethods.CopyMemoryPtr(p + (index * elementSize), ptr, (uint)(elementSize * count));
+#endif
         }
 
         /// <summary>
@@ -150,7 +154,11 @@ namespace SharedMemory
 
             void* ptr = destination.ToPointer();
             byte* p = (byte*)FastStructure.GetPtr<T>(ref buffer[0]);
+#if NETCORE
+            Buffer.MemoryCopy(p + (index * elementSize), ptr, elementSize * count, elementSize * count);
+#else
             UnsafeNativeMethods.CopyMemoryPtr(ptr, p + (index * elementSize), (uint)(elementSize * count));
+#endif
         }
     }
 

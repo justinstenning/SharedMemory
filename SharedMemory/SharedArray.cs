@@ -35,8 +35,10 @@ namespace SharedMemory
     /// A generic fixed-length shared memory array of structures with support for simple inter-process read/write synchronisation.
     /// </summary>
     /// <typeparam name="T">The structure type that will be stored in the elements of this fixed array buffer.</typeparam>
+#if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
+#endif
     public class SharedArray<T> : BufferWithLocks, IList<T>
             where T : struct
     {

@@ -35,8 +35,10 @@ namespace SharedMemory.Utilities
     /// Like <see cref="T:System.ArraySegment`1"/>, but works with <see cref="T:System.Collections.Generic.IList`1"/> not just an array.
     /// </summary>
     /// <typeparam name="T">The type that is stored in the elements of the <see cref="T:System.Collections.Generic.IList`1"/>.</typeparam>
+#if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
+#endif
     public struct ArraySlice<T> : IList<T>
     {
         private readonly IList<T> _list;
