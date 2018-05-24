@@ -39,7 +39,9 @@ namespace System.IO.MemoryMappedFiles
     /// <para>Very limited .NET 3.5 implementation of a managed wrapper around memory-mapped files to reflect the .NET 4 API.</para>
     /// <para>Only those methods and features necessary for the SharedMemory library have been implemented.</para>
     /// </summary>
+#if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
+#endif
     public sealed class MemoryMappedView : IDisposable
     {
         SafeMemoryMappedViewHandle _handle;

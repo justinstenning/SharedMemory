@@ -1,81 +1,56 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 2013
-VisualStudioVersion = 12.0.21005.1
+# Visual Studio 15
+VisualStudioVersion = 15.0.27130.2036
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SingleProcess", "Examples\SingleProcess\SingleProcess.csproj", "{EA64397B-5AB6-46BB-8D0D-26887BF2D4CD}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SharedMemory", "SharedMemory\SharedMemory.csproj", "{49EEAE24-99C6-48F9-8784-4C9196BD1958}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharedMemory", "SharedMemory\SharedMemory.csproj", "{DFA407A8-AEA8-48BB-AE6C-709DF51D276F}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SharedMemory.Tests", "SharedMemory.Tests\SharedMemory.Tests.csproj", "{51DD9C46-955A-454A-952E-44046FFBEEB5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientTest", "Examples\ClientTest\ClientTest.csproj", "{57019AF7-C4AC-476B-8790-E95133220D8B}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Examples", "Examples", "{D3675823-5797-428B-A5D4-83824612F924}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ServerTest", "Examples\ServerTest\ServerTest.csproj", "{82C40D26-757D-4850-99BA-2341AB9D0E4D}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ClientTest", "Examples\ClientTest\ClientTest.csproj", "{69FC3A5E-C4C7-47BA-B553-FF9477D56B9B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharedMemoryTests", "SharedMemoryTests\SharedMemoryTests.csproj", "{F4DF3959-C696-44A4-BE9C-FD1857DE5347}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ServerTest", "Examples\ServerTest\ServerTest.csproj", "{6FC3F56C-B2DD-4E81-8425-CCAF2A6FF343}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Examples", "Examples", "{5B5C5EF2-B61D-4C63-B303-6B1876F28960}"
-EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Build", "Build", "{EBE05BE9-9EB5-41A4-90D5-D241FB71371E}"
-	ProjectSection(SolutionItems) = preProject
-		appveyor.yml = appveyor.yml
-		SharedMemory.PreSettings.targets = SharedMemory.PreSettings.targets
-	EndProjectSection
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SingleProcess", "Examples\SingleProcess\SingleProcess.csproj", "{58858E6C-4455-443F-A288-2B4BDCEDFB10}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
-		Net35Debug|Any CPU = Net35Debug|Any CPU
-		Net35Release|Any CPU = Net35Release|Any CPU
-		Net40Debug|Any CPU = Net40Debug|Any CPU
-		Net40Release|Any CPU = Net40Release|Any CPU
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{EA64397B-5AB6-46BB-8D0D-26887BF2D4CD}.Net35Debug|Any CPU.ActiveCfg = Net35Debug|Any CPU
-		{EA64397B-5AB6-46BB-8D0D-26887BF2D4CD}.Net35Debug|Any CPU.Build.0 = Net35Debug|Any CPU
-		{EA64397B-5AB6-46BB-8D0D-26887BF2D4CD}.Net35Release|Any CPU.ActiveCfg = Net35Release|Any CPU
-		{EA64397B-5AB6-46BB-8D0D-26887BF2D4CD}.Net35Release|Any CPU.Build.0 = Net35Release|Any CPU
-		{EA64397B-5AB6-46BB-8D0D-26887BF2D4CD}.Net40Debug|Any CPU.ActiveCfg = Net40Debug|Any CPU
-		{EA64397B-5AB6-46BB-8D0D-26887BF2D4CD}.Net40Debug|Any CPU.Build.0 = Net40Debug|Any CPU
-		{EA64397B-5AB6-46BB-8D0D-26887BF2D4CD}.Net40Release|Any CPU.ActiveCfg = Net40Release|Any CPU
-		{EA64397B-5AB6-46BB-8D0D-26887BF2D4CD}.Net40Release|Any CPU.Build.0 = Net40Release|Any CPU
-		{DFA407A8-AEA8-48BB-AE6C-709DF51D276F}.Net35Debug|Any CPU.ActiveCfg = Net35Debug|Any CPU
-		{DFA407A8-AEA8-48BB-AE6C-709DF51D276F}.Net35Debug|Any CPU.Build.0 = Net35Debug|Any CPU
-		{DFA407A8-AEA8-48BB-AE6C-709DF51D276F}.Net35Release|Any CPU.ActiveCfg = Net35Release|Any CPU
-		{DFA407A8-AEA8-48BB-AE6C-709DF51D276F}.Net35Release|Any CPU.Build.0 = Net35Release|Any CPU
-		{DFA407A8-AEA8-48BB-AE6C-709DF51D276F}.Net40Debug|Any CPU.ActiveCfg = Net40Debug|Any CPU
-		{DFA407A8-AEA8-48BB-AE6C-709DF51D276F}.Net40Debug|Any CPU.Build.0 = Net40Debug|Any CPU
-		{DFA407A8-AEA8-48BB-AE6C-709DF51D276F}.Net40Release|Any CPU.ActiveCfg = Net40Release|Any CPU
-		{DFA407A8-AEA8-48BB-AE6C-709DF51D276F}.Net40Release|Any CPU.Build.0 = Net40Release|Any CPU
-		{57019AF7-C4AC-476B-8790-E95133220D8B}.Net35Debug|Any CPU.ActiveCfg = Net35Debug|Any CPU
-		{57019AF7-C4AC-476B-8790-E95133220D8B}.Net35Debug|Any CPU.Build.0 = Net35Debug|Any CPU
-		{57019AF7-C4AC-476B-8790-E95133220D8B}.Net35Release|Any CPU.ActiveCfg = Net35Release|Any CPU
-		{57019AF7-C4AC-476B-8790-E95133220D8B}.Net35Release|Any CPU.Build.0 = Net35Release|Any CPU
-		{57019AF7-C4AC-476B-8790-E95133220D8B}.Net40Debug|Any CPU.ActiveCfg = Net40Debug|Any CPU
-		{57019AF7-C4AC-476B-8790-E95133220D8B}.Net40Debug|Any CPU.Build.0 = Net40Debug|Any CPU
-		{57019AF7-C4AC-476B-8790-E95133220D8B}.Net40Release|Any CPU.ActiveCfg = Net40Release|Any CPU
-		{57019AF7-C4AC-476B-8790-E95133220D8B}.Net40Release|Any CPU.Build.0 = Net40Release|Any CPU
-		{82C40D26-757D-4850-99BA-2341AB9D0E4D}.Net35Debug|Any CPU.ActiveCfg = Net35Debug|Any CPU
-		{82C40D26-757D-4850-99BA-2341AB9D0E4D}.Net35Debug|Any CPU.Build.0 = Net35Debug|Any CPU
-		{82C40D26-757D-4850-99BA-2341AB9D0E4D}.Net35Release|Any CPU.ActiveCfg = Net35Release|Any CPU
-		{82C40D26-757D-4850-99BA-2341AB9D0E4D}.Net35Release|Any CPU.Build.0 = Net35Release|Any CPU
-		{82C40D26-757D-4850-99BA-2341AB9D0E4D}.Net40Debug|Any CPU.ActiveCfg = Net40Debug|Any CPU
-		{82C40D26-757D-4850-99BA-2341AB9D0E4D}.Net40Debug|Any CPU.Build.0 = Net40Debug|Any CPU
-		{82C40D26-757D-4850-99BA-2341AB9D0E4D}.Net40Release|Any CPU.ActiveCfg = Net40Release|Any CPU
-		{82C40D26-757D-4850-99BA-2341AB9D0E4D}.Net40Release|Any CPU.Build.0 = Net40Release|Any CPU
-		{F4DF3959-C696-44A4-BE9C-FD1857DE5347}.Net35Debug|Any CPU.ActiveCfg = Net35Debug|Any CPU
-		{F4DF3959-C696-44A4-BE9C-FD1857DE5347}.Net35Debug|Any CPU.Build.0 = Net35Debug|Any CPU
-		{F4DF3959-C696-44A4-BE9C-FD1857DE5347}.Net35Release|Any CPU.ActiveCfg = Net35Release|Any CPU
-		{F4DF3959-C696-44A4-BE9C-FD1857DE5347}.Net35Release|Any CPU.Build.0 = Net35Release|Any CPU
-		{F4DF3959-C696-44A4-BE9C-FD1857DE5347}.Net40Debug|Any CPU.ActiveCfg = Net40Debug|Any CPU
-		{F4DF3959-C696-44A4-BE9C-FD1857DE5347}.Net40Debug|Any CPU.Build.0 = Net40Debug|Any CPU
-		{F4DF3959-C696-44A4-BE9C-FD1857DE5347}.Net40Release|Any CPU.ActiveCfg = Net40Release|Any CPU
-		{F4DF3959-C696-44A4-BE9C-FD1857DE5347}.Net40Release|Any CPU.Build.0 = Net40Release|Any CPU
+		{49EEAE24-99C6-48F9-8784-4C9196BD1958}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{49EEAE24-99C6-48F9-8784-4C9196BD1958}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{49EEAE24-99C6-48F9-8784-4C9196BD1958}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{49EEAE24-99C6-48F9-8784-4C9196BD1958}.Release|Any CPU.Build.0 = Release|Any CPU
+		{51DD9C46-955A-454A-952E-44046FFBEEB5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{51DD9C46-955A-454A-952E-44046FFBEEB5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{51DD9C46-955A-454A-952E-44046FFBEEB5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{51DD9C46-955A-454A-952E-44046FFBEEB5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{69FC3A5E-C4C7-47BA-B553-FF9477D56B9B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{69FC3A5E-C4C7-47BA-B553-FF9477D56B9B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{69FC3A5E-C4C7-47BA-B553-FF9477D56B9B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{69FC3A5E-C4C7-47BA-B553-FF9477D56B9B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6FC3F56C-B2DD-4E81-8425-CCAF2A6FF343}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6FC3F56C-B2DD-4E81-8425-CCAF2A6FF343}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6FC3F56C-B2DD-4E81-8425-CCAF2A6FF343}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6FC3F56C-B2DD-4E81-8425-CCAF2A6FF343}.Release|Any CPU.Build.0 = Release|Any CPU
+		{58858E6C-4455-443F-A288-2B4BDCEDFB10}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{58858E6C-4455-443F-A288-2B4BDCEDFB10}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{58858E6C-4455-443F-A288-2B4BDCEDFB10}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{58858E6C-4455-443F-A288-2B4BDCEDFB10}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
-		{57019AF7-C4AC-476B-8790-E95133220D8B} = {5B5C5EF2-B61D-4C63-B303-6B1876F28960}
-		{82C40D26-757D-4850-99BA-2341AB9D0E4D} = {5B5C5EF2-B61D-4C63-B303-6B1876F28960}
-		{EA64397B-5AB6-46BB-8D0D-26887BF2D4CD} = {5B5C5EF2-B61D-4C63-B303-6B1876F28960}
+		{69FC3A5E-C4C7-47BA-B553-FF9477D56B9B} = {D3675823-5797-428B-A5D4-83824612F924}
+		{6FC3F56C-B2DD-4E81-8425-CCAF2A6FF343} = {D3675823-5797-428B-A5D4-83824612F924}
+		{58858E6C-4455-443F-A288-2B4BDCEDFB10} = {D3675823-5797-428B-A5D4-83824612F924}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {DD0E1614-8CF6-460D-95BD-8E178CA17132}
 	EndGlobalSection
 EndGlobal

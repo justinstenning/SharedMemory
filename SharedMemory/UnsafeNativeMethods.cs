@@ -38,6 +38,7 @@ namespace SharedMemory
     {
         private UnsafeNativeMethods() { }
 
+#if !NETCORE
         /// <summary>
         /// Allow copying memory from one IntPtr to another. Required as the <see cref="System.Runtime.InteropServices.Marshal.Copy(System.IntPtr, System.IntPtr[], int, int)"/> implementation does not provide an appropriate override.
         /// </summary>
@@ -51,6 +52,7 @@ namespace SharedMemory
         [DllImport("kernel32.dll", EntryPoint = "CopyMemory", SetLastError = false)]
         [SecurityCritical]
         internal static extern unsafe void CopyMemoryPtr(void* dest, void* src, uint count);
+#endif
 
 #if !NET40Plus
 

@@ -43,8 +43,10 @@ namespace SharedMemory
     /// through calls to <see cref="AcquireReadLock"/> and <see cref="AcquireWriteLock"/> as appropriate, with corresponding 
     /// calls to <see cref="ReleaseReadLock"/> and <see cref="ReleaseWriteLock"/> to release the locks.</para>
     /// </summary>
+#if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
+#endif
     public abstract class BufferWithLocks : SharedBuffer
     {
         /// <summary>

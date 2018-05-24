@@ -38,8 +38,10 @@ namespace SharedMemory
     /// <summary>
     /// A lock-free FIFO shared memory circular buffer (or ring buffer) utilising a <see cref="MemoryMappedFile"/>.
     /// </summary>
+#if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
+#endif
     public unsafe class CircularBuffer : SharedBuffer
     {
         #region Public/Protected properties

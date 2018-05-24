@@ -33,18 +33,18 @@ init:
 clone_folder: c:\Projects\SharedMemory
 
 # environment variables
-environment:
-  StrongNameKeyPath: c:\keys\sign.snk
-  StrongNameKey:
-    secure: J0tsC0D5HeApnRFCPnLLcGWW/9UGR4mooz/TBZY9hQvU1WXbkAxsDusgec/e6IWPj+I8Nih/b+iUmG8JZ3h6ZHXgM0HbHiFEC3Uw2zNfzDSHhgZt9CHRTN9/SDXwAOYDQRG+vrObC1OLhE3RJKxUIxsSD1AImiyENKLyZO9xbjCyi80t9IIlVIx5vWoR/nTWzsDmPfUJXxGaAba/yaxL/V6w7tBMle+hQdk73uPCIAuS0lcXw68GZA4kQtsLEOqOCO1NI54CId6on39K7VZWlA9siOoy/5Xfy+DX5N5os7O02Mnczh+XqAcpGuyybI6a1nedMIvkG8nUd3b18oJhUDM5tgkqVDjzsMv6EnoH30HNZvt+cbciS7cKN3UtyPw2RR7Hy2Yu5GJRzH17hbTRdPeb1oMDxQu0I70tE6Utnqcef+TLD0APbWcXfv19jXzIKrP6p59ZK8xDLL66wm5JXpL2Ld23FXjZ45kp8rF2KRKox3Xf9Zg5QsOHE9glm+tJLLXw9TjE28nPPXmwgM+kfgb0KlPkDrr3wbKnWjz3H9wvl0kgkgZVVg5cXz5NU1NsBgtsB3QX4hHllS94M9pIc13c3Sgosw/NsVMIJeDDuNPddLfR/IA8udY/FO234+A3hQpCAn0tSbn2yj4xywWMgAPgwHi2ZVpfNXuvJ4V+/FwH+sNS8JSgzzDGtOBvHYcb6mQf6xASVwQoY91PMSAldw7ahXvT+n7GLut5kFRVo8lS4CDHI48gcQdouyh1J4HYYzMn8EggnEk3Cq653ZWbXlpwHmsjwsMW4T3Z3jwAi2iL1tciDPLFrJKtp5UrCDacmGk3nV8WnHdLSYV1sh8JGj4KKdhobfgdD9T5s460NlntuU3UY6seqofjswHoty9Pimpq3pJ+ahcK6NBW4MsVsd960NwLSwiLOS5xXEbqgsSvcUgVeywbwrHDUFOaxKlqrYt7AZzOLSXJPExAeUXMakyZgrS88hkIputq8Bd+xC8He+yRv5qYgc8Sa+u76dPJPVe+R8OP9jUNBCYLQ5PaAATMLXh+059jN6PFKzGBqWI=
+#environment:
+  #StrongNameKeyPath: c:\keys\sign.snk
+  #StrongNameKey:
+  #  secure: J0tsC0D5HeApnRFCPnLLcGWW/9UGR4mooz/TBZY9hQvU1WXbkAxsDusgec/e6IWPj+I8Nih/b+iUmG8JZ3h6ZHXgM0HbHiFEC3Uw2zNfzDSHhgZt9CHRTN9/SDXwAOYDQRG+vrObC1OLhE3RJKxUIxsSD1AImiyENKLyZO9xbjCyi80t9IIlVIx5vWoR/nTWzsDmPfUJXxGaAba/yaxL/V6w7tBMle+hQdk73uPCIAuS0lcXw68GZA4kQtsLEOqOCO1NI54CId6on39K7VZWlA9siOoy/5Xfy+DX5N5os7O02Mnczh+XqAcpGuyybI6a1nedMIvkG8nUd3b18oJhUDM5tgkqVDjzsMv6EnoH30HNZvt+cbciS7cKN3UtyPw2RR7Hy2Yu5GJRzH17hbTRdPeb1oMDxQu0I70tE6Utnqcef+TLD0APbWcXfv19jXzIKrP6p59ZK8xDLL66wm5JXpL2Ld23FXjZ45kp8rF2KRKox3Xf9Zg5QsOHE9glm+tJLLXw9TjE28nPPXmwgM+kfgb0KlPkDrr3wbKnWjz3H9wvl0kgkgZVVg5cXz5NU1NsBgtsB3QX4hHllS94M9pIc13c3Sgosw/NsVMIJeDDuNPddLfR/IA8udY/FO234+A3hQpCAn0tSbn2yj4xywWMgAPgwHi2ZVpfNXuvJ4V+/FwH+sNS8JSgzzDGtOBvHYcb6mQf6xASVwQoY91PMSAldw7ahXvT+n7GLut5kFRVo8lS4CDHI48gcQdouyh1J4HYYzMn8EggnEk3Cq653ZWbXlpwHmsjwsMW4T3Z3jwAi2iL1tciDPLFrJKtp5UrCDacmGk3nV8WnHdLSYV1sh8JGj4KKdhobfgdD9T5s460NlntuU3UY6seqofjswHoty9Pimpq3pJ+ahcK6NBW4MsVsd960NwLSwiLOS5xXEbqgsSvcUgVeywbwrHDUFOaxKlqrYt7AZzOLSXJPExAeUXMakyZgrS88hkIputq8Bd+xC8He+yRv5qYgc8Sa+u76dPJPVe+R8OP9jUNBCYLQ5PaAATMLXh+059jN6PFKzGBqWI=
 
 # scripts that run after cloning repository
 install:
   # Prepare key for signing
-  - ps: |
-        mkdir ([io.path]::GetDirectoryName($env:StrongNameKeyPath)) | out-null
-        [IO.File]::WriteAllBytes($env:StrongNameKeyPath, [Convert]::FromBase64String($env:StrongNameKey))
-        Write-Host "Retrieved sign key from secure environment variable"
+  #- ps: |
+  #      mkdir ([io.path]::GetDirectoryName($env:StrongNameKeyPath)) | out-null
+  #      [IO.File]::WriteAllBytes($env:StrongNameKeyPath, [Convert]::FromBase64String($env:StrongNameKey))
+  #      Write-Host "Retrieved sign key from secure environment variable"
   # Update NuGet version strings
   # - ps: |
         # $root = $env:APPVEYOR_BUILD_FOLDER
@@ -54,14 +54,16 @@ install:
         # $content = $content -replace '\$version\$',$versionStr
         # $content | Out-File $root\SharedMemory\SharedMemory.nuspec
 
-# enable patching of AssemblyInfo.* files
-assembly_info:
+# enable patching of dotnet .csproj files
+dotnet_csproj:
   patch: true
-  file: AssemblyInfo.*
-  assembly_version: "{version}"
-  assembly_file_version: "{version}"
-  assembly_informational_version: "{version}"
-
+  file: '**\*.csproj'
+  version: '{version}'
+  package_version: '{version}'
+  assembly_version: '{version}'
+  file_version: '{version}'
+  informational_version: '{version}'
+  
 #---------------------------------#
 #       build configuration       #
 #---------------------------------#
@@ -71,23 +73,16 @@ platform:
 #  - x86
 
 configuration:
-  - Net35Release
-  - Net40Release
-
-build:
-  project: SharedMemory.sln       # path to Visual Studio solution or project
-
-  # MSBuild verbosity level
-  verbosity: minimal
-
-# scripts to run before build
-before_build:
-
-# scripts to run after build
-after_build:
+  - Release
 
 # to run your custom scripts instead of automatic MSBuild
 build_script:
+- cmd: >-
+    dotnet restore
+    
+    dotnet build /p:Version=$Env:APPVEYOR_BUILD_VERSION
+
+    nuget pack SharedMemory.nuspec -Symbols -Version %APPVEYOR_BUILD_VERSION%
 
 # to disable automatic builds
 #build: off
@@ -104,7 +99,7 @@ artifacts:
     type: zip
 
   # pushing all *.nupkg files in directory
-  - path: '**\*.nupkg' # find all NuGet packages recursively
+  - path: '.\*.nupkg' # find all NuGet packages recursively
 
 #---------------------------------#
 #     deployment configuration    #
