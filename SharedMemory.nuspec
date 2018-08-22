@@ -53,7 +53,7 @@ Usage: http://sharedmemory.codeplex.com/documentation</description>
           <group targetFramework=".NETFramework3.5" />
           <group targetFramework=".NETFramework4.0" />
           <group targetFramework=".NETFramework4.5" />
-          <group targetFramework=".NETCoreApp2.0" />
+          <group targetFramework=".NETStandard2.0" />
         </dependencies>     
     </metadata>
     <files>
@@ -66,8 +66,8 @@ Usage: http://sharedmemory.codeplex.com/documentation</description>
         <file src=".\bin\Release\Net35\SharedMemory.dll" target="lib\net35" />
         <file src=".\bin\Release\Net35\SharedMemory.pdb" target="lib\net35" />
         <file src=".\bin\Release\Net35\SharedMemory.xml" target="lib\net35" />
-        <file src=".\bin\Release\netcoreapp2.0\SharedMemory.dll" target="lib\netcoreapp2.0" />
-        <file src=".\bin\Release\netcoreapp2.0\SharedMemory.xml" target="lib\netcoreapp2.0" />
+        <file src=".\bin\Release\netstandard2.0\SharedMemory.dll" target="lib\netstandard2.0" />
+        <file src=".\bin\Release\netstandard2.0\SharedMemory.xml" target="lib\netstandard2.0" />
         <file src=".\SharedMemory\**\*.cs" target="src" />
     </files>
 </package>
