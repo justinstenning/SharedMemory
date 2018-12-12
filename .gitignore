@@ -21,3 +21,5 @@ obj/
 _ReSharper*/
 TestResults*/
 *.nupkg
+/.vs/SharedMemory
+/nuget.exe

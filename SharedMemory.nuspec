@@ -21,6 +21,10 @@ It features:
 Usage: http://sharedmemory.codeplex.com/documentation</description>
         <summary>Shared memory classes for sharing data between processes (Array, Buffer and Circular Buffer)</summary>
         <releaseNotes>$version$
+1. Changed from .NET Core 2 target to .NET Standard 2.0 - this requires a new NuGet dependency to support DynamicMethod
+1. Added 4.6/4.7 targets
+
+2.1.0
 1. Add .NET Core 2 target and update to use dotnet project files (VS2017) (#29)
         
 2.0.16
@@ -53,10 +57,20 @@ Usage: http://sharedmemory.codeplex.com/documentation</description>
           <group targetFramework=".NETFramework3.5" />
           <group targetFramework=".NETFramework4.0" />
           <group targetFramework=".NETFramework4.5" />
-          <group targetFramework=".NETCoreApp2.0" />
+          <group targetFramework=".NETFramework4.6" />
+          <group targetFramework=".NETFramework4.7" />
+          <group targetFramework=".NETStandard2.0">
+              <dependency id="System.Reflection.Emit.Lightweight" version="4.3.0" />
+          </group>
         </dependencies>     
     </metadata>
     <files>
+        <file src=".\bin\Release\Net45\SharedMemory.dll" target="lib\net47" />
+        <file src=".\bin\Release\Net45\SharedMemory.pdb" target="lib\net47" />
+        <file src=".\bin\Release\Net45\SharedMemory.xml" target="lib\net47" />
+        <file src=".\bin\Release\Net45\SharedMemory.dll" target="lib\net46" />
+        <file src=".\bin\Release\Net45\SharedMemory.pdb" target="lib\net46" />
+        <file src=".\bin\Release\Net45\SharedMemory.xml" target="lib\net46" />	
         <file src=".\bin\Release\Net45\SharedMemory.dll" target="lib\net45" />
         <file src=".\bin\Release\Net45\SharedMemory.pdb" target="lib\net45" />
         <file src=".\bin\Release\Net45\SharedMemory.xml" target="lib\net45" />
@@ -66,8 +80,9 @@ Usage: http://sharedmemory.codeplex.com/documentation</description>
         <file src=".\bin\Release\Net35\SharedMemory.dll" target="lib\net35" />
         <file src=".\bin\Release\Net35\SharedMemory.pdb" target="lib\net35" />
         <file src=".\bin\Release\Net35\SharedMemory.xml" target="lib\net35" />
-        <file src=".\bin\Release\netcoreapp2.0\SharedMemory.dll" target="lib\netcoreapp2.0" />
-        <file src=".\bin\Release\netcoreapp2.0\SharedMemory.xml" target="lib\netcoreapp2.0" />
-        <file src=".\SharedMemory\**\*.cs" target="src" />
+        <file src=".\bin\Release\netstandard2.0\SharedMemory.dll" target="lib\netstandard2.0" />
+        <file src=".\bin\Release\netstandard2.0\SharedMemory.pdb" target="lib\netstandard2.0" />
+        <file src=".\bin\Release\netstandard2.0\SharedMemory.xml" target="lib\netstandard2.0" />
+        <file src=".\SharedMemory\**\*.cs" exclude=".\SharedMemory\obj\**\*.*" target="src" />
     </files>
 </package>
