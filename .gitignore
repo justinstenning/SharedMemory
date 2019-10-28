@@ -23,3 +23,6 @@ TestResults*/
 *.nupkg
 /.vs/SharedMemory
 /nuget.exe
+/.vs/ProjectSettings.json
+/.vs/slnx.sqlite
+/.vs/VSWorkspaceState.json
