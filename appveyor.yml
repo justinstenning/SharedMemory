@@ -11,7 +11,11 @@ platform: Any CPU
 shallow_clone: true
 build_script:
 - cmd: >-
+    dotnet build -f netstandard2.1 -v m /p:Version=%APPVEYOR_BUILD_VERSION% .\SharedMemory\SharedMemory.csproj
+
     dotnet build -f netstandard2.0 -v m /p:Version=%APPVEYOR_BUILD_VERSION% .\SharedMemory\SharedMemory.csproj
+
+    dotnet build -f netcoreapp3.0 -v m /p:Version=%APPVEYOR_BUILD_VERSION% .\SharedMemory.Tests\SharedMemory.Tests.csproj
 
     dotnet build -f netcoreapp2.0 -v m /p:Version=%APPVEYOR_BUILD_VERSION% .\SharedMemory.Tests\SharedMemory.Tests.csproj
 
@@ -24,7 +28,6 @@ build_script:
     msbuild .\SharedMemory\SharedMemory.csproj /verbosity:m /p:TargetFramework=net4 /p:Version=%APPVEYOR_BUILD_VERSION%
 
     msbuild .\SharedMemory\SharedMemory.csproj /verbosity:m /p:TargetFramework=net35 /p:Version=%APPVEYOR_BUILD_VERSION%
-
 
     nuget pack SharedMemory.nuspec -Symbols -Version %APPVEYOR_BUILD_VERSION%
 artifacts:

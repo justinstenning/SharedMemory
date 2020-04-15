@@ -16,14 +16,15 @@ It features:
  * a simple fixed-size generic shared memory array class
  * a bi-directional RPC implementation (.NET 4.5+ / .NET Standard 2.0+ only)
  * an implementation of a shared memory buffer for read/write.
- * support for memory-mapped files in .NET 3.5/4/4.5 and .NET Standard 2.0
+ * support for memory-mapped files in .NET 3.5/4/4.5 and .NET Standard 2.0+
  * fast generic structure reading/writing
 
 Usage: https://github.com/spazzarama/SharedMemory</description>
         <summary>Shared memory classes for sharing data between processes (Array, Buffer, Circular Buffer and RPC Buffer)</summary>
         <releaseNotes>$version$
-1. Added bi-directional RPC implementation (RpcBuffer) for .NET 4.5+ / .NET Standard 2.0
+1. Added bi-directional RPC implementation (RpcBuffer) for .NET 4.5+ / .NET Standard 2.0+
 1. Added CopyTo/ToBytes/FromBytes/ReadBytes/WriteBytes to FastStructure
+1. Added .NET Standard 2.1 build
 </releaseNotes>
         <copyright>Copyright (c) 2014-2020 Justin Stenning</copyright>
         <tags>IPC RPC memory mapped file shared data circular ring buffer</tags>
@@ -34,7 +35,10 @@ Usage: https://github.com/spazzarama/SharedMemory</description>
           <group targetFramework=".NETFramework4.6" />
           <group targetFramework=".NETFramework4.7" />
           <group targetFramework=".NETStandard2.0">
-              <dependency id="System.Reflection.Emit.Lightweight" version="4.3.0" />
+              <dependency id="System.Reflection.Emit.Lightweight" version="4.7.0" />
+          </group>
+          <group targetFramework=".NETStandard2.1">
+              <dependency id="System.Reflection.Emit.Lightweight" version="4.7.0" />
           </group>
         </dependencies>     
     </metadata>
@@ -57,6 +61,9 @@ Usage: https://github.com/spazzarama/SharedMemory</description>
         <file src=".\bin\Release\netstandard2.0\SharedMemory.dll" target="lib\netstandard2.0" />
         <file src=".\bin\Release\netstandard2.0\SharedMemory.pdb" target="lib\netstandard2.0" />
         <file src=".\bin\Release\netstandard2.0\SharedMemory.xml" target="lib\netstandard2.0" />
+        <file src=".\bin\Release\netstandard2.1\SharedMemory.dll" target="lib\netstandard2.1" />
+        <file src=".\bin\Release\netstandard2.1\SharedMemory.pdb" target="lib\netstandard2.1" />
+        <file src=".\bin\Release\netstandard2.1\SharedMemory.xml" target="lib\netstandard2.1" />
         <file src=".\SharedMemory\**\*.cs" exclude=".\SharedMemory\obj\**\*.*" target="src" />
     </files>
 </package>
