@@ -145,7 +145,7 @@ namespace SharedMemoryTests
             });
 
             // Send request to master from slave
-            var result = ipcSlave.RemoteRequest(null, 500);
+            var result = ipcSlave.RemoteRequest(null);
             Assert.IsTrue(result.Success);
             Assert.AreEqual((3 * 3), result.Data[0]);
         }
