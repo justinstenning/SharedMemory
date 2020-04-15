@@ -11,7 +11,7 @@
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <Company />
     <Authors>Justin Stenning</Authors>
-    <Copyright>Copyright (c) 2018 Justin Stenning</Copyright>
+    <Copyright>Copyright (c) 2020 Justin Stenning</Copyright>
   </PropertyGroup>
 
   <PropertyGroup Condition=" '$(TargetFramework)' == 'netstandard2.0'">
@@ -40,8 +40,12 @@
 
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
     <PackageReference Include="System.Reflection.Emit.Lightweight">
-      <Version>4.3.0</Version>
+      <Version>4.7.0</Version>
     </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup Condition=" '$(TargetFramework)' == 'net4' or '$(TargetFramework)' == 'net35'">
+    <Compile Remove="RpcBuffer.cs" />
   </ItemGroup>
 
 </Project>

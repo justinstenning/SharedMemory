@@ -87,6 +87,66 @@ namespace SharedMemory
         }
 
         /// <summary>
+        /// Copy bytes of structure into the existing buffer at index
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="structure"></param>
+        /// <param name="buffer"></param>
+        /// <param name="startIndex"></param>
+        /// <returns></returns>
+        public static unsafe void CopyTo<T>(ref T structure, byte[] buffer, int startIndex = 0)
+            where T : struct
+        {
+            if (buffer == null)
+                throw new ArgumentNullException("buffer");
+            if (startIndex > buffer.Length || startIndex < 0)
+                throw new ArgumentOutOfRangeException("startIndex");
+
+            fixed (byte* p = &buffer[startIndex])
+            {
+                StructureToPtr<T>(ref structure, new IntPtr(p));
+            }
+        }
+
+        /// <summary>
+        /// Return a byte[] for the provided structure
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="structure"></param>
+        /// <returns></returns>
+        public static unsafe byte[] ToBytes<T>(ref T structure)
+            where T : struct
+        {
+            byte[] result = new byte[FastStructure<T>.Size];
+            fixed (byte* p = &result[0])
+            {
+                StructureToPtr<T>(ref structure, new IntPtr(p));
+                return result;
+            }
+        }
+
+        /// <summary>
+        /// Read structure from the provided byte array
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="buffer"></param>
+        /// <param name="startIndex"></param>
+        /// <returns></returns>
+        public static unsafe T FromBytes<T>(byte[] buffer, int startIndex = 0)
+            where T : struct
+        {
+            if (buffer == null)
+                throw new ArgumentNullException("buffer");
+            if (startIndex > buffer.Length || startIndex < 0)
+                throw new ArgumentOutOfRangeException("startIndex");
+
+            fixed (byte* p = &buffer[startIndex])
+            {
+                return PtrToStructure<T>(new IntPtr(p));
+            }
+        }
+
+        /// <summary>
         /// Retrieve the cached size of a structure
         /// </summary>
         /// <typeparam name="T"></typeparam>
@@ -131,6 +191,38 @@ namespace SharedMemory
         }
 
         /// <summary>
+        /// Reads a number of elements from a memory location into the provided buffer starting at the specified index.
+        /// </summary>
+        /// <param name="buffer">The destination buffer.</param>
+        /// <param name="source">The source memory location.</param>
+        /// <param name="index">The start index within <paramref name="buffer"/>.</param>
+        /// <param name="count">The number of elements to read.</param>
+        public static unsafe void ReadBytes(byte[] buffer, IntPtr source, int index, int count)
+        {
+            uint elementSize = sizeof(byte);
+
+            if (buffer == null)
+                throw new ArgumentNullException("buffer");
+            if (count < 0)
+                throw new ArgumentOutOfRangeException("count");
+            if (index < 0)
+                throw new ArgumentOutOfRangeException("index");
+            if (buffer.Length - index < count)
+                throw new ArgumentException("Invalid offset into array specified by index and count");
+
+            void* ptr = source.ToPointer();
+
+            fixed (byte* p = &buffer[0])
+            {
+#if NETCORE
+                Buffer.MemoryCopy(ptr, p + (index * elementSize), elementSize * count, elementSize * count);
+#else
+                UnsafeNativeMethods.CopyMemoryPtr(p + (index * elementSize), ptr, (uint)(elementSize * count));
+#endif
+            }
+        }
+
+        /// <summary>
         /// Writes a number of elements to a memory location from the provided buffer starting at the specified index.
         /// </summary>
         /// <typeparam name="T">The structure type</typeparam>
@@ -159,6 +251,37 @@ namespace SharedMemory
 #else
             UnsafeNativeMethods.CopyMemoryPtr(ptr, p + (index * elementSize), (uint)(elementSize * count));
 #endif
+        }
+
+        /// <summary>
+        /// Writes a number of elements to a memory location from the provided buffer starting at the specified index.
+        /// </summary>
+        /// <param name="destination">The destination memory location.</param>
+        /// <param name="buffer">The source buffer.</param>
+        /// <param name="index">The start index within <paramref name="buffer"/>.</param>
+        /// <param name="count">The number of elements to write.</param>
+        public static unsafe void WriteBytes(IntPtr destination, byte[] buffer, int index, int count)
+        {
+            uint elementSize = sizeof(byte);
+
+            if (buffer == null)
+                throw new ArgumentNullException("buffer");
+            if (count < 0)
+                throw new ArgumentOutOfRangeException("count");
+            if (index < 0)
+                throw new ArgumentOutOfRangeException("index");
+            if (buffer.Length - index < count)
+                throw new ArgumentException("Invalid offset into array specified by index and count");
+
+            void* ptr = destination.ToPointer();
+            fixed (byte* p = &buffer[0])
+            {
+#if NETCORE
+                Buffer.MemoryCopy(p + (index * elementSize), ptr, elementSize * count, elementSize * count);
+#else
+                UnsafeNativeMethods.CopyMemoryPtr(ptr, p + (index * elementSize), (uint)(elementSize * count));
+#endif
+            }
         }
     }
 
