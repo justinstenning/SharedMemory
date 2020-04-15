@@ -43,7 +43,3 @@ artifacts:
   name: RpcTest.exe
 - path: '**\*.nupkg'
   name: NuGet
-deploy:
-- provider: NuGet
-  api_key:
-    secure: lzLhnmcqXXatN+eGI5hduxqPgUt1dK1LuLhozPv47Xvif+Qk7YRaE985XpSjEVDw
