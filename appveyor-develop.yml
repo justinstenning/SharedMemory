@@ -1,0 +1,45 @@
+version: 2.2.{build}
+pull_requests:
+  do_not_increment_build_number: true
+branches:
+  only:
+  - master
+skip_tags: true
+image: Visual Studio 2019
+configuration: Release
+platform: Any CPU
+shallow_clone: true
+build_script:
+- cmd: >-
+    dotnet build -f netstandard2.1 -v m /p:Version=%APPVEYOR_BUILD_VERSION% .\SharedMemory\SharedMemory.csproj
+
+    dotnet build -f netstandard2.0 -v m /p:Version=%APPVEYOR_BUILD_VERSION% .\SharedMemory\SharedMemory.csproj
+
+    dotnet build -f netcoreapp3.0 -v m /p:Version=%APPVEYOR_BUILD_VERSION% .\SharedMemory.Tests\SharedMemory.Tests.csproj
+
+    dotnet build -f netcoreapp2.0 -v m /p:Version=%APPVEYOR_BUILD_VERSION% .\SharedMemory.Tests\SharedMemory.Tests.csproj
+
+    dotnet build -f net47 -v m /p:Version=%APPVEYOR_BUILD_VERSION%
+
+    dotnet build -f net46 -v m /p:Version=%APPVEYOR_BUILD_VERSION%
+
+    dotnet build -f net45 -v m /p:Version=%APPVEYOR_BUILD_VERSION%
+
+    msbuild .\SharedMemory\SharedMemory.csproj /verbosity:m /p:TargetFramework=net4 /p:Version=%APPVEYOR_BUILD_VERSION%
+
+    msbuild .\SharedMemory\SharedMemory.csproj /verbosity:m /p:TargetFramework=net35 /p:Version=%APPVEYOR_BUILD_VERSION%
+
+    nuget pack SharedMemory.nuspec -Symbols -Version %APPVEYOR_BUILD_VERSION%
+artifacts:
+- path: bin\Release\net47\SharedMemory.dll
+  name: SharedMemory.dll
+- path: Examples\SingleProcess\bin\Release\net47\SingleProcess.exe
+  name: SingleProcess.exe
+- path: Examples\ClientTest\bin\Release\net47\ClientTest.exe
+  name: ClientTest.exe
+- path: Examples\ServerTest\bin\Release\net47\ServerTest.exe
+  name: ServerTest.exe
+- path: Examples\RpcTest\bin\Release\net47\RpcTest.exe
+  name: RpcTest.exe
+- path: '**\*.nupkg'
+  name: NuGet

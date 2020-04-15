@@ -1,6 +1,6 @@
 SharedMemory
 
-Copyright (c) 2014 Justin Stenning
+Copyright (c) 2014-2020 Justin Stenning
 http://spazzarama.com
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

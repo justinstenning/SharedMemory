@@ -9,50 +9,25 @@
         <licenseUrl>https://github.com/spazzarama/SharedMemory/blob/master/LICENSE.md</licenseUrl>
         <projectUrl>https://github.com/spazzarama/SharedMemory</projectUrl>
         <requireLicenseAcceptance>true</requireLicenseAcceptance>
-        <description>The SharedMemory class library provides a set of C# classes that utilise a memory-mapped file for fast low-level inter-process communication (IPC) - specifically for sharing data between processes.
+        <description>The SharedMemory library provides a set of C# classes that utilise a memory-mapped file for fast low-level inter-process communication (IPC) - specifically for sharing data between processes.
 
 It features:
  * a lock-free FIFO circular buffer
  * a simple fixed-size generic shared memory array class
+ * a bi-directional RPC implementation (.NET 4.5+ / .NET Standard 2.0+ only)
  * an implementation of a shared memory buffer for read/write.
- * support for memory-mapped files in .NET 3.5/4/4.5 and .NET Core 2.0
+ * support for memory-mapped files in .NET 3.5/4/4.5 and .NET Standard 2.0+
  * fast generic structure reading/writing
 
-Usage: http://sharedmemory.codeplex.com/documentation</description>
-        <summary>Shared memory classes for sharing data between processes (Array, Buffer and Circular Buffer)</summary>
+Usage: https://github.com/spazzarama/SharedMemory</description>
+        <summary>Shared memory classes for sharing data between processes (Array, Buffer, Circular Buffer and RPC Buffer)</summary>
         <releaseNotes>$version$
-1. Changed from .NET Core 2 target to .NET Standard 2.0 - this requires a new NuGet dependency to support DynamicMethod
-1. Added 4.6/4.7 targets
-
-2.1.0
-1. Add .NET Core 2 target and update to use dotnet project files (VS2017) (#29)
-        
-2.0.16
-1. Prevent possible deadlock situation with incorrect Acquire and Release of read/write locks in BufferWithLocks (affects BufferReadWrite and SharedArray).
-
-2.0.15
-1. Breaking change: Array, Buffer, and Header classes renamed to SharedArray, SharedBuffer, and SharedHeader
-2. Important breaking change! CircularBuffer Read/Write operations now allow an index to be specified. Check existing code as it may be passing a timeout value into index!
-3. Circular buffer keeps track of amount written to a node and uses this during read operations
-4. SharedArray implements IList
-5. ArraySlice implementation added
-6. FastStructure now performs type compatibility check within static constructor
-7. A couple of bug fixes
-8. A number of unit test fixes, minor corrections to comments and changes to make parameter names consistent
-
-1.1.4
-1. Implemented basic memory-mapped file support for .NET 3.5
-2. Added generic FastStructure class for fast reading/writing of structures (using emitted IL with DynamicMethod)
-3. Fixed offset bug in CircularBuffer.Read/Write(IntPtr, int, int)
-
-1.0.1:
-1. Improved usage consistency by changing Buffer.Open to protected (breaking change)
-2. BufferReadWrite now opens buffer in constructor
-3. CircularBuffer now opens in constructor
-4. Added read/write single structure overloads to CircularBuffer
-5. Added XML documentation to NuGet package</releaseNotes>
-        <copyright>Copyright (c) 2014 Justin Stenning</copyright>
-        <tags>IPC memory mapped file shared data circular ring buffer</tags>
+1. Added bi-directional RPC implementation (RpcBuffer) for .NET 4.5+ / .NET Standard 2.0+
+1. Added CopyTo/ToBytes/FromBytes/ReadBytes/WriteBytes to FastStructure
+1. Added .NET Standard 2.1 build
+</releaseNotes>
+        <copyright>Copyright (c) 2014-2020 Justin Stenning</copyright>
+        <tags>IPC RPC memory mapped file shared data circular ring buffer</tags>
         <dependencies>
           <group targetFramework=".NETFramework3.5" />
           <group targetFramework=".NETFramework4.0" />
@@ -60,17 +35,20 @@ Usage: http://sharedmemory.codeplex.com/documentation</description>
           <group targetFramework=".NETFramework4.6" />
           <group targetFramework=".NETFramework4.7" />
           <group targetFramework=".NETStandard2.0">
-              <dependency id="System.Reflection.Emit.Lightweight" version="4.3.0" />
+              <dependency id="System.Reflection.Emit.Lightweight" version="4.7.0" />
+          </group>
+          <group targetFramework=".NETStandard2.1">
+              <dependency id="System.Reflection.Emit.Lightweight" version="4.7.0" />
           </group>
         </dependencies>     
     </metadata>
     <files>
-        <file src=".\bin\Release\Net45\SharedMemory.dll" target="lib\net47" />
-        <file src=".\bin\Release\Net45\SharedMemory.pdb" target="lib\net47" />
-        <file src=".\bin\Release\Net45\SharedMemory.xml" target="lib\net47" />
-        <file src=".\bin\Release\Net45\SharedMemory.dll" target="lib\net46" />
-        <file src=".\bin\Release\Net45\SharedMemory.pdb" target="lib\net46" />
-        <file src=".\bin\Release\Net45\SharedMemory.xml" target="lib\net46" />	
+        <file src=".\bin\Release\Net47\SharedMemory.dll" target="lib\net47" />
+        <file src=".\bin\Release\Net47\SharedMemory.pdb" target="lib\net47" />
+        <file src=".\bin\Release\Net47\SharedMemory.xml" target="lib\net47" />
+        <file src=".\bin\Release\Net46\SharedMemory.dll" target="lib\net46" />
+        <file src=".\bin\Release\Net46\SharedMemory.pdb" target="lib\net46" />
+        <file src=".\bin\Release\Net46\SharedMemory.xml" target="lib\net46" />	
         <file src=".\bin\Release\Net45\SharedMemory.dll" target="lib\net45" />
         <file src=".\bin\Release\Net45\SharedMemory.pdb" target="lib\net45" />
         <file src=".\bin\Release\Net45\SharedMemory.xml" target="lib\net45" />
@@ -83,6 +61,9 @@ Usage: http://sharedmemory.codeplex.com/documentation</description>
         <file src=".\bin\Release\netstandard2.0\SharedMemory.dll" target="lib\netstandard2.0" />
         <file src=".\bin\Release\netstandard2.0\SharedMemory.pdb" target="lib\netstandard2.0" />
         <file src=".\bin\Release\netstandard2.0\SharedMemory.xml" target="lib\netstandard2.0" />
+        <file src=".\bin\Release\netstandard2.1\SharedMemory.dll" target="lib\netstandard2.1" />
+        <file src=".\bin\Release\netstandard2.1\SharedMemory.pdb" target="lib\netstandard2.1" />
+        <file src=".\bin\Release\netstandard2.1\SharedMemory.xml" target="lib\netstandard2.1" />
         <file src=".\SharedMemory\**\*.cs" exclude=".\SharedMemory\obj\**\*.*" target="src" />
     </files>
 </package>
