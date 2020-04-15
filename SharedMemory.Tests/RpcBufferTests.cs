@@ -204,7 +204,6 @@ namespace SharedMemoryTests
 
             Assert.IsTrue(watch.ElapsedMilliseconds < 2000);
         }
-#endif
 
         [TestMethod]
         public void RPC_LoadTest_NestedCalls()
@@ -232,6 +231,7 @@ namespace SharedMemoryTests
 
             Assert.IsTrue(watch.ElapsedMilliseconds < 1000);
         }
+#endif
 
         [TestMethod]
         public void RPC_SlaveCallsMasterAfterClosed_Exception()
