@@ -26,3 +26,7 @@ TestResults*/
 /.vs/ProjectSettings.json
 /.vs/slnx.sqlite
 /.vs/VSWorkspaceState.json
+
+# JetBrains Rider
+.idea/
+*.sln.iml

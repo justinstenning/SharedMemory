@@ -50,6 +50,83 @@ namespace SharedMemory
         V1 = 1
     }
 
+
+    public static class ResponseTaskHelper
+    {
+        public static Task<RpcResponse> TimeoutAfter(this Task<RpcResponse> task, int millisecondsTimeout)
+        {
+            // Short-circuit #1: infinite timeout or task already completed
+            if (task.IsCompleted || (millisecondsTimeout == Timeout.Infinite))
+            {
+                // Either the task has already completed or timeout will never occur.
+                // No proxy necessary.
+                return task;
+            }
+
+            // tcs.Task will be returned as a proxy to the caller
+            TaskCompletionSource<RpcResponse> tcs = 
+                new TaskCompletionSource<RpcResponse>();
+
+            // Short-circuit #2: zero timeout
+            if (millisecondsTimeout == 0)
+            {
+                // We've already timed out.
+                tcs.TrySetResult(new RpcResponse(false, null));
+                return tcs.Task;
+            }
+
+            // Set up a timer to complete after the specified timeout period
+            Timer timer = new Timer(state => 
+            {
+                // Recover your state information
+                var myTcs = (TaskCompletionSource<RpcResponse>)state;
+
+                // Fault our proxy with a TimeoutException
+                myTcs.TrySetResult(new RpcResponse(false, null));
+                
+            }, tcs, millisecondsTimeout, Timeout.Infinite);
+
+            // Wire up the logic for what happens when source task completes
+            task.ContinueWith((antecedent, state) =>
+                {
+                    // Recover our state data
+                    var tuple = 
+                        (Tuple<Timer, TaskCompletionSource<RpcResponse>>)state;
+
+                    // Cancel the Timer
+                    tuple.Item1.Dispose();
+
+                    // Marshal results to proxy
+                    MarshalTaskResults(antecedent, tuple.Item2);
+                }, 
+                Tuple.Create(timer, tcs),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            return tcs.Task;
+        }
+        
+        internal static void MarshalTaskResults<TResult>(Task source, TaskCompletionSource<TResult> proxy)
+        {
+            switch (source.Status)
+            {
+                case TaskStatus.Faulted:
+                    proxy.TrySetException(source.Exception);
+                    break;
+                case TaskStatus.Canceled:
+                    proxy.TrySetCanceled();
+                    break;
+                case TaskStatus.RanToCompletion:
+                    Task<TResult> castedSource = source as Task<TResult>;
+                    proxy.TrySetResult(
+                        castedSource == null ? default(TResult) : // source is a Task
+                            castedSource.Result); // source is a Task<TResult>
+                    break;
+            }
+        }
+    }
+    
     /// <summary>
     /// The RPC message type
     /// </summary>
@@ -121,7 +198,7 @@ namespace SharedMemory
         /// <summary>
         /// A wait event that is signaled when a response is ready
         /// </summary>
-        public ManualResetEvent ResponseReady { get; } = new ManualResetEvent(false);
+        public TaskCompletionSource<RpcResponse> ResponseReady { get; } = new TaskCompletionSource<RpcResponse>();
         /// <summary>
         /// Was the request successful
         /// </summary>
@@ -588,7 +665,8 @@ namespace SharedMemory
 
             this.msgBufferLength = Convert.ToInt32(this.bufferCapacity) - protocolLength;
 
-            Task.Run(() =>
+            
+            Task readTask = new Task(() =>
             {
                 switch (protocolVersion)
                 {
@@ -596,7 +674,9 @@ namespace SharedMemory
                         ReadThreadV1();
                         break;
                 }
-            });
+            }, TaskCreationOptions.LongRunning);
+            
+            readTask.Start();
         }
 
         object mutex = new object();
@@ -630,28 +710,8 @@ namespace SharedMemory
             ThrowIfDisposedOrShutdown();
 
             var request = CreateMessageRequest();
-            var t = new Task(async () =>
-            {
-                await SendMessage(request, args, timeoutMs).ConfigureAwait(false);
-            });
-            t.Start();
-            
-            if (!request.ResponseReady.WaitOne(timeoutMs))
-            {
-                // Timed out
-                if (request.IsSuccess)
-                {
-                    return new RpcResponse(request.IsSuccess, request.Data);
-                }
-                else
-                {
-                    return new RpcResponse(false, null);
-                }
-            }
-            else
-            {
-                return new RpcResponse(request.IsSuccess, request.Data);
-            }
+            Task<RpcResponse> sendMessage = SendMessage(request, args, timeoutMs);
+            return sendMessage.Result;
         }
 
         /// <summary>
@@ -682,11 +742,10 @@ namespace SharedMemory
         /// <param name="request"></param>
         /// <param name="payload"></param>
         /// <param name="responseMsgId"></param>
-        /// <param name="timeout"></param>
         /// <returns></returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        protected virtual async Task<RpcResponse> SendMessage(MessageType msgType, RpcRequest request, byte[] payload, ulong responseMsgId = 0, int timeout = defaultTimeoutMs)
+        protected virtual Task<RpcResponse> SendMessage(MessageType msgType, RpcRequest request, byte[] payload, ulong responseMsgId = 0, int timeout = defaultTimeoutMs)
         {
             ThrowIfDisposedOrShutdown();
 
@@ -705,7 +764,7 @@ namespace SharedMemory
                     break;
                 default:
                     // Invalid protocol
-                    return new RpcResponse(false, null);
+                    return Task.FromResult(new RpcResponse(false, null));
             }
 
             if (success)
@@ -715,33 +774,35 @@ namespace SharedMemory
 
             if (success && msgType == MessageType.RpcRequest)
             {
-                RpcResponse result = new RpcResponse(true, null);
 
                 if (request != null)
                 {
-                    await Task.Run(() =>
-                    {
-                        if (!request.ResponseReady.WaitOne(timeout))
-                        {
-                            result = new RpcResponse(false, null);
-                        }
-                        else
-                        {
-                            result = new RpcResponse(request.IsSuccess, request.Data);
-                        }
-                    }).ConfigureAwait(false);
+
+                    if (timeout == 0)
+                        return Task.FromResult(new RpcResponse(false, null));
+                    
+                    if (timeout == Timeout.Infinite)
+                        return request.ResponseReady.Task;
+
+
+                    return request.ResponseReady.Task.TimeoutAfter(timeout);
+                }
+                else
+                {
+                    return Task.FromResult(new RpcResponse(true, null));    
                 }
 
-                return result;
             }
             else
             {
+                RpcResponse rpcResponse = new RpcResponse(success, null);
+
                 if (request != null)
                 {
                     request.IsSuccess = success;
-                    request.ResponseReady.Set();
+                    request.ResponseReady.SetResult(rpcResponse);
                 }
-                return new RpcResponse(success, null);
+                return Task.FromResult(rpcResponse);
             }
         }
 
@@ -829,6 +890,9 @@ namespace SharedMemory
 
             return true;
         }
+        
+        
+        
 
         void ReadThreadV1()
         {
@@ -891,26 +955,27 @@ namespace SharedMemory
                         }
 
                         // Full message is ready
-                        var watching = Stopwatch.StartNew();
-                        Task.Run(async () =>
-                        {
-                            Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
+                        
+                        Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
 
-                            if (header.MsgType == MessageType.RpcResponse)
-                            {
-                                request.IsSuccess = true;
-                                request.ResponseReady.Set();
-                            }
-                            else if (header.MsgType == MessageType.ErrorInRpc)
-                            {
-                                request.IsSuccess = false;
-                                request.ResponseReady.Set();
-                            }
-                            else if (header.MsgType == MessageType.RpcRequest)
+                        if (header.MsgType == MessageType.RpcResponse)
+                        {
+                            request.IsSuccess = true;
+                            request.ResponseReady.SetResult(new RpcResponse(request.IsSuccess, request.Data));
+                        }
+                        else if (header.MsgType == MessageType.ErrorInRpc)
+                        {
+                            request.IsSuccess = false;
+                            request.ResponseReady.SetResult(new RpcResponse(request.IsSuccess, request.Data));
+                        }
+                        else if (header.MsgType == MessageType.RpcRequest)
+                        {
+                            // For Handling Request we create an new Task because this can take sometime
+                            Task.Run(async () =>
                             {
                                 await ProcessCallHandler(request).ConfigureAwait(false);
-                            }
-                        });
+                            });    
+                        }
                     }
 
                     Statistics.ReadPacket(packetSize);
@@ -992,6 +1057,10 @@ namespace SharedMemory
 
             if (disposeManagedResources)
             {
+                // Mark as Disposed first otherwise ReadThread has NullPointerException because
+                // ReadBuffer is already null but Disposed is false
+                Disposed = true;
+                
                 if (WriteBuffer != null)
                 {
                     WriteBuffer.Dispose();
@@ -1010,8 +1079,6 @@ namespace SharedMemory
                     masterMutex.Dispose();
                     masterMutex = null;
                 }
-
-                Disposed = true;
             }
         }
 
