@@ -64,7 +64,7 @@ namespace SharedMemory
             }
 
             // tcs.Task will be returned as a proxy to the caller
-            TaskCompletionSource<RpcResponse> tcs = 
+            TaskCompletionSource<RpcResponse> tcs =
                 new TaskCompletionSource<RpcResponse>();
 
             // Short-circuit #2: zero timeout
@@ -76,21 +76,21 @@ namespace SharedMemory
             }
 
             // Set up a timer to complete after the specified timeout period
-            Timer timer = new Timer(state => 
+            Timer timer = new Timer(state =>
             {
                 // Recover your state information
                 var myTcs = (TaskCompletionSource<RpcResponse>)state;
 
                 // Fault our proxy with a TimeoutException
                 myTcs.TrySetResult(new RpcResponse(false, null));
-                
+
             }, tcs, millisecondsTimeout, Timeout.Infinite);
 
             // Wire up the logic for what happens when source task completes
             task.ContinueWith((antecedent, state) =>
                 {
                     // Recover our state data
-                    var tuple = 
+                    var tuple =
                         (Tuple<Timer, TaskCompletionSource<RpcResponse>>)state;
 
                     // Cancel the Timer
@@ -98,7 +98,7 @@ namespace SharedMemory
 
                     // Marshal results to proxy
                     MarshalTaskResults(antecedent, tuple.Item2);
-                }, 
+                },
                 Tuple.Create(timer, tcs),
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
@@ -106,7 +106,7 @@ namespace SharedMemory
 
             return tcs.Task;
         }
-        
+
         internal static void MarshalTaskResults<TResult>(Task source, TaskCompletionSource<TResult> proxy)
         {
             switch (source.Status)
@@ -126,11 +126,11 @@ namespace SharedMemory
             }
         }
     }
-    
+
     /// <summary>
     /// The RPC message type
     /// </summary>
-    public enum MessageType: byte
+    public enum MessageType : byte
     {
         /// <summary>
         /// A request message
@@ -229,7 +229,7 @@ namespace SharedMemory
         /// If the request was successful
         /// </summary>
         public bool Success { get; set; }
-        
+
         /// <summary>
         /// The returned result (if applicable)
         /// </summary>
@@ -413,7 +413,7 @@ namespace SharedMemory
             ReadingLastMessageSize = size;
             switch (msgType)
             {
-                case MessageType.RpcRequest: 
+                case MessageType.RpcRequest:
                     RequestsReceived++;
                     break;
                 case MessageType.RpcResponse:
@@ -491,7 +491,7 @@ namespace SharedMemory
     {
         private Mutex masterMutex;
         private long _disposed = 0;
-        
+
         /// <summary>
         /// Whether the RpcBuffer has been disposed
         /// </summary>
@@ -554,7 +554,7 @@ namespace SharedMemory
         /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
-            this (name, bufferCapacity, protocolVersion, bufferNodeCount)
+            this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
             RemoteCallHandler = remoteCallHandler;
         }
@@ -665,7 +665,7 @@ namespace SharedMemory
 
             this.msgBufferLength = Convert.ToInt32(this.bufferCapacity) - protocolLength;
 
-            
+
             Task readTask = new Task(() =>
             {
                 switch (protocolVersion)
@@ -675,7 +675,7 @@ namespace SharedMemory
                         break;
                 }
             }, TaskCreationOptions.LongRunning);
-            
+
             readTask.Start();
         }
 
@@ -750,7 +750,7 @@ namespace SharedMemory
             ThrowIfDisposedOrShutdown();
 
             var msgId = request.MsgId;
-            
+
             if (msgType == MessageType.RpcRequest)
             {
                 Requests[request.MsgId] = request;
@@ -780,7 +780,7 @@ namespace SharedMemory
 
                     if (timeout == 0)
                         return Task.FromResult(new RpcResponse(false, null));
-                    
+
                     if (timeout == Timeout.Infinite)
                         return request.ResponseReady.Task;
 
@@ -789,7 +789,7 @@ namespace SharedMemory
                 }
                 else
                 {
-                    return Task.FromResult(new RpcResponse(true, null));    
+                    return Task.FromResult(new RpcResponse(true, null));
                 }
 
             }
@@ -838,7 +838,7 @@ namespace SharedMemory
                     }
 
                     pMsg = new byte[left > msgBufferLength ? msgBufferLength + protocolLength : left + protocolLength];
-                    
+
                     // Writing protocol header
                     var header = new RpcProtocolHeaderV1
                     {
@@ -890,13 +890,13 @@ namespace SharedMemory
 
             return true;
         }
-        
-        
-        
+
+
+
 
         void ReadThreadV1()
         {
-            while(true && !ReadBuffer.ShuttingDown)
+            while (true && !ReadBuffer.ShuttingDown)
             {
                 if (Interlocked.Read(ref _disposed) == 1)
                     return;
@@ -955,7 +955,7 @@ namespace SharedMemory
                         }
 
                         // Full message is ready
-                        
+
                         Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
 
                         if (header.MsgType == MessageType.RpcResponse)
@@ -973,8 +973,16 @@ namespace SharedMemory
                             // For Handling Request we create an new Task because this can take sometime
                             Task.Run(async () =>
                             {
-                                await ProcessCallHandler(request).ConfigureAwait(false);
-                            });    
+                                try
+                                {
+                                    await ProcessCallHandler(request).ConfigureAwait(false);
+                                }
+                                catch
+                                {
+                                    // Ignore exceptions because either the other side of the rpc buffers may 
+                                    // not know if this Buffer is shutting down or disposed
+                                }
+                            });
                         }
                     }
 
@@ -1060,7 +1068,7 @@ namespace SharedMemory
                 // Mark as Disposed first otherwise ReadThread has NullPointerException because
                 // ReadBuffer is already null but Disposed is false
                 Disposed = true;
-                
+
                 if (WriteBuffer != null)
                 {
                     WriteBuffer.Dispose();
@@ -1082,6 +1090,6 @@ namespace SharedMemory
             }
         }
 
-#endregion
+        #endregion
     }
 }
