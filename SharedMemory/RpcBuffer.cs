@@ -977,10 +977,15 @@ namespace SharedMemory
                                 {
                                     await ProcessCallHandler(request).ConfigureAwait(false);
                                 }
-                                catch
+                                catch(Exception ex)
                                 {
-                                    // Ignore exceptions because either the other side of the rpc buffers may 
+                                    // Ignore Object Disposed and Invalid Operation Exceptions
+                                    // because the other side of the rpc buffers may 
                                     // not know if this Buffer is shutting down or disposed
+                                    if (!(ex is ObjectDisposedException || ex is InvalidOperationException))
+                                    {
+                                        throw;
+                                    }                               
                                 }
                             });
                         }
