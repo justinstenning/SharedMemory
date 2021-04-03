@@ -499,11 +499,15 @@ namespace SharedMemory
         {
             get
             {
-                return Interlocked.Read(ref _disposed) == 1;
+                return Interlocked.Read(ref _disposed) != 0;
             }
-            private set
+        }
+
+        public bool DisposeFinished
+        {
+            get
             {
-                Interlocked.Exchange(ref _disposed, value ? 1 : 0);
+                return Interlocked.Read(ref _disposed) == 2;
             }
         }
 
@@ -890,130 +894,202 @@ namespace SharedMemory
 
             return true;
         }
-        
-        
-        
+
+        private Boolean m_ReadThreadIsReading = false;
+        private object m_ReadThreadIsReadingLock = new object();
+
+
 
         void ReadThreadV1()
         {
-            while(true && !ReadBuffer.ShuttingDown)
+            try
             {
-                if (Interlocked.Read(ref _disposed) == 1)
-                    return;
+                // Work with Local Variable to prefent NPE after dispose  
+                CircularBuffer l_TempReadBuffer = ReadBuffer;
 
-                Statistics.StartWaitRead();
-
-                ReadBuffer.Read((ptr) =>
+                while (true && !l_TempReadBuffer.ShuttingDown)
                 {
-                    int readLength = 0;
-                    var header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
-                    ptr = ptr + protocolLength;
-                    readLength += protocolLength;
+                    if (Interlocked.Read(ref _disposed) == 1)
+                        return;
 
-                    RpcRequest request = null;
-                    if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
+                    // Check If Reading must be stopped
+                    if (_needDisposeManagedResources)
                     {
-                        if (!Requests.TryGetValue(header.ResponseId, out request))
-                        {
-                            // The response received does not have a  matching message that was sent
-                            Statistics.DiscardResponse(header.ResponseId);
-                            return protocolLength;
-                        }
-                    }
-                    else
-                    {
-                        request = IncomingRequests.GetOrAdd(header.MsgId, new RpcRequest
-                        {
-                            MsgId = header.MsgId
-                        });
+                        DisposeManagedResources();
+                        return;
                     }
 
-                    int packetSize = header.PayloadSize < msgBufferLength ? header.PayloadSize :
-                        (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize % msgBufferLength);
-
-                    if (header.PayloadSize > 0)
+                    // Set Marker for Reading in Progress
+                    lock (m_ReadThreadIsReadingLock)
                     {
-                        if (request.Data == null)
-                        {
-                            request.Data = new byte[header.PayloadSize];
-                        }
-
-                        int index = msgBufferLength * (header.CurrentPacket - 1);
-                        FastStructure.ReadBytes(request.Data, ptr, index, packetSize);
-                        readLength += packetSize;
+                        m_ReadThreadIsReading = true;
                     }
 
-                    if (header.CurrentPacket == header.TotalPackets)
+                    try
                     {
-                        if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
-                        {
-                            Requests.TryRemove(request.MsgId, out RpcRequest removed);
-                        }
-                        else
-                        {
-                            IncomingRequests.TryRemove(request.MsgId, out RpcRequest removed);
-                        }
+                        Statistics.StartWaitRead();
 
-                        // Full message is ready
-                        
-                        Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
+                        l_TempReadBuffer.Read((ptr) =>
+                        {
+                            int readLength = 0;
+                            var header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
+                            ptr = ptr + protocolLength;
+                            readLength += protocolLength;
 
-                        if (header.MsgType == MessageType.RpcResponse)
-                        {
-                            request.IsSuccess = true;
-                            request.ResponseReady.SetResult(new RpcResponse(request.IsSuccess, request.Data));
-                        }
-                        else if (header.MsgType == MessageType.ErrorInRpc)
-                        {
-                            request.IsSuccess = false;
-                            request.ResponseReady.SetResult(new RpcResponse(request.IsSuccess, request.Data));
-                        }
-                        else if (header.MsgType == MessageType.RpcRequest)
-                        {
-                            // For Handling Request we create an new Task because this can take sometime
-                            Task.Run(async () =>
+                            RpcRequest request = null;
+                            if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
                             {
-                                await ProcessCallHandler(request).ConfigureAwait(false);
-                            });    
-                        }
+                                if (!Requests.TryGetValue(header.ResponseId, out request))
+                                {
+                                    // The response received does not have a  matching message that was sent
+                                    Statistics.DiscardResponse(header.ResponseId);
+                                    return protocolLength;
+                                }
+                            }
+                            else
+                            {
+                                request = IncomingRequests.GetOrAdd(header.MsgId, new RpcRequest
+                                {
+                                    MsgId = header.MsgId
+                                });
+                            }
+
+                            int packetSize = header.PayloadSize < msgBufferLength ? header.PayloadSize :
+                                (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize % msgBufferLength);
+
+                            if (header.PayloadSize > 0)
+                            {
+                                if (request.Data == null)
+                                {
+                                    request.Data = new byte[header.PayloadSize];
+                                }
+
+                                int index = msgBufferLength * (header.CurrentPacket - 1);
+                                FastStructure.ReadBytes(request.Data, ptr, index, packetSize);
+                                readLength += packetSize;
+                            }
+
+                            if (header.CurrentPacket == header.TotalPackets)
+                            {
+                                if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
+                                {
+                                    Requests.TryRemove(request.MsgId, out RpcRequest removed);
+                                }
+                                else
+                                {
+                                    IncomingRequests.TryRemove(request.MsgId, out RpcRequest removed);
+                                }
+
+                                // Full message is ready
+
+                                Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
+
+                                if (header.MsgType == MessageType.RpcResponse)
+                                {
+                                    request.IsSuccess = true;
+                                    request.ResponseReady.SetResult(new RpcResponse(request.IsSuccess, request.Data));
+                                }
+                                else if (header.MsgType == MessageType.ErrorInRpc)
+                                {
+                                    request.IsSuccess = false;
+                                    request.ResponseReady.SetResult(new RpcResponse(request.IsSuccess, request.Data));
+                                }
+                                else if (header.MsgType == MessageType.RpcRequest)
+                                {
+                                    // For Handling Request we create an new Task because this can take sometime
+                                    Task.Run(async () =>
+                                    {
+                                        await ProcessCallHandler(request).ConfigureAwait(false);
+                                    });
+                                }
+                            }
+
+                            Statistics.ReadPacket(packetSize);
+
+                            return protocolLength + packetSize;
+                        }, 500);
+
                     }
+                    finally
+                    {
+                        lock (m_ReadThreadIsReadingLock)
+                        {
+                            m_ReadThreadIsReading = false;
+                        }
 
-                    Statistics.ReadPacket(packetSize);
-
-                    return protocolLength + packetSize;
-                }, 500);
+                    }
+                }
+            }
+            finally
+            {
+                // Make sure that Dispose ManageResource has been progressed
+                if (_needDisposeManagedResources)
+                {
+                    DisposeManagedResources();
+                }
             }
         }
 
+        private int _processCount= 0;
+        private object _processLock = new object();
+
         async Task ProcessCallHandler(RpcRequest request)
         {
+            // Mark as processing
+            lock (_processLock)
+            {
+                _processCount++;
+            }
+
             try
             {
+
                 if (RemoteCallHandler != null)
                 {
                     RemoteCallHandler(request.MsgId, request.Data);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId).ConfigureAwait(false);
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId)
+                        .ConfigureAwait(false);
                 }
                 else if (AsyncRemoteCallHandler != null)
                 {
                     await AsyncRemoteCallHandler(request.MsgId, request.Data).ConfigureAwait(false);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId).ConfigureAwait(false);
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId)
+                        .ConfigureAwait(false);
                 }
                 else if (RemoteCallHandlerWithResult != null)
                 {
                     var result = RemoteCallHandlerWithResult(request.MsgId, request.Data);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId).ConfigureAwait(false);
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId)
+                        .ConfigureAwait(false);
                 }
                 else if (AsyncRemoteCallHandlerWithResult != null)
                 {
-                    var result = await AsyncRemoteCallHandlerWithResult(request.MsgId, request.Data).ConfigureAwait(false);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId).ConfigureAwait(false);
+                    var result = await AsyncRemoteCallHandlerWithResult(request.MsgId, request.Data)
+                        .ConfigureAwait(false);
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId)
+                        .ConfigureAwait(false);
                 }
             }
             catch
             {
-                await SendMessage(MessageType.ErrorInRpc, CreateMessageRequest(), null, request.MsgId).ConfigureAwait(false);
+                await SendMessage(MessageType.ErrorInRpc, CreateMessageRequest(), null, request.MsgId)
+                    .ConfigureAwait(false);
             }
+            finally
+            {
+                lock (_processLock)
+                {
+                    _processCount--;
+                }
+
+                // Make sure that ManagedResources are disposed if needed
+                if (_needDisposeManagedResources)
+                {
+                    DisposeManagedResources();
+                }
+            }
+
+            
         }
 
         #region IDisposable
@@ -1057,29 +1133,76 @@ namespace SharedMemory
 
             if (disposeManagedResources)
             {
-                // Mark as Disposed first otherwise ReadThread has NullPointerException because
-                // ReadBuffer is already null but Disposed is false
-                Disposed = true;
-                
-                if (WriteBuffer != null)
-                {
-                    WriteBuffer.Dispose();
-                    WriteBuffer = null;
-                }
-
-                if (ReadBuffer != null)
-                {
-                    ReadBuffer.Dispose();
-                    ReadBuffer = null;
-                }
-
-                if (masterMutex != null)
-                {
-                    masterMutex.Close();
-                    masterMutex.Dispose();
-                    masterMutex = null;
-                }
+                DisposeManagedResources();   
             }
+        }
+
+        private bool _needDisposeManagedResources = false;
+
+        private void DisposeManagedResources()
+        {
+            lock (_processLock)
+            {
+                lock (m_ReadThreadIsReadingLock)
+                {
+                    // Check if dispose is possible otherwise
+                    // mark for dispose later
+                    if (_processCount > 0)
+                    {
+                        _needDisposeManagedResources = true;
+                        return;
+                    }
+
+                    if (m_ReadThreadIsReading)
+                    {
+                        _needDisposeManagedResources = true;
+                        return;
+                    }
+
+                    // Disconnect handle to prefent processing
+                    RemoteCallHandler = null;
+                    AsyncRemoteCallHandler = null;
+                    RemoteCallHandlerWithResult = null;
+                    AsyncRemoteCallHandlerWithResult = null;
+                    _needDisposeManagedResources = false;
+
+                }
+
+                
+
+                
+            }
+
+            // Mark as Disposed first otherwise ReadThread has NullPointerException because
+            // ReadBuffer is already null but Disposed is false
+
+            long l_OldValue = Interlocked.Exchange(ref _disposed, 1);
+
+            // Make sure that only one Thread is process the dispose
+            if (l_OldValue != 0)
+                return;
+
+            if (WriteBuffer != null)
+            {
+                WriteBuffer.Dispose();
+                WriteBuffer = null;
+            }
+
+            if (ReadBuffer != null)
+            {
+                ReadBuffer.Dispose();
+                ReadBuffer = null;
+            }
+
+            if (masterMutex != null)
+            {
+                masterMutex.Close();
+                masterMutex.Dispose();
+                masterMutex = null;
+            }
+
+            // Mark as DisposeFinished
+            Interlocked.Exchange(ref _disposed, 2);
         }
 
 #endregion
