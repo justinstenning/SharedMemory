@@ -622,17 +622,18 @@ namespace SharedMemory
         /// </summary>
         /// <param name="args">Arguments (if any) as a byte array to be sent to the remote endpoint</param>
         /// <param name="timeoutMs">Timeout in milliseconds (defaults to 30sec)</param>
+        /// <param name="cancellationToken"></param>
         /// <returns>The returned response</returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        public RpcResponse RemoteRequest(byte[] args = null, int timeoutMs = defaultTimeoutMs)
+        public RpcResponse RemoteRequest(byte[] args = null, int timeoutMs = defaultTimeoutMs, CancellationToken? cancellationToken = null)
         {
             ThrowIfDisposedOrShutdown();
 
             var request = CreateMessageRequest();
             var t = new Task(async () =>
             {
-                await SendMessage(request, args, timeoutMs).ConfigureAwait(false);
+                await SendMessage(request, args, timeoutMs, cancellationToken).ConfigureAwait(false);
             });
             t.Start();
             
@@ -659,20 +660,21 @@ namespace SharedMemory
         /// </summary>
         /// <param name="args">Arguments (if any) as a byte array to be sent to the remote endpoint</param>
         /// <param name="timeoutMs">Timeout in milliseconds (defaults to 30sec)</param>
+        /// <param name="cancellationToken"></param>
         /// <returns></returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        public Task<RpcResponse> RemoteRequestAsync(byte[] args = null, int timeoutMs = defaultTimeoutMs)
+        public Task<RpcResponse> RemoteRequestAsync(byte[] args = null, int timeoutMs = defaultTimeoutMs, CancellationToken? cancellationToken = null)
         {
             ThrowIfDisposedOrShutdown();
 
             var request = CreateMessageRequest();
-            return SendMessage(request, args, timeoutMs);
+            return SendMessage(request, args, timeoutMs, cancellationToken);
         }
 
-        async Task<RpcResponse> SendMessage(RpcRequest request, byte[] payload, int timeout = defaultTimeoutMs)
+        async Task<RpcResponse> SendMessage(RpcRequest request, byte[] payload, int timeout = defaultTimeoutMs, CancellationToken? cancellationToken = null)
         {
-            return await SendMessage(MessageType.RpcRequest, request, payload, timeout: timeout).ConfigureAwait(false);
+            return await SendMessage(MessageType.RpcRequest, request, payload, timeout: timeout, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -683,10 +685,11 @@ namespace SharedMemory
         /// <param name="payload"></param>
         /// <param name="responseMsgId"></param>
         /// <param name="timeout"></param>
+        /// <param name="cancellationToken"></param>
         /// <returns></returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        protected virtual async Task<RpcResponse> SendMessage(MessageType msgType, RpcRequest request, byte[] payload, ulong responseMsgId = 0, int timeout = defaultTimeoutMs)
+        protected virtual async Task<RpcResponse> SendMessage(MessageType msgType, RpcRequest request, byte[] payload, ulong responseMsgId = 0, int timeout = defaultTimeoutMs, CancellationToken? cancellationToken = null)
         {
             ThrowIfDisposedOrShutdown();
 
@@ -701,7 +704,7 @@ namespace SharedMemory
             switch (this.protocolVersion)
             {
                 case RpcProtocol.V1:
-                    success = WriteProtocolV1(msgType, msgId, payload, responseMsgId, timeout);
+                    success = WriteProtocolV1(msgType, msgId, payload, responseMsgId);
                     break;
                 default:
                     // Invalid protocol
@@ -719,17 +722,17 @@ namespace SharedMemory
 
                 if (request != null)
                 {
-                    await Task.Run(() =>
+                    bool receivedInTime = cancellationToken != null
+                        ? await FromWaitHandle(request.ResponseReady, TimeSpan.FromMilliseconds(timeout), cancellationToken.Value).ConfigureAwait(false)
+                        : await FromWaitHandle(request.ResponseReady, TimeSpan.FromMilliseconds(timeout));
+                    if (!receivedInTime)
                     {
-                        if (!request.ResponseReady.WaitOne(timeout))
-                        {
-                            result = new RpcResponse(false, null);
-                        }
-                        else
-                        {
-                            result = new RpcResponse(request.IsSuccess, request.Data);
-                        }
-                    }).ConfigureAwait(false);
+                        result = new RpcResponse(false, null);
+                    }
+                    else
+                    {
+                        result = new RpcResponse(request.IsSuccess, request.Data);
+                    }
                 }
 
                 return result;
@@ -745,7 +748,75 @@ namespace SharedMemory
             }
         }
 
-        bool WriteProtocolV1(MessageType msgType, ulong msgId, byte[] msg, ulong responseMsgId, int timeout)
+        // shamelessly copied from Stephen Cleary's https://github.com/StephenCleary/AsyncEx/blob/master/src/Nito.AsyncEx.Interop.WaitHandles/Interop/WaitHandleAsyncFactory.cs
+        // his nuget package does not target all the tfms we need
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+        public static Task<bool> FromWaitHandle(WaitHandle handle, TimeSpan timeout)
+        {
+            return FromWaitHandle(handle, timeout, CancellationToken.None);
+        }
+
+        public static Task<bool> FromWaitHandle(WaitHandle handle, CancellationToken token)
+        {
+            return FromWaitHandle(handle, Timeout.InfiniteTimeSpan, token);
+        }
+
+        public static class TaskConstants
+        {
+            public static readonly Task<bool> BooleanTrue = Task.FromResult(true);
+            public static readonly Task<bool> BooleanFalse = TaskConstants<bool>.Default;
+        }
+
+        public static class TaskConstants<T>
+        {
+            public static readonly Task<T> Default = Task.FromResult(default(T));
+        }
+
+        public static Task<bool> FromWaitHandle(WaitHandle handle, TimeSpan timeout, CancellationToken token)
+        {
+            _ = handle ?? throw new ArgumentNullException(nameof(handle));
+
+            // Handle synchronous cases.
+            var alreadySignalled = handle.WaitOne(0);
+            if (alreadySignalled)
+                return TaskConstants.BooleanTrue;
+            if (timeout == TimeSpan.Zero)
+                return TaskConstants.BooleanFalse;
+            if (token.IsCancellationRequested)
+                // this is a deviation from Stephen Cleary's implementation
+                // in AsyncEx this will set the task to cancelled
+                // but I think not having to deal with the cancelled exception makes more sense here
+                // where we are only interested in knowing if the handle signaled before time-out or cancellation
+                return TaskConstants.BooleanFalse;
+
+            // Register all asynchronous cases.
+            return DoFromWaitHandle(handle, timeout, token);
+        }
+
+        private static async Task<bool> DoFromWaitHandle(WaitHandle handle, TimeSpan timeout, CancellationToken token)
+        {
+            var tcs = new TaskCompletionSource<bool>();
+            using (new ThreadPoolRegistration(handle, timeout, tcs))
+            using (token.Register(state => ((TaskCompletionSource<bool>)state).TrySetCanceled(), tcs, useSynchronizationContext: false))
+                return await tcs.Task.ConfigureAwait(false);
+        }
+#pragma warning restore CS1591 // Missing XML comment for publicly visible type or member
+
+        private sealed class ThreadPoolRegistration : IDisposable
+        {
+            private readonly RegisteredWaitHandle _registeredWaitHandle;
+
+            public ThreadPoolRegistration(WaitHandle handle, TimeSpan timeout, TaskCompletionSource<bool> tcs)
+            {
+                _registeredWaitHandle = ThreadPool.RegisterWaitForSingleObject(handle,
+                    (state, timedOut) => ((TaskCompletionSource<bool>)state).TrySetResult(!timedOut), tcs,
+                    timeout, executeOnlyOnce: true);
+            }
+
+            void IDisposable.Dispose() => _registeredWaitHandle.Unregister(null);
+        }
+
+        bool WriteProtocolV1(MessageType msgType, ulong msgId, byte[] msg, ulong responseMsgId)
         {
             if (Disposed)
             {
