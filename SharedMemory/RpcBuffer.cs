@@ -53,76 +53,34 @@ namespace SharedMemory
 
     public static class ResponseTaskHelper
     {
-        public static Task<RpcResponse> TimeoutAfter(this Task<RpcResponse> task, int millisecondsTimeout)
+        public static async Task<RpcResponse> TimeoutAfter(this Task<RpcResponse> task, int millisecondsTimeout)
         {
             // Short-circuit #1: infinite timeout or task already completed
             if (task.IsCompleted || (millisecondsTimeout == Timeout.Infinite))
             {
                 // Either the task has already completed or timeout will never occur.
                 // No proxy necessary.
-                return task;
+                return await task.ConfigureAwait(false);
             }
-
-            // tcs.Task will be returned as a proxy to the caller
-            TaskCompletionSource<RpcResponse> tcs =
-                new TaskCompletionSource<RpcResponse>();
 
             // Short-circuit #2: zero timeout
             if (millisecondsTimeout == 0)
             {
                 // We've already timed out.
-                tcs.TrySetResult(new RpcResponse(false, null));
-                return tcs.Task;
+                return new RpcResponse(false, null);
             }
 
-            // Set up a timer to complete after the specified timeout period
-            Timer timer = new Timer(state =>
+            // tcs.Task will be returned as a proxy to the caller
+            TaskCompletionSource<RpcResponse> timeoutTcs =
+                new TaskCompletionSource<RpcResponse>();
+
+            using (var cts = new CancellationTokenSource(millisecondsTimeout))
             {
-                // Recover your state information
-                var myTcs = (TaskCompletionSource<RpcResponse>)state;
-
-                // Fault our proxy with a TimeoutException
-                myTcs.TrySetResult(new RpcResponse(false, null));
-
-            }, tcs, millisecondsTimeout, Timeout.Infinite);
-
-            // Wire up the logic for what happens when source task completes
-            task.ContinueWith((antecedent, state) =>
+                var timeoutToken = cts.Token;
+                using (var registration = timeoutToken.Register(() => timeoutTcs.TrySetResult(new RpcResponse(false, null))))
                 {
-                    // Recover our state data
-                    var tuple =
-                        (Tuple<Timer, TaskCompletionSource<RpcResponse>>)state;
-
-                    // Cancel the Timer
-                    tuple.Item1.Dispose();
-
-                    // Marshal results to proxy
-                    MarshalTaskResults(antecedent, tuple.Item2);
-                },
-                Tuple.Create(timer, tcs),
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-
-            return tcs.Task;
-        }
-
-        internal static void MarshalTaskResults<TResult>(Task source, TaskCompletionSource<TResult> proxy)
-        {
-            switch (source.Status)
-            {
-                case TaskStatus.Faulted:
-                    proxy.TrySetException(source.Exception);
-                    break;
-                case TaskStatus.Canceled:
-                    proxy.TrySetCanceled();
-                    break;
-                case TaskStatus.RanToCompletion:
-                    Task<TResult> castedSource = source as Task<TResult>;
-                    proxy.TrySetResult(
-                        castedSource == null ? default(TResult) : // source is a Task
-                            castedSource.Result); // source is a Task<TResult>
-                    break;
+                    return await (await Task.WhenAny(task, timeoutTcs.Task).ConfigureAwait(false)).ConfigureAwait(false);
+                }
             }
         }
     }
