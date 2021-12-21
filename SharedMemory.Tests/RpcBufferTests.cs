@@ -28,6 +28,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using SharedMemory;
 using System.Diagnostics;
+using System.Collections.Generic;
 
 namespace SharedMemoryTests
 {
@@ -35,29 +36,29 @@ namespace SharedMemoryTests
     public class RpcBufferTests
     {
         string ipcName;
-        RpcBuffer ipcMaster;
-        RpcBuffer ipcSlave;
+        RpcBuffer ipcServer;
+        RpcBuffer ipcClient;
 
         [TestInitialize]
         public void Initialise()
         {
-            ipcName = "MasterSlaveTest" + Guid.NewGuid().ToString();
+            ipcName = "ClientServerTest" + Guid.NewGuid().ToString();
         }
 
         [TestCleanup]
         public void Cleanup()
         {
-            ipcMaster?.Dispose();
-            ipcSlave?.Dispose();
+            ipcServer?.Dispose();
+            ipcClient?.Dispose();
         }
 
         [TestMethod]
-        public void Constructor_MasterSlave_Create()
+        public void Constructor_ClientServer_Create()
         {
-            ipcMaster = new RpcBuffer(ipcName, (msgId, payload) =>
+            ipcServer = new RpcBuffer(ipcName, (msgId, payload) =>
             {
             });
-            ipcSlave = new RpcBuffer(ipcName, (msgId, payload) =>
+            ipcClient = new RpcBuffer(ipcName, (msgId, payload) =>
             {
             });
         }
@@ -70,10 +71,10 @@ namespace SharedMemoryTests
         }
 
         [TestMethod]
-        public void RPC_MasterCallsSlave()
+        public void RPC_ServerCallsClient()
         {
-            ipcMaster = new RpcBuffer(ipcName);
-            ipcSlave = new RpcBuffer(ipcName, (msgId, payload) =>
+            ipcServer = new RpcBuffer(ipcName);
+            ipcClient = new RpcBuffer(ipcName, (msgId, payload) =>
             {
                 Assert.IsTrue(payload != null);
                 Assert.IsTrue(payload.Length == 2);
@@ -81,7 +82,7 @@ namespace SharedMemoryTests
                 return BitConverter.GetBytes((payload[0] + payload[1]));
             });
 
-            var result = ipcMaster.RemoteRequest(new byte[] { 123, 10 });
+            var result = ipcServer.RemoteRequest(new byte[] { 123, 10 });
 
             Assert.IsTrue(result.Success);
             Assert.AreEqual(123 + 10, BitConverter.ToInt32(result.Data, 0));
@@ -90,8 +91,8 @@ namespace SharedMemoryTests
         [TestMethod]
         public void RPC_Statistics_Reset()
         {
-            ipcMaster = new RpcBuffer(ipcName);
-            ipcSlave = new RpcBuffer(ipcName, (msgId, payload) =>
+            ipcServer = new RpcBuffer(ipcName);
+            ipcClient = new RpcBuffer(ipcName, (msgId, payload) =>
             {
                 Assert.IsTrue(payload != null);
                 Assert.IsTrue(payload.Length == 2);
@@ -99,34 +100,38 @@ namespace SharedMemoryTests
                 return BitConverter.GetBytes((payload[0] + payload[1]));
             });
 
-            var result = ipcMaster.RemoteRequest(new byte[] { 123, 10 });
+            var result = ipcServer.RemoteRequest(new byte[] { 123, 10 });
 
             Assert.IsTrue(result.Success);
-            Assert.AreEqual((ulong)1, ipcMaster.Statistics.RequestsSent);
-            Assert.AreEqual((ulong)1, ipcSlave.Statistics.RequestsReceived);
-            Assert.AreEqual((ulong)1, ipcSlave.Statistics.ResponsesSent);
-            Assert.AreEqual((ulong)1, ipcMaster.Statistics.ResponsesReceived);
+            Assert.AreEqual((ulong)1, ipcServer.Statistics.RequestsSent);
+            Assert.AreEqual((ulong)1, ipcClient.Statistics.RequestsReceived);
+            Assert.AreEqual((ulong)1, ipcClient.Statistics.ResponsesSent);
+            Assert.AreEqual((ulong)1, ipcServer.Statistics.ResponsesReceived);
 
-            ipcMaster.Statistics.Reset();
+            ipcServer.Statistics.Reset();
 
             var empty = new RpcStatistics();
 
-            Assert.AreEqual(empty.RequestsSent, ipcMaster.Statistics.RequestsSent);
-            Assert.AreEqual(empty.ResponsesReceived, ipcMaster.Statistics.ResponsesReceived);
-            Assert.AreEqual(empty.ReadingLastMessageSize, ipcMaster.Statistics.ReadingLastMessageSize);
-            Assert.AreEqual(empty.WritingLastMessageSize, ipcMaster.Statistics.WritingLastMessageSize);
+            Assert.AreEqual(empty.RequestsSent, ipcServer.Statistics.RequestsSent);
+            Assert.AreEqual(empty.ResponsesReceived, ipcServer.Statistics.ResponsesReceived);
+            Assert.AreEqual(empty.ReadingLastMessageSize, ipcServer.Statistics.ReadingLastMessageSize);
+            Assert.AreEqual(empty.WritingLastMessageSize, ipcServer.Statistics.WritingLastMessageSize);
         }
 
         [TestMethod]
-        public void RPC_MasterCallsSlave_Exception()
+        public void RPC_ServerCallsClient_Exception()
         {
-            ipcMaster = new RpcBuffer(ipcName);
-            ipcSlave = new RpcBuffer(ipcName, async (msgId, payload) =>
+            ipcServer = new RpcBuffer(ipcName);
+            ipcClient = new RpcBuffer(ipcName, (msgId, payload) =>
             {
-                throw new Exception("test exception");
+                if (payload == null)
+                {
+                    throw new Exception("test exception");
+                }
+                return (byte[])null;
             });
 
-            var result = ipcMaster.RemoteRequest(null);
+            var result = ipcServer.RemoteRequest(null);
 
             Assert.IsFalse(result.Success);
         }
@@ -134,40 +139,39 @@ namespace SharedMemoryTests
         [TestMethod]
         public void RPC_Bidirectional_Nested()
         {
-            ipcMaster = new RpcBuffer(ipcName, async (msgId, payload) =>
+            ipcServer = new RpcBuffer(ipcName, async (msgId, payload) =>
             {
-                // Ask slave to multiply the two bytes
-                return (await ipcMaster.RemoteRequestAsync(new byte[] { 3, 3 }).ConfigureAwait(false)).Data;
+                // Ask client to multiply the two bytes
+                return (await ipcServer.RemoteRequestAsync(payload)).Data;
             });
-            ipcSlave = new RpcBuffer(ipcName, (msgId, payload) =>
+            ipcClient = new RpcBuffer(ipcName, (msgId, payload) =>
             {
                 return new byte[] { (byte)(payload[0] * payload[1]) };
             });
 
-            // Send request to master from slave
-            var result = ipcSlave.RemoteRequest(null);
+            // Send request to server from client (which makes request back to client from server)
+            RpcResponse result = ipcClient.RemoteRequest(new byte[] { 3, 3 });
             Assert.IsTrue(result.Success);
             Assert.AreEqual((3 * 3), result.Data[0]);
         }
 
-#if DEBUG
         [TestMethod]
         public void RPC_LoadTest_5k_Small()
         {
-            ipcMaster = new RpcBuffer(ipcName, async (msgId, payload) =>
+            ipcServer = new RpcBuffer(ipcName, async (msgId, payload) =>
             {
             }, bufferCapacity: 256);
-            ipcSlave = new RpcBuffer(ipcName, (msgId, payload) =>
+            ipcClient = new RpcBuffer(ipcName, (msgId, payload) =>
             {
                 return new byte[] { (byte)(payload[0] * payload[1]) };
             });
 
             Stopwatch watch = Stopwatch.StartNew();
 
-            // Send request to slave from master
+            // Send request to client from server
             for (var i = 0; i < 5000; i++)
             {
-                var result = ipcMaster.RemoteRequest(new byte[] { 3, 3 }, 100);
+                var result = ipcServer.RemoteRequest(new byte[] { 3, 3 }, 100);
                 Assert.IsTrue(result.Success);
                 Assert.AreEqual((3 * 3), result.Data[0]);
             }
@@ -177,12 +181,51 @@ namespace SharedMemoryTests
         }
 
         [TestMethod]
+        public void RPC_LoadTest_5k_Small_Multi_Thread()
+        {
+            // Warmup the Theadpool
+            ThreadPool.SetMinThreads(15, 10);
+
+            ipcServer = new RpcBuffer(ipcName, async (msgId, payload) =>
+            {
+            }, bufferCapacity: 256);
+            ipcClient = new RpcBuffer(ipcName, (msgId, payload) =>
+            {
+                return new byte[] { (byte)(payload[0] * payload[1]) };
+            });
+
+            Stopwatch watch = Stopwatch.StartNew();
+
+            List<Task> tasks = new List<Task>();
+
+            for (int i = 0; i < 10; i++)
+            {
+                tasks.Add(Task.Run(() =>
+                {
+                    // Send request to slave from master
+                    for (var j = 0; j < 5000; j++)
+                    {
+                        var result = ipcServer.RemoteRequest(new byte[] { 3, 3 });
+                        Assert.IsTrue(result.Success);
+                        Assert.AreEqual((3 * 3), result.Data[0]);
+                    }
+                }));
+            }
+
+            Task.WaitAll(tasks.ToArray());
+            watch.Stop();
+
+            Assert.IsTrue(watch.ElapsedMilliseconds < 1000);
+        }
+
+#if DEBUG
+        [TestMethod]
         public void RPC_LoadTest_1k_Large()
         {
-            ipcMaster = new RpcBuffer(ipcName, async (msgId, payload) =>
+            ipcServer = new RpcBuffer(ipcName, async (msgId, payload) =>
             {
             }, bufferCapacity: 1025 * 512);
-            ipcSlave = new RpcBuffer(ipcName, (msgId, payload) =>
+            ipcClient = new RpcBuffer(ipcName, (msgId, payload) =>
             {
                 return new byte[] { (byte)(payload[0] * payload[1]) };
             });
@@ -193,10 +236,10 @@ namespace SharedMemoryTests
 
             Stopwatch watch = Stopwatch.StartNew();
 
-            // Send request to slave from master
+            // Send request to client from server
             for (var i = 0; i < 1000; i++)
             {
-                var result = ipcMaster.RemoteRequest(buf, 100);
+                var result = ipcServer.RemoteRequest(buf, 100);
                 Assert.IsTrue(result.Success);
                 Assert.AreEqual((3 * 3), result.Data[0]);
             }
@@ -208,22 +251,22 @@ namespace SharedMemoryTests
         [TestMethod]
         public void RPC_LoadTest_NestedCalls()
         {
-            ipcMaster = new RpcBuffer(ipcName, async (msgId, payload) =>
+            ipcServer = new RpcBuffer(ipcName, async (msgId, payload) =>
             {
-                // Ask slave to multiply the two bytes
-                return (await ipcMaster.RemoteRequestAsync(new byte[] { 3, 3 }).ConfigureAwait(false)).Data;
+                // Ask client to multiply the two bytes
+                return (await ipcServer.RemoteRequestAsync(new byte[] { 3, 3 })).Data;
             });
-            ipcSlave = new RpcBuffer(ipcName, (msgId, payload) =>
+            ipcClient = new RpcBuffer(ipcName, (msgId, payload) =>
             {
                 return new byte[] { (byte)(payload[0] * payload[1]) };
             });
 
             Stopwatch watch = Stopwatch.StartNew();
 
-            // Send request to master from slave
+            // Send request to server from client
             for (var i = 0; i < 10; i++)
             {
-                var result = ipcSlave.RemoteRequest(null, 30000);
+                var result = ipcClient.RemoteRequest(null, 30000);
                 Assert.IsTrue(result.Success);
                 Assert.AreEqual((3 * 3), result.Data[0]);
             }
@@ -234,19 +277,19 @@ namespace SharedMemoryTests
 #endif
 
         [TestMethod]
-        public void RPC_SlaveCallsMasterAfterClosed_Exception()
+        public void RPC_ClientCallsServerAfterClosed_Exception()
         {
-            ipcMaster = new RpcBuffer(ipcName, async (msgId, payload) =>
+            ipcServer = new RpcBuffer(ipcName, async (msgId, payload) =>
             {
             });
 
-            ipcSlave = new RpcBuffer(ipcName);
+            ipcClient = new RpcBuffer(ipcName);
 
-            ipcSlave.RemoteRequest(null);
+            ipcClient.RemoteRequest(null);
 
-            ipcMaster.Dispose();
+            ipcServer.Dispose();
 
-            Assert.ThrowsException<InvalidOperationException>(() => ipcSlave.RemoteRequest(null));
+            Assert.ThrowsException<InvalidOperationException>(() => ipcClient.RemoteRequest(null));
         }
     }
 }

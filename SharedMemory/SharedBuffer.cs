@@ -372,7 +372,11 @@ namespace SharedMemory
         protected virtual void Write<T>(T[] source, int index, long bufferPosition = 0)
             where T : struct
         {
+#if NETCORE3_0
+            Write<T>(source.AsSpan(index, source.Length - index), bufferPosition);
+#else
             FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), source, index, source.Length - index);
+#endif
         }
 
         /// <summary>
@@ -386,7 +390,11 @@ namespace SharedMemory
         protected virtual void WriteArray<T>(T[] source, int index, int count, long bufferPosition = 0)
             where T : struct
         {
+#if NETCORE3_0
+            Write<T>(source.AsSpan(index, count), bufferPosition);
+#else
             FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), source, index, count);
+#endif
         }
 
         /// <summary>
@@ -414,9 +422,27 @@ namespace SharedMemory
             writeFunc(new IntPtr(BufferStartPtr + bufferPosition));
         }
 
-        #endregion
+#if NETCORE3_0
 
-        #region Reading
+        protected virtual void Write<T>(ReadOnlyMemory<T> source, long bufferPosition = 0)
+            where T : struct
+        {
+            Span<T> destination = new Span<T>(BufferStartPtr + bufferPosition, source.Length);
+            source.Span.CopyTo(destination);
+        }
+
+        protected virtual void Write<T>(ReadOnlySpan<T> source, long bufferPosition = 0)
+            where T : struct
+        {
+            Span<T> destination = new Span<T>(BufferStartPtr + bufferPosition, source.Length);
+            source.CopyTo(destination);
+        }
+
+#endif
+
+#endregion
+
+#region Reading
 
         /// <summary>
         /// Reads an instance of <typeparamref name="T"/> from the buffer
@@ -439,7 +465,11 @@ namespace SharedMemory
         protected virtual void Read<T>(T[] destination, long bufferPosition = 0)
             where T : struct
         {
+#if NETCORE3_0
+            Read<T>(destination.AsSpan(), bufferPosition);
+#else
             FastStructure.ReadArray<T>(destination, (IntPtr)(BufferStartPtr + bufferPosition), 0, destination.Length);
+#endif
         }
 
         /// <summary>
@@ -453,7 +483,11 @@ namespace SharedMemory
         protected virtual void ReadArray<T>(T[] destination, int index, int count, long bufferPosition)
             where T : struct
         {
+#if NETCORE3_0
+            Read<T>(destination.AsSpan(index, count), bufferPosition);
+#else
             FastStructure.ReadArray<T>(destination, (IntPtr)(BufferStartPtr + bufferPosition), index, count);
+#endif
         }
 
         /// <summary>
@@ -481,9 +515,29 @@ namespace SharedMemory
             readFunc(new IntPtr(BufferStartPtr + bufferPosition));
         }
 
-        #endregion
+#if NETCORE3_0
+        /// <summary>
+        /// Reads from shared memory into a <see cref="Memory{T}"/> instance.
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="destination">The memory instance to copy to. The length of this memory instance controls the number of elements to read.</param>
+        /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
+        protected virtual void Read<T>(Memory<T> destination, long bufferPosition = 0)
+        {
+            Span<T> source = new Span<T>(BufferStartPtr + bufferPosition, destination.Length);
+            source.CopyTo(destination.Span);
+        }
 
-        #region IDisposable
+        protected virtual void Read<T>(Span<T> destination, long bufferPosition = 0)
+            where T : struct
+        {
+            Span<T> source = new Span<T>(BufferStartPtr + bufferPosition, destination.Length);
+            source.CopyTo(destination);
+        }
+#endif
+#endregion
+
+#region IDisposable
 
         /// <summary>
         /// Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
@@ -506,6 +560,6 @@ namespace SharedMemory
             }
         }
 
-        #endregion
+#endregion
     }
 }

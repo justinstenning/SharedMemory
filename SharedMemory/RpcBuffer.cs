@@ -35,8 +35,8 @@ namespace SharedMemory
 
     internal enum InstanceType
     {
-        Master,
-        Slave
+        Server,
+        Client
     }
 
     /// <summary>
@@ -408,11 +408,11 @@ namespace SharedMemory
     }
 
     /// <summary>
-    /// A simple RPC implementation designed for a single master/slave pair
+    /// A simple RPC implementation designed for a single client/server pair
     /// </summary>
     public class RpcBuffer : IDisposable
     {
-        private Mutex masterMutex;
+        private Mutex serverMutex;
         private long _disposed = 0;
         
         /// <summary>
@@ -471,11 +471,11 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The channel name. This is the name to be shared between the client/server pair. Each pair must have a unique value.</param>
         /// <param name="remoteCallHandler">Action to handle requests with no response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="bufferCapacity">Server only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The client will use the same size as defined by the server</param>
         /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <param name="bufferNodeCount">Server only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this (name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -485,11 +485,11 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The unique channel name. This is the name to be shared between the client/server pair. Each pair must have a unique value.</param>
         /// <param name="asyncRemoteCallHandler">Asynchronous action to handle requests with no response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="bufferCapacity">Server only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The client will use the same size as defined by the server</param>
         /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <param name="bufferNodeCount">Server only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         public RpcBuffer(string name, Func<ulong, byte[], Task> asyncRemoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -499,11 +499,11 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The unique channel name. This is the name to be shared between the client/server pair. Each pair must have a unique value.</param>
         /// <param name="remoteCallHandlerWithResult">Function to handle requests with a response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="bufferCapacity">Server only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The client will use the same size as defined by the server</param>
         /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <param name="bufferNodeCount">Server only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         public RpcBuffer(string name, Func<ulong, byte[], byte[]> remoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -513,11 +513,11 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The unique channel name. This is the name to be shared between the client/server pair. Each pair must have a unique value.</param>
         /// <param name="asyncRemoteCallHandlerWithResult">Function to asynchronously handle requests with a response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="bufferCapacity">Server only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The client will use the same size as defined by the server</param>
         /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <param name="bufferNodeCount">Server only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         public RpcBuffer(string name, Func<ulong, byte[], Task<byte[]>> asyncRemoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -527,10 +527,10 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="name">The unique channel name. This is the name to be shared between the client/server pair. Each pair must have a unique value.</param>
+        /// <param name="bufferCapacity">Server only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The client will use the same size as defined by the server</param>
         /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <param name="bufferNodeCount">Server only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         public RpcBuffer(string name, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10)
         {
             if (bufferCapacity < 256) // min 256 bytes
@@ -545,20 +545,20 @@ namespace SharedMemory
 
             Statistics = new RpcStatistics();
 
-            masterMutex = new Mutex(true, name + "SharedMemory_MasterMutex", out bool createdNew);
+            serverMutex = new Mutex(true, name + "SharedMemory_ServerMutex", out bool createdNew);
 
-            if (createdNew && masterMutex.WaitOne(500))
+            if (createdNew && serverMutex.WaitOne(500))
             {
-                instanceType = InstanceType.Master;
+                instanceType = InstanceType.Server;
             }
             else
             {
-                instanceType = InstanceType.Slave;
-                if (masterMutex != null)
+                instanceType = InstanceType.Client;
+                if (serverMutex != null)
                 {
-                    masterMutex.Close();
-                    masterMutex.Dispose();
-                    masterMutex = null;
+                    serverMutex.Close();
+                    serverMutex.Dispose();
+                    serverMutex = null;
                 }
             }
 
@@ -573,22 +573,22 @@ namespace SharedMemory
 
             this.bufferCapacity = bufferCapacity;
             this.bufferNodeCount = bufferNodeCount;
-            if (instanceType == InstanceType.Master)
+            if (instanceType == InstanceType.Server)
             {
-                WriteBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
-                ReadBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
+                WriteBuffer = new CircularBuffer(name + "_Client_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
+                ReadBuffer = new CircularBuffer(name + "_Server_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
             }
             else
             {
-                ReadBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF");
-                WriteBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF");
+                ReadBuffer = new CircularBuffer(name + "_Client_SharedMemory_MMF");
+                WriteBuffer = new CircularBuffer(name + "_Server_SharedMemory_MMF");
                 this.bufferCapacity = ReadBuffer.NodeBufferSize;
                 this.bufferNodeCount = ReadBuffer.NodeCount;
             }
 
             this.msgBufferLength = Convert.ToInt32(this.bufferCapacity) - protocolLength;
 
-            Task.Run(() =>
+            readTask = Task.Factory.StartNew(() =>
             {
                 switch (protocolVersion)
                 {
@@ -596,9 +596,10 @@ namespace SharedMemory
                         ReadThreadV1();
                         break;
                 }
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
         }
 
+        readonly Task readTask;
         object mutex = new object();
         ulong messageId = 1;
 
@@ -630,11 +631,7 @@ namespace SharedMemory
             ThrowIfDisposedOrShutdown();
 
             var request = CreateMessageRequest();
-            var t = new Task(async () =>
-            {
-                await SendMessage(request, args, timeoutMs).ConfigureAwait(false);
-            });
-            t.Start();
+            SendMessage(request, args, timeoutMs);
             
             if (!request.ResponseReady.WaitOne(timeoutMs))
             {
@@ -662,17 +659,20 @@ namespace SharedMemory
         /// <returns></returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        public Task<RpcResponse> RemoteRequestAsync(byte[] args = null, int timeoutMs = defaultTimeoutMs)
+        public async Task<RpcResponse> RemoteRequestAsync(byte[] args = null, int timeoutMs = defaultTimeoutMs)
         {
             ThrowIfDisposedOrShutdown();
 
-            var request = CreateMessageRequest();
-            return SendMessage(request, args, timeoutMs);
+            return await Task.Run(() =>
+            {
+                var request = CreateMessageRequest();
+                return SendMessage(request, args, timeoutMs);
+            });
         }
 
-        async Task<RpcResponse> SendMessage(RpcRequest request, byte[] payload, int timeout = defaultTimeoutMs)
+        RpcResponse SendMessage(RpcRequest request, byte[] payload, int timeout = defaultTimeoutMs)
         {
-            return await SendMessage(MessageType.RpcRequest, request, payload, timeout: timeout).ConfigureAwait(false);
+            return SendMessage(MessageType.RpcRequest, request, payload, timeout: timeout);
         }
 
         /// <summary>
@@ -686,7 +686,7 @@ namespace SharedMemory
         /// <returns></returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        protected virtual async Task<RpcResponse> SendMessage(MessageType msgType, RpcRequest request, byte[] payload, ulong responseMsgId = 0, int timeout = defaultTimeoutMs)
+        protected virtual RpcResponse SendMessage(MessageType msgType, RpcRequest request, byte[] payload, ulong responseMsgId = 0, int timeout = defaultTimeoutMs)
         {
             ThrowIfDisposedOrShutdown();
 
@@ -719,17 +719,14 @@ namespace SharedMemory
 
                 if (request != null)
                 {
-                    await Task.Run(() =>
+                    if (!request.ResponseReady.WaitOne(timeout))
                     {
-                        if (!request.ResponseReady.WaitOne(timeout))
-                        {
-                            result = new RpcResponse(false, null);
-                        }
-                        else
-                        {
-                            result = new RpcResponse(request.IsSuccess, request.Data);
-                        }
-                    }).ConfigureAwait(false);
+                        result = new RpcResponse(false, null);
+                    }
+                    else
+                    {
+                        result = new RpcResponse(request.IsSuccess, request.Data);
+                    }
                 }
 
                 return result;
@@ -832,7 +829,7 @@ namespace SharedMemory
 
         void ReadThreadV1()
         {
-            while(true && !ReadBuffer.ShuttingDown)
+            while(!Disposed && !ReadBuffer.ShuttingDown)
             {
                 if (Interlocked.Read(ref _disposed) == 1)
                     return;
@@ -891,26 +888,22 @@ namespace SharedMemory
                         }
 
                         // Full message is ready
-                        var watching = Stopwatch.StartNew();
-                        Task.Run(async () =>
-                        {
-                            Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
+                        Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
 
-                            if (header.MsgType == MessageType.RpcResponse)
-                            {
-                                request.IsSuccess = true;
-                                request.ResponseReady.Set();
-                            }
-                            else if (header.MsgType == MessageType.ErrorInRpc)
-                            {
-                                request.IsSuccess = false;
-                                request.ResponseReady.Set();
-                            }
-                            else if (header.MsgType == MessageType.RpcRequest)
-                            {
-                                await ProcessCallHandler(request).ConfigureAwait(false);
-                            }
-                        });
+                        if (header.MsgType == MessageType.RpcResponse)
+                        {
+                            request.IsSuccess = true;
+                            request.ResponseReady.Set();
+                        }
+                        else if (header.MsgType == MessageType.ErrorInRpc)
+                        {
+                            request.IsSuccess = false;
+                            request.ResponseReady.Set();
+                        }
+                        else if (header.MsgType == MessageType.RpcRequest)
+                        {
+                            ProcessCallHandler(request);
+                        }
                     }
 
                     Statistics.ReadPacket(packetSize);
@@ -920,34 +913,54 @@ namespace SharedMemory
             }
         }
 
-        async Task ProcessCallHandler(RpcRequest request)
+        void ProcessCallHandler(RpcRequest request)
         {
             try
             {
                 if (RemoteCallHandler != null)
                 {
                     RemoteCallHandler(request.MsgId, request.Data);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId).ConfigureAwait(false);
+                    SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId);
                 }
                 else if (AsyncRemoteCallHandler != null)
                 {
-                    await AsyncRemoteCallHandler(request.MsgId, request.Data).ConfigureAwait(false);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId).ConfigureAwait(false);
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await AsyncRemoteCallHandler(request.MsgId, request.Data).ConfigureAwait(false);
+                            SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId);
+                        }
+                        catch
+                        {
+                            SendMessage(MessageType.ErrorInRpc, CreateMessageRequest(), null, request.MsgId);
+                        }
+                    });
                 }
                 else if (RemoteCallHandlerWithResult != null)
                 {
                     var result = RemoteCallHandlerWithResult(request.MsgId, request.Data);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId).ConfigureAwait(false);
+                    SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId);
                 }
                 else if (AsyncRemoteCallHandlerWithResult != null)
                 {
-                    var result = await AsyncRemoteCallHandlerWithResult(request.MsgId, request.Data).ConfigureAwait(false);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId).ConfigureAwait(false);
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var result = await AsyncRemoteCallHandlerWithResult(request.MsgId, request.Data).ConfigureAwait(false);
+                            SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId);
+                        }
+                        catch
+                        {
+                            SendMessage(MessageType.ErrorInRpc, CreateMessageRequest(), null, request.MsgId);
+                        }
+                    });
                 }
             }
             catch
             {
-                await SendMessage(MessageType.ErrorInRpc, CreateMessageRequest(), null, request.MsgId).ConfigureAwait(false);
+                SendMessage(MessageType.ErrorInRpc, CreateMessageRequest(), null, request.MsgId);
             }
         }
 
@@ -990,6 +1003,7 @@ namespace SharedMemory
                 return;
             }
 
+            Disposed = true;
             if (disposeManagedResources)
             {
                 if (WriteBuffer != null)
@@ -1004,14 +1018,12 @@ namespace SharedMemory
                     ReadBuffer = null;
                 }
 
-                if (masterMutex != null)
+                if (serverMutex != null)
                 {
-                    masterMutex.Close();
-                    masterMutex.Dispose();
-                    masterMutex = null;
+                    serverMutex.Close();
+                    serverMutex.Dispose();
+                    serverMutex = null;
                 }
-
-                Disposed = true;
             }
         }
 

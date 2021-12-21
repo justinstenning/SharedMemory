@@ -66,11 +66,11 @@ namespace RpcTest
             {
                 new Task(async () =>
                     {
-                        RpcBuffer ipcMaster = null;
-                        RpcBuffer ipcSlave = null;
-                        var name = $"MasterSlaveTest{Guid.NewGuid()}";
-                        ipcMaster = new RpcBuffer(name, bufferCapacity: bufferCapacity);
-                        ipcSlave = new RpcBuffer(name, (msgId, payload) =>
+                        RpcBuffer ipcServer = null;
+                        RpcBuffer ipcClient = null;
+                        var name = $"ClientServerTest{Guid.NewGuid()}";
+                        ipcServer = new RpcBuffer(name, bufferCapacity: bufferCapacity);
+                        ipcClient = new RpcBuffer(name, (msgId, payload) =>
                         {
                             Interlocked.Increment(ref count);
                             return (byte[])null;
@@ -80,7 +80,7 @@ namespace RpcTest
                         var watchLine = Stopwatch.StartNew();
                         for (var j = 0; j < loopCount; j++)
                         {
-                            var result = await ipcMaster.RemoteRequestAsync(dataList[rnd.Next(0, dataList.Length)]);
+                            var result = await ipcServer.RemoteRequestAsync(dataList[rnd.Next(0, dataList.Length)]);
                             if (!result.Success)
                             {
                                 Console.WriteLine("Failed");
