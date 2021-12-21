@@ -45,17 +45,17 @@ namespace SharedMemory
     public unsafe class CircularBuffer : SharedBuffer
     {
         #region Public/Protected properties
-        
+
         /// <summary>
         /// The number of nodes within the circular linked-list
         /// </summary>
         public int NodeCount { get; private set; }
-        
+
         /// <summary>
         /// The buffer size of each node
         /// </summary>
         public int NodeBufferSize { get; private set; }
-        
+
         /// <summary>
         /// Event signaled when data has been written if the reading index has caught up to the writing index
         /// </summary>
@@ -76,7 +76,7 @@ namespace SharedMemory
                 return 0;
             }
         }
-            
+
         /// <summary>
         /// Where the linked-list nodes are located within the buffer
         /// </summary>
@@ -120,7 +120,7 @@ namespace SharedMemory
         #region Private field members
 
         private NodeHeader* _nodeHeader = null;
-        
+
         #endregion
 
         #region Structures
@@ -192,7 +192,7 @@ namespace SharedMemory
             /// Represents the offset relative to <see cref="SharedBuffer.BufferStartPtr"/> where the data for this node can be found.
             /// </summary>
             public long Offset;
-            
+
             /// <summary>
             /// Represents the index of the current node.
             /// </summary>
@@ -214,6 +214,9 @@ namespace SharedMemory
         /// <param name="name">The name of the shared memory to be created</param>
         /// <param name="nodeCount">The number of nodes within the circular linked-list (minimum of 2)</param>
         /// <param name="nodeBufferSize">The buffer size per node in bytes. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.SharedHeader) + Marshal.SizeOf(CircularBuffer.NodeHeader) + (Marshal.SizeOf(CircularBuffer.Node) * nodeCount) + (bufferSize * nodeCount)</code></param>
+#if !(NET35)
+        /// <param name="openExisting">Indicates whether to allow opening an existing if already exists.</param>
+#endif
         /// <remarks>
         /// <para>The maximum total shared memory size is dependent upon the system and current memory fragmentation.</para>
         /// <para>The shared memory layout on 32-bit and 64-bit architectures is:<br />
@@ -225,10 +228,22 @@ namespace SharedMemory
         /// </code>
         /// </para>
         /// </remarks>
-        public CircularBuffer(string name, int nodeCount, int nodeBufferSize)
-            : this(name, nodeCount, nodeBufferSize, true)
+        public CircularBuffer(string name, int nodeCount, int nodeBufferSize
+#if !(NET35)
+            , bool openExisting = false
+#endif
+            )
+            : this(name, nodeCount, nodeBufferSize, true
+#if !(NET35)
+                , openExisting
+#endif
+            )
         {
-            Open();
+            Open(
+#if !(NET35)
+            openExisting
+#endif
+            );
         }
 
         /// <summary>
@@ -236,12 +251,20 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The name of an existing <see cref="CircularBuffer"/> previously created with <see cref="SharedBuffer.IsOwnerOfSharedMemory"/>=true</param>
         public CircularBuffer(string name)
-            : this(name, 0, 0, false)
+            : this(name, 0, 0, false
+#if !(NET35)
+                , false
+#endif
+            )
         {
             Open();
         }
 
-        private CircularBuffer(string name, int nodeCount, int nodeBufferSize, bool ownsSharedMemory)
+        private CircularBuffer(string name, int nodeCount, int nodeBufferSize, bool ownsSharedMemory
+#if !(NET35)
+            , bool openExisting = false
+#endif            
+            )
             : base(name, Marshal.SizeOf(typeof(NodeHeader)) + (Marshal.SizeOf(typeof(Node)) * nodeCount) + (nodeCount * (long)nodeBufferSize), ownsSharedMemory)
         {
             #region Argument validation
@@ -451,10 +474,10 @@ namespace SharedMemory
 
             // Copy the data
             int amount = Math.Min(source.Length - startIndex, NodeBufferSize);
-            
+
             Marshal.Copy(source, startIndex, new IntPtr(BufferStartPtr + node->Offset), amount);
             node->AmountWritten = amount;
-            
+
 
             // Writing is complete, make readable
             PostNode(node);
@@ -645,9 +668,9 @@ namespace SharedMemory
                 Interlocked.CompareExchange(ref _nodeHeader->ReadEnd, node->Next, blockIndex);
 #pragma warning restore 0420
 
-               // If a writer thread is waiting on "node available" signal the event
+                // If a writer thread is waiting on "node available" signal the event
                 if (node->Prev == _nodeHeader->WriteStart)
-                        NodeAvailable.Set();
+                    NodeAvailable.Set();
             }
         }
 
@@ -710,7 +733,7 @@ namespace SharedMemory
         /// <returns>The number of bytes read</returns>
         /// <exception cref="ArgumentOutOfRangeException">If the size of <typeparamref name="T"/> is larger than <see cref="NodeBufferSize"/>.</exception>
         public virtual int Read<T>(out T destination, int timeout = 1000)
-            where T: struct
+            where T : struct
         {
             int structSize = Marshal.SizeOf(typeof(T));
             if (structSize > NodeBufferSize)
