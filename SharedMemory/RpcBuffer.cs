@@ -1,4 +1,4 @@
-﻿// SharedMemory (File: SharedMemory\RpcBuffer.cs)
+// SharedMemory (File: SharedMemory\RpcBuffer.cs)
 // Copyright (c) 2020 Justin Stenning
 // http://spazzarama.com
 //
@@ -742,6 +742,8 @@ namespace SharedMemory
             }
         }
 
+
+        byte[] writePacketBuffer = null;
         bool WriteProtocolV1(MessageType msgType, ulong msgId, byte[] msg, ulong responseMsgId, int timeout)
         {
             if (Disposed)
@@ -761,10 +763,14 @@ namespace SharedMemory
                 int i = 0;
                 int left = msg?.Length ?? 0;
 
-                byte[] pMsg = null;
-
                 ushort totalPackets = ((msg?.Length ?? 0) == 0) ? (ushort)1 : Convert.ToUInt16(Math.Ceiling((double)msg.Length / (double)msgBufferLength));
                 ushort currentPacket = 1;
+
+                // Initialise the sendBuffer on the first request
+                if (writePacketBuffer == null)
+                {
+                    writePacketBuffer = new byte[msgBufferLength + protocolLength];
+                }
 
                 while (true)
                 {
@@ -773,7 +779,7 @@ namespace SharedMemory
                         return false;
                     }
 
-                    pMsg = new byte[left > msgBufferLength ? msgBufferLength + protocolLength : left + protocolLength];
+                    var packetLength = left > msgBufferLength ? msgBufferLength + protocolLength : left + protocolLength;
                     
                     // Writing protocol header
                     var header = new RpcProtocolHeaderV1
@@ -785,13 +791,13 @@ namespace SharedMemory
                         PayloadSize = msg?.Length ?? 0,
                         ResponseId = responseMsgId
                     };
-                    FastStructure.CopyTo(ref header, pMsg, 0);
+                    FastStructure.CopyTo(ref header, writePacketBuffer, 0);
 
                     if (left > msgBufferLength)
                     {
                         // Writing payload
                         if (msg != null && msg.Length > 0)
-                            Buffer.BlockCopy(msg, i, pMsg, protocolLength, msgBufferLength);
+                            Buffer.BlockCopy(msg, i, writePacketBuffer, protocolLength, msgBufferLength);
 
                         left -= msgBufferLength;
                         i += msgBufferLength;
@@ -801,7 +807,7 @@ namespace SharedMemory
                         // Writing last packet of payload
                         if (msg != null && msg.Length > 0)
                         {
-                            Buffer.BlockCopy(msg, i, pMsg, protocolLength, left);
+                            Buffer.BlockCopy(msg, i, writePacketBuffer, protocolLength, left);
                         }
 
                         left = 0;
@@ -810,8 +816,8 @@ namespace SharedMemory
                     Statistics.StartWaitWrite();
                     var bytes = WriteBuffer.Write((ptr) =>
                     {
-                        FastStructure.WriteBytes(ptr, pMsg, 0, pMsg.Length);
-                        return pMsg.Length;
+                        FastStructure.WriteBytes(ptr, writePacketBuffer, 0, packetLength);
+                        return writePacketBuffer.Length;
                     }, 1000);
 
                     Statistics.WritePacket(bytes - protocolLength);
