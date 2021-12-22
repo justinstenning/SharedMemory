@@ -1,4 +1,4 @@
-// SharedMemory (File: SharedMemory\RpcBuffer.cs)
+﻿// SharedMemory (File: SharedMemory\RpcBuffer.cs)
 // Copyright (c) 2020 Justin Stenning
 // http://spazzarama.com
 //
@@ -114,6 +114,10 @@ namespace SharedMemory
         /// The message type
         /// </summary>
         public MessageType MsgType { get; set; }
+        /// <summary>
+        /// The number of packets loaded for this request
+        /// </summary>
+        public ushort Packets { get; set; }
         /// <summary>
         /// The message payload (if any)
         /// </summary>
@@ -464,9 +468,7 @@ namespace SharedMemory
         protected ConcurrentDictionary<ulong, RpcRequest> IncomingRequests { get; } = new ConcurrentDictionary<ulong, RpcRequest>();
 
         Action<ulong, byte[]> RemoteCallHandler = null;
-        Func<ulong, byte[], Task> AsyncRemoteCallHandler = null;
         Func<ulong, byte[], byte[]> RemoteCallHandlerWithResult = null;
-        Func<ulong, byte[], Task<byte[]>> AsyncRemoteCallHandlerWithResult = null;
 
         /// <summary>
         /// Construct a new RpcBuffer
@@ -476,24 +478,11 @@ namespace SharedMemory
         /// <param name="bufferCapacity">Server only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The client will use the same size as defined by the server</param>
         /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
         /// <param name="bufferNodeCount">Server only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
-            this (name, bufferCapacity, protocolVersion, bufferNodeCount)
+        /// <param name="receiveThreads">The number of threads to use to receive and process messages</param>
+        public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10, int receiveThreads = 1) :
+            this (name, bufferCapacity, protocolVersion, bufferNodeCount, receiveThreads)
         {
             RemoteCallHandler = remoteCallHandler;
-        }
-
-        /// <summary>
-        /// Construct a new RpcBuffer
-        /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the client/server pair. Each pair must have a unique value.</param>
-        /// <param name="asyncRemoteCallHandler">Asynchronous action to handle requests with no response.</param>
-        /// <param name="bufferCapacity">Server only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The client will use the same size as defined by the server</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
-        /// <param name="bufferNodeCount">Server only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        public RpcBuffer(string name, Func<ulong, byte[], Task> asyncRemoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
-            this(name, bufferCapacity, protocolVersion, bufferNodeCount)
-        {
-            AsyncRemoteCallHandler = asyncRemoteCallHandler;
         }
 
         /// <summary>
@@ -504,8 +493,9 @@ namespace SharedMemory
         /// <param name="bufferCapacity">Server only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The client will use the same size as defined by the server</param>
         /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
         /// <param name="bufferNodeCount">Server only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        public RpcBuffer(string name, Func<ulong, byte[], byte[]> remoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
-            this(name, bufferCapacity, protocolVersion, bufferNodeCount)
+        /// <param name="receiveThreads">The number of threads to use to receive and process messages</param>
+        public RpcBuffer(string name, Func<ulong, byte[], byte[]> remoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10, int receiveThreads = 1) :
+            this(name, bufferCapacity, protocolVersion, bufferNodeCount, receiveThreads)
         {
             RemoteCallHandlerWithResult = remoteCallHandlerWithResult;
         }
@@ -514,24 +504,11 @@ namespace SharedMemory
         /// Construct a new RpcBuffer
         /// </summary>
         /// <param name="name">The unique channel name. This is the name to be shared between the client/server pair. Each pair must have a unique value.</param>
-        /// <param name="asyncRemoteCallHandlerWithResult">Function to asynchronously handle requests with a response.</param>
         /// <param name="bufferCapacity">Server only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The client will use the same size as defined by the server</param>
         /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
         /// <param name="bufferNodeCount">Server only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        public RpcBuffer(string name, Func<ulong, byte[], Task<byte[]>> asyncRemoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
-            this(name, bufferCapacity, protocolVersion, bufferNodeCount)
-        {
-            AsyncRemoteCallHandlerWithResult = asyncRemoteCallHandlerWithResult;
-        }
-
-        /// <summary>
-        /// Construct a new RpcBuffer
-        /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the client/server pair. Each pair must have a unique value.</param>
-        /// <param name="bufferCapacity">Server only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The client will use the same size as defined by the server</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
-        /// <param name="bufferNodeCount">Server only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        public RpcBuffer(string name, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10)
+        /// <param name="receiveThreads">The number of threads to use to receive and process messages</param>
+        public RpcBuffer(string name, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10, int receiveThreads = 1)
         {
             if (bufferCapacity < 256) // min 256 bytes
             {
@@ -541,6 +518,11 @@ namespace SharedMemory
             if (bufferCapacity > 1024 * 1024) // max 1MB
             {
                 throw new ArgumentOutOfRangeException(nameof(bufferCapacity), "cannot be larger than 1MB");
+            }
+
+            if (receiveThreads < 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(receiveThreads), "must be 1 or more read threads");
             }
 
             Statistics = new RpcStatistics();
@@ -588,18 +570,22 @@ namespace SharedMemory
 
             this.msgBufferLength = Convert.ToInt32(this.bufferCapacity) - protocolLength;
 
-            readTask = Task.Factory.StartNew(() =>
+            for (var i = 0; i < receiveThreads; i++)
             {
-                switch (protocolVersion)
+                // Start read threads
+                readTasks.Add(Task.Factory.StartNew(() =>
                 {
-                    case RpcProtocol.V1:
-                        ReadThreadV1();
-                        break;
-                }
-            }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
+                    switch (protocolVersion)
+                    {
+                        case RpcProtocol.V1:
+                            ReadThreadV1();
+                            break;
+                    }
+                }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default));
+            }
         }
 
-        readonly Task readTask;
+        readonly List<Task> readTasks = new List<Task>();
         object mutex = new object();
         ulong messageId = 1;
 
@@ -649,25 +635,6 @@ namespace SharedMemory
             {
                 return new RpcResponse(request.IsSuccess, request.Data);
             }
-        }
-
-        /// <summary>
-        /// Send a remote request on the channel (awaitable)
-        /// </summary>
-        /// <param name="args">Arguments (if any) as a byte array to be sent to the remote endpoint</param>
-        /// <param name="timeoutMs">Timeout in milliseconds (defaults to 30sec)</param>
-        /// <returns></returns>
-        /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
-        /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        public async Task<RpcResponse> RemoteRequestAsync(byte[] args = null, int timeoutMs = defaultTimeoutMs)
-        {
-            ThrowIfDisposedOrShutdown();
-
-            return await Task.Run(() =>
-            {
-                var request = CreateMessageRequest();
-                return SendMessage(request, args, timeoutMs);
-            });
         }
 
         RpcResponse SendMessage(RpcRequest request, byte[] payload, int timeout = defaultTimeoutMs)
@@ -721,11 +688,13 @@ namespace SharedMemory
                 {
                     if (!request.ResponseReady.WaitOne(timeout))
                     {
-                        result = new RpcResponse(false, null);
+                        result.Success = false;
+                        result.Data = null;
                     }
                     else
                     {
-                        result = new RpcResponse(request.IsSuccess, request.Data);
+                        result.Success = request.IsSuccess;
+                        result.Data = request.Data;
                     }
                 }
 
@@ -842,73 +811,78 @@ namespace SharedMemory
 
                 Statistics.StartWaitRead();
 
+                int readLength = 0;
+                int packetSize = 0;
+                RpcProtocolHeaderV1 header;
+                RpcRequest request = null;
                 ReadBuffer.Read((ptr) =>
                 {
-                    int readLength = 0;
-                    var header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
+                    request = null;
+                    readLength = 0;
+                    packetSize = 0;
+                    header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
                     ptr = ptr + protocolLength;
                     readLength += protocolLength;
 
-                    RpcRequest request = null;
                     if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
                     {
                         if (!Requests.TryGetValue(header.ResponseId, out request))
                         {
-                            // The response received does not have a  matching message that was sent
+                            // The response received does not have a matching message that was sent
                             Statistics.DiscardResponse(header.ResponseId);
                             return protocolLength;
                         }
                     }
                     else
                     {
-                        request = IncomingRequests.GetOrAdd(header.MsgId, new RpcRequest
+                        request = IncomingRequests.GetOrAdd(header.MsgId, (msgId) => new RpcRequest
                         {
-                            MsgId = header.MsgId
+                            MsgId = msgId
                         });
                     }
 
-                    int packetSize = header.PayloadSize < msgBufferLength ? header.PayloadSize :
-                        (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize % msgBufferLength);
-
-                    if (header.PayloadSize > 0)
+                    lock (request) // lock on the request object
                     {
-                        if (request.Data == null)
-                        {
-                            request.Data = new byte[header.PayloadSize];
-                        }
+                        packetSize = header.PayloadSize < msgBufferLength ? header.PayloadSize :
+                            (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize % msgBufferLength);
 
-                        int index = msgBufferLength * (header.CurrentPacket - 1);
-                        FastStructure.ReadBytes(request.Data, ptr, index, packetSize);
-                        readLength += packetSize;
-                    }
+                        if (header.PayloadSize > 0)
+                        {
+                            // Allocate enough room for the complete payload
+                            if (request.Data == null)
+                            {
+                                request.Data = new byte[header.PayloadSize];
+                            }
 
-                    if (header.CurrentPacket == header.TotalPackets)
-                    {
-                        if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
-                        {
-                            Requests.TryRemove(request.MsgId, out RpcRequest removed);
+                            int index = msgBufferLength * (header.CurrentPacket - 1);
+                            FastStructure.ReadBytes(request.Data, ptr, index, packetSize);
+                            readLength += packetSize;
                         }
-                        else
-                        {
-                            IncomingRequests.TryRemove(request.MsgId, out RpcRequest removed);
-                        }
+                        request.Packets++;
 
-                        // Full message is ready
-                        Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
+                        // Once we have retrieved all packets then we can finalise processing
+                        if (request.Packets == header.TotalPackets)
+                        {
+                            // Full message is ready
+                            Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
 
-                        if (header.MsgType == MessageType.RpcResponse)
-                        {
-                            request.IsSuccess = true;
-                            request.ResponseReady.Set();
-                        }
-                        else if (header.MsgType == MessageType.ErrorInRpc)
-                        {
-                            request.IsSuccess = false;
-                            request.ResponseReady.Set();
-                        }
-                        else if (header.MsgType == MessageType.RpcRequest)
-                        {
-                            ProcessCallHandler(request);
+                            if (header.MsgType == MessageType.RpcResponse)
+                            {
+                                Requests.TryRemove(request.MsgId, out RpcRequest removed);
+                                request.IsSuccess = true;
+                                request.ResponseReady.Set();
+                            }
+                            else if (header.MsgType == MessageType.ErrorInRpc)
+                            {
+                                Requests.TryRemove(request.MsgId, out RpcRequest removed);
+                                request.IsSuccess = false;
+                                request.ResponseReady.Set();
+                            }
+                            else if (header.MsgType == MessageType.RpcRequest)
+                            {
+                                IncomingRequests.TryRemove(request.MsgId, out RpcRequest removed);
+                                ProcessCallHandler(request);
+                            }
                         }
                     }
 
@@ -928,40 +902,10 @@ namespace SharedMemory
                     RemoteCallHandler(request.MsgId, request.Data);
                     SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId);
                 }
-                else if (AsyncRemoteCallHandler != null)
-                {
-                    Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await AsyncRemoteCallHandler(request.MsgId, request.Data).ConfigureAwait(false);
-                            SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId);
-                        }
-                        catch
-                        {
-                            SendMessage(MessageType.ErrorInRpc, CreateMessageRequest(), null, request.MsgId);
-                        }
-                    });
-                }
                 else if (RemoteCallHandlerWithResult != null)
                 {
                     var result = RemoteCallHandlerWithResult(request.MsgId, request.Data);
                     SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId);
-                }
-                else if (AsyncRemoteCallHandlerWithResult != null)
-                {
-                    Task.Run(async () =>
-                    {
-                        try
-                        {
-                            var result = await AsyncRemoteCallHandlerWithResult(request.MsgId, request.Data).ConfigureAwait(false);
-                            SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId);
-                        }
-                        catch
-                        {
-                            SendMessage(MessageType.ErrorInRpc, CreateMessageRequest(), null, request.MsgId);
-                        }
-                    });
                 }
             }
             catch

@@ -13,30 +13,34 @@ namespace SharedMemory.Tests
         RpcBuffer ipcServer;
         RpcBuffer ipcClient;
 
-        RpcBuffer ipcServerBidrectional;
-        RpcBuffer ipcClientBidrectional;
+        RpcBuffer ipcServerNested;
+        RpcBuffer ipcClientNested;
         readonly byte[] data;
         public RpcBufferBenchmark()
         {
             data = new byte[] { 3, 3 };
             var ipcName = "RpcBufferBenchmark" + Guid.NewGuid().ToString();
+            var result = new byte[1];
             ipcServer = new RpcBuffer(ipcName, (msgId, payload) =>
             {
-                return new byte[] { (byte)(payload[0] * payload[1]) };
+                result[0] = (byte)(payload[0] * payload[1]);
+                return result;
             }, bufferCapacity: 256);
             ipcClient = new RpcBuffer(ipcName, (msgId, payload) =>
             {
-                return Task.FromResult(new byte[] { (byte)(payload[0] * payload[1]) });
+                result[0] = (byte)(payload[0] * payload[1]);
+                return result;
             });
 
             ipcName = "RpcBufferBenchmarkBidrectional" + Guid.NewGuid().ToString();
-            ipcServerBidrectional = new RpcBuffer(ipcName, (msgId, payload) =>
+            ipcServerNested = new RpcBuffer(ipcName, (msgId, payload) =>
             {
-                return Task.FromResult(new byte[] { (byte)(payload[0] * payload[1]) });
+                result[0] = (byte)(payload[0] * payload[1]);
+                return result;
             }, bufferCapacity: 256);
-            ipcClientBidrectional = new RpcBuffer(ipcName, (msgId, payload) =>
+            ipcClientNested = new RpcBuffer(ipcName, (msgId, payload) =>
             {
-                return ipcServerBidrectional.RemoteRequest(payload).Data;
+                return ipcServerNested.RemoteRequest(payload).Data;
             });
         }
 
@@ -44,9 +48,9 @@ namespace SharedMemory.Tests
         public byte[] ClientToServer() => ipcClient.RemoteRequest(data).Data;
 
         [Benchmark]
-        public byte[] ServerToClientAsync() => ipcServer.RemoteRequest(data).Data;
+        public byte[] ServerToClient() => ipcServer.RemoteRequest(data).Data;
 
         [Benchmark]
-        public byte[] ClientBiderectionalAsync() => ipcClientBidrectional.RemoteRequest(data).Data;
+        public byte[] ClientNested() => ipcClientNested.RemoteRequest(data).Data;
     }
 }
