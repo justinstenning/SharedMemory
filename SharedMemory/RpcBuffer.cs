@@ -818,7 +818,7 @@ namespace SharedMemory
                     {
                         FastStructure.WriteBytes(ptr, writePacketBuffer, 0, packetLength);
                         return writePacketBuffer.Length;
-                    }, 1000);
+                    }, timeout);
 
                     Statistics.WritePacket(bytes - protocolLength);
 
