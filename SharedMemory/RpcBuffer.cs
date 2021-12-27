@@ -811,16 +811,13 @@ namespace SharedMemory
 
                 Statistics.StartWaitRead();
 
-                int readLength = 0;
-                int packetSize = 0;
-                RpcProtocolHeaderV1 header;
-                RpcRequest request = null;
                 ReadBuffer.Read((ptr) =>
                 {
-                    request = null;
-                    readLength = 0;
-                    packetSize = 0;
-                    header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
+                    int readLength = 0;
+                    int packetSize = 0;
+                    RpcRequest request = null;
+
+                    RpcProtocolHeaderV1 header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
                     ptr = ptr + protocolLength;
                     readLength += protocolLength;
 
