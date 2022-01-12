@@ -506,7 +506,7 @@ namespace SharedMemory
         /// <summary>
         /// Dispose has completed
         /// </summary>
-        protected bool DisposeFinished
+        public bool DisposeFinished
         {
             get
             {
