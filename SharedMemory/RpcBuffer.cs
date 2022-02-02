@@ -51,9 +51,117 @@ namespace SharedMemory
     }
 
     /// <summary>
+    /// Extension methods for adorning RPC tasks
+    /// </summary>
+
+    public static class ResponseTaskHelper
+    {
+        static readonly RpcResponse CancelledRpcResponse = new RpcResponse(false, null);
+        static readonly Task<RpcResponse> CancelledRpcResponseTask = Task.FromResult(CancelledRpcResponse);
+
+        /// <summary>
+        /// Adds timeout and manual cancellation capabilities to an existing Task
+        /// </summary>
+        /// <param name="task"></param>
+        /// <param name="millisecondsTimeout"></param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
+        public static async Task<RpcResponse> TimeoutOrCancel(this Task<RpcResponse> task, int millisecondsTimeout, CancellationToken cancellationToken = default)
+        {
+            if (task.IsCompleted)
+            {
+                // the task has already completed
+                // No proxy necessary.
+                return await task.ConfigureAwait(false);
+            }
+
+            // Short-circuit #2: zero timeout
+            if (millisecondsTimeout == 0)
+            {
+                // We've already timed out.
+                return new RpcResponse(false, null);
+            }
+
+            if (millisecondsTimeout == Timeout.Infinite)
+            {
+                return await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            using (var cts = new CancellationTokenSource(millisecondsTimeout))
+            {
+                var timeoutToken = cts.Token;
+                return await task.WaitAsync(cancellationToken).WaitAsync(timeoutToken).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously waits for the task to complete, or for the cancellation token to be canceled.
+        /// </summary>
+        /// <param name="this">The task to wait for. May not be <c>null</c>.</param>
+        /// <param name="cancellationToken">The cancellation token that cancels the wait.</param>
+        private static Task<RpcResponse> WaitAsync(this Task<RpcResponse> @this, CancellationToken cancellationToken)
+        {
+            if (@this == null)
+                throw new ArgumentNullException(nameof(@this));
+
+            if (!cancellationToken.CanBeCanceled)
+                return @this;
+            if (cancellationToken.IsCancellationRequested)
+                return CancelledRpcResponseTask;
+            return DoWaitAsync(@this, cancellationToken);
+        }
+
+        private static async Task<RpcResponse> DoWaitAsync(Task<RpcResponse> task, CancellationToken cancellationToken)
+        {
+            using (var cancelTaskSource = new RpcResponseCancellationTokenTaskSource(cancellationToken))
+                return await (await Task.WhenAny(task, cancelTaskSource.Task).ConfigureAwait(false)).ConfigureAwait(false);
+        }
+        
+        /// <summary>
+        /// Holds the task for a cancellation token, as well as the token registration. The registration is disposed when this instance is disposed.
+        /// </summary>
+        public sealed class RpcResponseCancellationTokenTaskSource : IDisposable
+        {
+            /// <summary>
+            /// The cancellation token registration, if any. This is <c>null</c> if the registration was not necessary.
+            /// </summary>
+            private readonly IDisposable _registration;
+
+            /// <summary>
+            /// Creates a task for the specified cancellation token, registering with the token if necessary.
+            /// </summary>
+            /// <param name="cancellationToken">The cancellation token to observe.</param>
+            public RpcResponseCancellationTokenTaskSource(CancellationToken cancellationToken)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    Task = CancelledRpcResponseTask;
+                    return;
+                }
+                var tcs = new TaskCompletionSource<RpcResponse>();
+                _registration = cancellationToken.Register(() => tcs.TrySetResult(CancelledRpcResponse), useSynchronizationContext: false);
+                Task = tcs.Task;
+            }
+
+            /// <summary>
+            /// Gets the task for the source cancellation token.
+            /// </summary>
+            public Task<RpcResponse> Task { get; private set; }
+
+            /// <summary>
+            /// Disposes the cancellation token registration, if any. Note that this may cause <see cref="Task"/> to never complete.
+            /// </summary>
+            public void Dispose()
+            {
+                _registration?.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
     /// The RPC message type
     /// </summary>
-    public enum MessageType: byte
+    public enum MessageType : byte
     {
         /// <summary>
         /// A request message
@@ -121,7 +229,7 @@ namespace SharedMemory
         /// <summary>
         /// A wait event that is signaled when a response is ready
         /// </summary>
-        public ManualResetEvent ResponseReady { get; } = new ManualResetEvent(false);
+        public TaskCompletionSource<RpcResponse> ResponseReady { get; } = new TaskCompletionSource<RpcResponse>();
         /// <summary>
         /// Was the request successful
         /// </summary>
@@ -151,12 +259,12 @@ namespace SharedMemory
         /// <summary>
         /// If the request was successful
         /// </summary>
-        public bool Success { get; set; }
-        
+        public bool Success { get; }
+
         /// <summary>
         /// The returned result (if applicable)
         /// </summary>
-        public byte[] Data { get; set; }
+        public byte[] Data { get; }
     }
 
     /// <summary>
@@ -336,7 +444,7 @@ namespace SharedMemory
             ReadingLastMessageSize = size;
             switch (msgType)
             {
-                case MessageType.RpcRequest: 
+                case MessageType.RpcRequest:
                     RequestsReceived++;
                     break;
                 case MessageType.RpcResponse:
@@ -414,7 +522,7 @@ namespace SharedMemory
     {
         private Mutex masterMutex;
         private long _disposed = 0;
-        
+
         /// <summary>
         /// Whether the RpcBuffer has been disposed
         /// </summary>
@@ -422,11 +530,18 @@ namespace SharedMemory
         {
             get
             {
-                return Interlocked.Read(ref _disposed) == 1;
+                return Interlocked.Read(ref _disposed) != 0;
             }
-            private set
+        }
+
+        /// <summary>
+        /// Dispose has completed
+        /// </summary>
+        public bool DisposeFinished
+        {
+            get
             {
-                Interlocked.Exchange(ref _disposed, value ? 1 : 0);
+                return Interlocked.Read(ref _disposed) == 2;
             }
         }
 
@@ -477,7 +592,7 @@ namespace SharedMemory
         /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
-            this (name, bufferCapacity, protocolVersion, bufferNodeCount)
+            this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
             RemoteCallHandler = remoteCallHandler;
         }
@@ -588,7 +703,8 @@ namespace SharedMemory
 
             this.msgBufferLength = Convert.ToInt32(this.bufferCapacity) - protocolLength;
 
-            Task.Run(() =>
+
+            Task readTask = new Task(() =>
             {
                 switch (protocolVersion)
                 {
@@ -596,7 +712,9 @@ namespace SharedMemory
                         ReadThreadV1();
                         break;
                 }
-            });
+            }, TaskCreationOptions.LongRunning);
+
+            readTask.Start();
         }
 
         object mutex = new object();
@@ -622,36 +740,17 @@ namespace SharedMemory
         /// </summary>
         /// <param name="args">Arguments (if any) as a byte array to be sent to the remote endpoint</param>
         /// <param name="timeoutMs">Timeout in milliseconds (defaults to 30sec)</param>
+        /// <param name="cancellationToken">A cancellation token</param>
         /// <returns>The returned response</returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        public RpcResponse RemoteRequest(byte[] args = null, int timeoutMs = defaultTimeoutMs)
+        public RpcResponse RemoteRequest(byte[] args = null, int timeoutMs = defaultTimeoutMs, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposedOrShutdown();
 
             var request = CreateMessageRequest();
-            var t = new Task(async () =>
-            {
-                await SendMessage(request, args, timeoutMs).ConfigureAwait(false);
-            });
-            t.Start();
-            
-            if (!request.ResponseReady.WaitOne(timeoutMs))
-            {
-                // Timed out
-                if (request.IsSuccess)
-                {
-                    return new RpcResponse(request.IsSuccess, request.Data);
-                }
-                else
-                {
-                    return new RpcResponse(false, null);
-                }
-            }
-            else
-            {
-                return new RpcResponse(request.IsSuccess, request.Data);
-            }
+            Task<RpcResponse> sendMessage = SendMessage(request, args, timeoutMs, cancellationToken);
+            return sendMessage.Result;
         }
 
         /// <summary>
@@ -659,20 +758,21 @@ namespace SharedMemory
         /// </summary>
         /// <param name="args">Arguments (if any) as a byte array to be sent to the remote endpoint</param>
         /// <param name="timeoutMs">Timeout in milliseconds (defaults to 30sec)</param>
+        /// <param name="cancellationToken">A cancellation token</param>
         /// <returns></returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        public Task<RpcResponse> RemoteRequestAsync(byte[] args = null, int timeoutMs = defaultTimeoutMs)
+        public Task<RpcResponse> RemoteRequestAsync(byte[] args = null, int timeoutMs = defaultTimeoutMs, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposedOrShutdown();
 
             var request = CreateMessageRequest();
-            return SendMessage(request, args, timeoutMs);
+            return SendMessage(request, args, timeoutMs, cancellationToken);
         }
 
-        async Task<RpcResponse> SendMessage(RpcRequest request, byte[] payload, int timeout = defaultTimeoutMs)
+        async Task<RpcResponse> SendMessage(RpcRequest request, byte[] payload, int timeout = defaultTimeoutMs, CancellationToken cancellationToken = default)
         {
-            return await SendMessage(MessageType.RpcRequest, request, payload, timeout: timeout).ConfigureAwait(false);
+            return await SendMessage(MessageType.RpcRequest, request, payload, timeout: timeout, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -683,15 +783,16 @@ namespace SharedMemory
         /// <param name="payload"></param>
         /// <param name="responseMsgId"></param>
         /// <param name="timeout"></param>
+        /// <param name="cancellationToken"></param>
         /// <returns></returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        protected virtual async Task<RpcResponse> SendMessage(MessageType msgType, RpcRequest request, byte[] payload, ulong responseMsgId = 0, int timeout = defaultTimeoutMs)
+        protected virtual Task<RpcResponse> SendMessage(MessageType msgType, RpcRequest request, byte[] payload, ulong responseMsgId = 0, int timeout = defaultTimeoutMs, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposedOrShutdown();
 
             var msgId = request.MsgId;
-            
+
             if (msgType == MessageType.RpcRequest)
             {
                 Requests[request.MsgId] = request;
@@ -705,7 +806,7 @@ namespace SharedMemory
                     break;
                 default:
                     // Invalid protocol
-                    return new RpcResponse(false, null);
+                    return Task.FromResult(new RpcResponse(false, null));
             }
 
             if (success)
@@ -715,33 +816,26 @@ namespace SharedMemory
 
             if (success && msgType == MessageType.RpcRequest)
             {
-                RpcResponse result = new RpcResponse(true, null);
-
                 if (request != null)
                 {
-                    await Task.Run(() =>
-                    {
-                        if (!request.ResponseReady.WaitOne(timeout))
-                        {
-                            result = new RpcResponse(false, null);
-                        }
-                        else
-                        {
-                            result = new RpcResponse(request.IsSuccess, request.Data);
-                        }
-                    }).ConfigureAwait(false);
+                    return request.ResponseReady.Task.TimeoutOrCancel(timeout, cancellationToken);
+                }
+                else
+                {
+                    return Task.FromResult(new RpcResponse(true, null));
                 }
 
-                return result;
             }
             else
             {
+                RpcResponse rpcResponse = new RpcResponse(success, null);
+
                 if (request != null)
                 {
                     request.IsSuccess = success;
-                    request.ResponseReady.Set();
+                    request.ResponseReady.SetResult(rpcResponse);
                 }
-                return new RpcResponse(success, null);
+                return Task.FromResult(rpcResponse);
             }
         }
 
@@ -777,7 +871,7 @@ namespace SharedMemory
                     }
 
                     pMsg = new byte[left > msgBufferLength ? msgBufferLength + protocolLength : left + protocolLength];
-                    
+
                     // Writing protocol header
                     var header = new RpcProtocolHeaderV1
                     {
@@ -830,124 +924,207 @@ namespace SharedMemory
             return true;
         }
 
+        private bool m_ReadThreadIsReading = false;
+        private object m_ReadThreadIsReadingLock = new object();
+
         void ReadThreadV1()
-        {
-            while(true && !ReadBuffer.ShuttingDown)
-            {
-                if (Interlocked.Read(ref _disposed) == 1)
-                    return;
-
-                Statistics.StartWaitRead();
-
-                ReadBuffer.Read((ptr) =>
-                {
-                    int readLength = 0;
-                    var header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
-                    ptr = ptr + protocolLength;
-                    readLength += protocolLength;
-
-                    RpcRequest request = null;
-                    if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
-                    {
-                        if (!Requests.TryGetValue(header.ResponseId, out request))
-                        {
-                            // The response received does not have a  matching message that was sent
-                            Statistics.DiscardResponse(header.ResponseId);
-                            return protocolLength;
-                        }
-                    }
-                    else
-                    {
-                        request = IncomingRequests.GetOrAdd(header.MsgId, new RpcRequest
-                        {
-                            MsgId = header.MsgId
-                        });
-                    }
-
-                    int packetSize = header.PayloadSize < msgBufferLength ? header.PayloadSize :
-                        (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize % msgBufferLength);
-
-                    if (header.PayloadSize > 0)
-                    {
-                        if (request.Data == null)
-                        {
-                            request.Data = new byte[header.PayloadSize];
-                        }
-
-                        int index = msgBufferLength * (header.CurrentPacket - 1);
-                        FastStructure.ReadBytes(request.Data, ptr, index, packetSize);
-                        readLength += packetSize;
-                    }
-
-                    if (header.CurrentPacket == header.TotalPackets)
-                    {
-                        if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
-                        {
-                            Requests.TryRemove(request.MsgId, out RpcRequest removed);
-                        }
-                        else
-                        {
-                            IncomingRequests.TryRemove(request.MsgId, out RpcRequest removed);
-                        }
-
-                        // Full message is ready
-                        var watching = Stopwatch.StartNew();
-                        Task.Run(async () =>
-                        {
-                            Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
-
-                            if (header.MsgType == MessageType.RpcResponse)
-                            {
-                                request.IsSuccess = true;
-                                request.ResponseReady.Set();
-                            }
-                            else if (header.MsgType == MessageType.ErrorInRpc)
-                            {
-                                request.IsSuccess = false;
-                                request.ResponseReady.Set();
-                            }
-                            else if (header.MsgType == MessageType.RpcRequest)
-                            {
-                                await ProcessCallHandler(request).ConfigureAwait(false);
-                            }
-                        });
-                    }
-
-                    Statistics.ReadPacket(packetSize);
-
-                    return protocolLength + packetSize;
-                }, 500);
-            }
-        }
-
-        async Task ProcessCallHandler(RpcRequest request)
         {
             try
             {
+                // Work with Local Variable to prevent NPE after dispose  
+                CircularBuffer l_TempReadBuffer = ReadBuffer;
+
+                while (true && !l_TempReadBuffer.ShuttingDown)
+                {
+                    if (Interlocked.Read(ref _disposed) == 1)
+                        return;
+
+                    // Check If Reading must be stopped
+                    if (_needDisposeManagedResources)
+                    {
+                        DisposeManagedResources();
+                        return;
+                    }
+
+                    // Set Marker for Reading in Progress
+                    lock (m_ReadThreadIsReadingLock)
+                    {
+                        m_ReadThreadIsReading = true;
+                    }
+
+                    try
+                    {
+                        Statistics.StartWaitRead();
+
+                        l_TempReadBuffer.Read((ptr) =>
+                        {
+                            int readLength = 0;
+                            var header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
+                            ptr = ptr + protocolLength;
+                            readLength += protocolLength;
+
+                            RpcRequest request = null;
+                            if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
+                            {
+                                if (!Requests.TryGetValue(header.ResponseId, out request))
+                                {
+                                    // The response received does not have a  matching message that was sent
+                                    Statistics.DiscardResponse(header.ResponseId);
+                                    return protocolLength;
+                                }
+                            }
+                            else
+                            {
+                                request = IncomingRequests.GetOrAdd(header.MsgId, new RpcRequest
+                                {
+                                    MsgId = header.MsgId
+                                });
+                            }
+
+                            int packetSize = header.PayloadSize < msgBufferLength ? header.PayloadSize :
+                                (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize % msgBufferLength);
+
+                            if (header.PayloadSize > 0)
+                            {
+                                if (request.Data == null)
+                                {
+                                    request.Data = new byte[header.PayloadSize];
+                                }
+
+                                int index = msgBufferLength * (header.CurrentPacket - 1);
+                                FastStructure.ReadBytes(request.Data, ptr, index, packetSize);
+                                readLength += packetSize;
+                            }
+
+                            if (header.CurrentPacket == header.TotalPackets)
+                            {
+                                if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
+                                {
+                                    Requests.TryRemove(request.MsgId, out RpcRequest removed);
+                                }
+                                else
+                                {
+                                    IncomingRequests.TryRemove(request.MsgId, out RpcRequest removed);
+                                }
+
+                                // Full message is ready
+
+                                Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
+
+                                if (header.MsgType == MessageType.RpcResponse)
+                                {
+                                    request.IsSuccess = true;
+                                    request.ResponseReady.SetResult(new RpcResponse(request.IsSuccess, request.Data));
+                                }
+                                else if (header.MsgType == MessageType.ErrorInRpc)
+                                {
+                                    request.IsSuccess = false;
+                                    request.ResponseReady.SetResult(new RpcResponse(request.IsSuccess, request.Data));
+                                }
+                                else if (header.MsgType == MessageType.RpcRequest)
+                                {
+                                    // For Handling Request we create an new Task because this can take sometime
+                                    Task.Run(async () =>
+                                    {
+                                        try
+                                        {
+                                            await ProcessCallHandler(request).ConfigureAwait(false);
+                                        }
+                                        catch(Exception ex)
+                                        {
+                                            // Ignore Object Disposed and Invalid Operation Exceptions
+                                            // because the other side of the rpc buffers may 
+                                            // not know if this Buffer is shutting down or disposed
+                                            if (!(ex is ObjectDisposedException || ex is InvalidOperationException))
+                                            {
+                                                throw;
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+
+                            Statistics.ReadPacket(packetSize);
+
+                            return protocolLength + packetSize;
+                        }, 500);
+                    }
+                    finally
+                    {
+                        lock (m_ReadThreadIsReadingLock)
+                        {
+                            m_ReadThreadIsReading = false;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                // Make sure that Dispose ManageResource has been progressed
+                if (_needDisposeManagedResources)
+                {
+                    DisposeManagedResources();
+                }
+            }
+        }
+
+        private int _processCount = 0;
+        private object _processLock = new object();
+
+        async Task ProcessCallHandler(RpcRequest request, CancellationToken cancellationToken = default)
+        {
+            // Mark as processing
+            lock (_processLock)
+            {
+                _processCount++;
+            }
+
+            try
+            {
+
                 if (RemoteCallHandler != null)
                 {
                     RemoteCallHandler(request.MsgId, request.Data);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId).ConfigureAwait(false);
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId, cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 else if (AsyncRemoteCallHandler != null)
                 {
                     await AsyncRemoteCallHandler(request.MsgId, request.Data).ConfigureAwait(false);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId).ConfigureAwait(false);
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId, cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 else if (RemoteCallHandlerWithResult != null)
                 {
                     var result = RemoteCallHandlerWithResult(request.MsgId, request.Data);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId).ConfigureAwait(false);
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId, cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 else if (AsyncRemoteCallHandlerWithResult != null)
                 {
-                    var result = await AsyncRemoteCallHandlerWithResult(request.MsgId, request.Data).ConfigureAwait(false);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId).ConfigureAwait(false);
+                    var result = await AsyncRemoteCallHandlerWithResult(request.MsgId, request.Data)
+                        .ConfigureAwait(false);
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId, cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
                 }
             }
             catch
             {
-                await SendMessage(MessageType.ErrorInRpc, CreateMessageRequest(), null, request.MsgId).ConfigureAwait(false);
+                await SendMessage(MessageType.ErrorInRpc, CreateMessageRequest(), null, request.MsgId)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (_processLock)
+                {
+                    _processCount--;
+                }
+
+                // Make sure that ManagedResources are disposed if needed
+                if (_needDisposeManagedResources)
+                {
+                    DisposeManagedResources();
+                }
             }
         }
 
@@ -992,29 +1169,72 @@ namespace SharedMemory
 
             if (disposeManagedResources)
             {
-                if (WriteBuffer != null)
-                {
-                    WriteBuffer.Dispose();
-                    WriteBuffer = null;
-                }
-
-                if (ReadBuffer != null)
-                {
-                    ReadBuffer.Dispose();
-                    ReadBuffer = null;
-                }
-
-                if (masterMutex != null)
-                {
-                    masterMutex.Close();
-                    masterMutex.Dispose();
-                    masterMutex = null;
-                }
-
-                Disposed = true;
+                DisposeManagedResources();   
             }
         }
 
-#endregion
+        private bool _needDisposeManagedResources = false;
+
+        private void DisposeManagedResources()
+        {
+            lock (_processLock)
+            {
+                lock (m_ReadThreadIsReadingLock)
+                {
+                    // Check if dispose is possible otherwise
+                    // mark for dispose later
+                    if (_processCount > 0)
+                    {
+                        _needDisposeManagedResources = true;
+                        return;
+                    }
+
+                    if (m_ReadThreadIsReading)
+                    {
+                        _needDisposeManagedResources = true;
+                        return;
+                    }
+
+                    // Disconnect handle to prevent processing
+                    RemoteCallHandler = null;
+                    AsyncRemoteCallHandler = null;
+                    RemoteCallHandlerWithResult = null;
+                    AsyncRemoteCallHandlerWithResult = null;
+                    _needDisposeManagedResources = false;
+                }
+            }
+
+            // Mark as Disposed first otherwise ReadThread has NullPointerException because
+            // ReadBuffer is already null but Disposed is false
+            long l_OldValue = Interlocked.CompareExchange(ref _disposed, 1, 0);
+            
+            // Make sure that only one Thread is processing the dispose
+            if (l_OldValue != 0)
+                return;
+
+            if (WriteBuffer != null)
+            {
+                WriteBuffer.Dispose();
+                WriteBuffer = null;
+            }
+
+            if (ReadBuffer != null)
+            {
+                ReadBuffer.Dispose();
+                ReadBuffer = null;
+            }
+
+            if (masterMutex != null)
+            {
+                masterMutex.Close();
+                masterMutex.Dispose();
+                masterMutex = null;
+            }
+
+            // Mark as DisposeFinished
+            Interlocked.Exchange(ref _disposed, 2);
+        }
+
+        #endregion
     }
 }
