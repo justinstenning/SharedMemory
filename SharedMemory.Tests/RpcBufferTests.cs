@@ -89,6 +89,108 @@ namespace SharedMemoryTests
         }
 
         [TestMethod]
+        public async Task RPC_MasterCallsSlave_Async_WithCancellationToken_WithActualCancellation()
+        {
+            ipcMaster = new RpcBuffer(ipcName);
+            var slaveBlockingTcs = new TaskCompletionSource<bool>();
+            var slaveBlockingTask = slaveBlockingTcs.Task;
+            ipcSlave = new RpcBuffer(ipcName, async (msgId, payload) =>
+            {
+                await slaveBlockingTask;
+                return BitConverter.GetBytes((payload[0] + payload[1]));
+            });
+
+            using (var cts = new CancellationTokenSource())
+            {
+                var remoteRequestTask = ipcMaster.RemoteRequestAsync(new byte[] { 123, 10 }, cancellationToken: cts.Token);
+                cts.Cancel();
+
+                if (await Task.WhenAny(remoteRequestTask, Task.Delay(TimeSpan.FromMilliseconds(50))) == remoteRequestTask)
+                {
+                    var result = await remoteRequestTask;
+                    Assert.IsFalse(result.Success);
+                }
+                else
+                {
+                    Assert.Fail("cancellation seems not to have worked");
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task RPC_MasterCallsSlave_Async_WithCancellationToken_WithoutCancellation()
+        {
+            ipcMaster = new RpcBuffer(ipcName);
+            var slaveBlockingTcs = new TaskCompletionSource<bool>();
+            var slaveBlockingTask = slaveBlockingTcs.Task;
+            ipcSlave = new RpcBuffer(ipcName, async (msgId, payload) =>
+            {
+                await slaveBlockingTask;
+                return BitConverter.GetBytes((payload[0] + payload[1]));
+            });
+
+            using (var cts = new CancellationTokenSource())
+            {
+                var remoteRequestTask = ipcMaster.RemoteRequestAsync(new byte[] { 123, 10 }, cancellationToken: cts.Token);
+                slaveBlockingTcs.SetResult(false);
+
+                var result = await remoteRequestTask;
+                Assert.IsTrue(result.Success);
+            }
+        }
+
+        [TestMethod]
+        public async Task RPC_MasterCallsSlave_Sync_WithCancellationToken_WithActualCancellation()
+        {
+            ipcMaster = new RpcBuffer(ipcName);
+            var slaveBlockingTcs = new TaskCompletionSource<bool>();
+            var slaveBlockingTask = slaveBlockingTcs.Task;
+            ipcSlave = new RpcBuffer(ipcName, async (msgId, payload) =>
+            {
+                await slaveBlockingTask;
+                return BitConverter.GetBytes((payload[0] + payload[1]));
+            });
+
+            using (var cts = new CancellationTokenSource())
+            {
+                var remoteRequestTask = Task.Run(() => ipcMaster.RemoteRequest(new byte[] { 123, 10 }, cancellationToken: cts.Token));
+                cts.Cancel();
+
+                if (await Task.WhenAny(remoteRequestTask, Task.Delay(TimeSpan.FromMilliseconds(50))) == remoteRequestTask)
+                {
+                    var result = await remoteRequestTask;
+                    Assert.IsFalse(result.Success);
+                }
+                else
+                {
+                    Assert.Fail("cancellation seems not to have worked");
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task RPC_MasterCallsSlave_Sync_WithCancellationToken_WithoutCancellation()
+        {
+            ipcMaster = new RpcBuffer(ipcName);
+            var slaveBlockingTcs = new TaskCompletionSource<bool>();
+            var slaveBlockingTask = slaveBlockingTcs.Task;
+            ipcSlave = new RpcBuffer(ipcName, async (msgId, payload) =>
+            {
+                await slaveBlockingTask;
+                return BitConverter.GetBytes((payload[0] + payload[1]));
+            });
+
+            using (var cts = new CancellationTokenSource())
+            {
+                var remoteRequestTask = Task.Run(() => ipcMaster.RemoteRequest(new byte[] { 123, 10 }, cancellationToken: cts.Token));
+                slaveBlockingTcs.SetResult(false);
+
+                var result = await remoteRequestTask;
+                Assert.IsTrue(result.Success);
+            }
+        }
+
+        [TestMethod]
         public void RPC_Statistics_Reset()
         {
             ipcMaster = new RpcBuffer(ipcName);

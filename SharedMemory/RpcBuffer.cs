@@ -50,79 +50,110 @@ namespace SharedMemory
         V1 = 1
     }
 
+    /// <summary>
+    /// Extension methods for adorning RPC tasks
+    /// </summary>
 
     public static class ResponseTaskHelper
     {
-        public static Task<RpcResponse> TimeoutAfter(this Task<RpcResponse> task, int millisecondsTimeout)
-        {
-            // Short-circuit #1: infinite timeout or task already completed
-            if (task.IsCompleted || (millisecondsTimeout == Timeout.Infinite))
-            {
-                // Either the task has already completed or timeout will never occur.
-                // No proxy necessary.
-                return task;
-            }
+        static readonly RpcResponse CancelledRpcResponse = new RpcResponse(false, null);
+        static readonly Task<RpcResponse> CancelledRpcResponseTask = Task.FromResult(CancelledRpcResponse);
 
-            // tcs.Task will be returned as a proxy to the caller
-            TaskCompletionSource<RpcResponse> tcs =
-                new TaskCompletionSource<RpcResponse>();
+        /// <summary>
+        /// Adds timeout and manual cancellation capabilities to an existing Task
+        /// </summary>
+        /// <param name="task"></param>
+        /// <param name="millisecondsTimeout"></param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
+        public static async Task<RpcResponse> TimeoutOrCancel(this Task<RpcResponse> task, int millisecondsTimeout, CancellationToken cancellationToken = default)
+        {
+            if (task.IsCompleted)
+            {
+                // the task has already completed
+                // No proxy necessary.
+                return await task.ConfigureAwait(false);
+            }
 
             // Short-circuit #2: zero timeout
             if (millisecondsTimeout == 0)
             {
                 // We've already timed out.
-                tcs.TrySetResult(new RpcResponse(false, null));
-                return tcs.Task;
+                return new RpcResponse(false, null);
             }
 
-            // Set up a timer to complete after the specified timeout period
-            Timer timer = new Timer(state =>
+            if (millisecondsTimeout == Timeout.Infinite)
             {
-                // Recover your state information
-                var myTcs = (TaskCompletionSource<RpcResponse>)state;
+                return await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
 
-                // Fault our proxy with a TimeoutException
-                myTcs.TrySetResult(new RpcResponse(false, null));
-
-            }, tcs, millisecondsTimeout, Timeout.Infinite);
-
-            // Wire up the logic for what happens when source task completes
-            task.ContinueWith((antecedent, state) =>
-                {
-                    // Recover our state data
-                    var tuple =
-                        (Tuple<Timer, TaskCompletionSource<RpcResponse>>)state;
-
-                    // Cancel the Timer
-                    tuple.Item1.Dispose();
-
-                    // Marshal results to proxy
-                    MarshalTaskResults(antecedent, tuple.Item2);
-                },
-                Tuple.Create(timer, tcs),
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-
-            return tcs.Task;
+            using (var cts = new CancellationTokenSource(millisecondsTimeout))
+            {
+                var timeoutToken = cts.Token;
+                return await task.WaitAsync(cancellationToken).WaitAsync(timeoutToken).ConfigureAwait(false);
+            }
         }
 
-        internal static void MarshalTaskResults<TResult>(Task source, TaskCompletionSource<TResult> proxy)
+        /// <summary>
+        /// Asynchronously waits for the task to complete, or for the cancellation token to be canceled.
+        /// </summary>
+        /// <param name="this">The task to wait for. May not be <c>null</c>.</param>
+        /// <param name="cancellationToken">The cancellation token that cancels the wait.</param>
+        private static Task<RpcResponse> WaitAsync(this Task<RpcResponse> @this, CancellationToken cancellationToken)
         {
-            switch (source.Status)
+            if (@this == null)
+                throw new ArgumentNullException(nameof(@this));
+
+            if (!cancellationToken.CanBeCanceled)
+                return @this;
+            if (cancellationToken.IsCancellationRequested)
+                return CancelledRpcResponseTask;
+            return DoWaitAsync(@this, cancellationToken);
+        }
+
+        private static async Task<RpcResponse> DoWaitAsync(Task<RpcResponse> task, CancellationToken cancellationToken)
+        {
+            using (var cancelTaskSource = new RpcResponseCancellationTokenTaskSource(cancellationToken))
+                return await (await Task.WhenAny(task, cancelTaskSource.Task).ConfigureAwait(false)).ConfigureAwait(false);
+        }
+        
+        /// <summary>
+        /// Holds the task for a cancellation token, as well as the token registration. The registration is disposed when this instance is disposed.
+        /// </summary>
+        public sealed class RpcResponseCancellationTokenTaskSource : IDisposable
+        {
+            /// <summary>
+            /// The cancellation token registration, if any. This is <c>null</c> if the registration was not necessary.
+            /// </summary>
+            private readonly IDisposable _registration;
+
+            /// <summary>
+            /// Creates a task for the specified cancellation token, registering with the token if necessary.
+            /// </summary>
+            /// <param name="cancellationToken">The cancellation token to observe.</param>
+            public RpcResponseCancellationTokenTaskSource(CancellationToken cancellationToken)
             {
-                case TaskStatus.Faulted:
-                    proxy.TrySetException(source.Exception);
-                    break;
-                case TaskStatus.Canceled:
-                    proxy.TrySetCanceled();
-                    break;
-                case TaskStatus.RanToCompletion:
-                    Task<TResult> castedSource = source as Task<TResult>;
-                    proxy.TrySetResult(
-                        castedSource == null ? default(TResult) : // source is a Task
-                            castedSource.Result); // source is a Task<TResult>
-                    break;
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    Task = CancelledRpcResponseTask;
+                    return;
+                }
+                var tcs = new TaskCompletionSource<RpcResponse>();
+                _registration = cancellationToken.Register(() => tcs.TrySetResult(CancelledRpcResponse), useSynchronizationContext: false);
+                Task = tcs.Task;
+            }
+
+            /// <summary>
+            /// Gets the task for the source cancellation token.
+            /// </summary>
+            public Task<RpcResponse> Task { get; private set; }
+
+            /// <summary>
+            /// Disposes the cancellation token registration, if any. Note that this may cause <see cref="Task"/> to never complete.
+            /// </summary>
+            public void Dispose()
+            {
+                _registration?.Dispose();
             }
         }
     }
@@ -228,12 +259,12 @@ namespace SharedMemory
         /// <summary>
         /// If the request was successful
         /// </summary>
-        public bool Success { get; set; }
+        public bool Success { get; }
 
         /// <summary>
         /// The returned result (if applicable)
         /// </summary>
-        public byte[] Data { get; set; }
+        public byte[] Data { get; }
     }
 
     /// <summary>
@@ -506,7 +537,7 @@ namespace SharedMemory
         /// <summary>
         /// Dispose has completed
         /// </summary>
-        protected bool DisposeFinished
+        public bool DisposeFinished
         {
             get
             {
@@ -709,15 +740,16 @@ namespace SharedMemory
         /// </summary>
         /// <param name="args">Arguments (if any) as a byte array to be sent to the remote endpoint</param>
         /// <param name="timeoutMs">Timeout in milliseconds (defaults to 30sec)</param>
+        /// <param name="cancellationToken">A cancellation token</param>
         /// <returns>The returned response</returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        public RpcResponse RemoteRequest(byte[] args = null, int timeoutMs = defaultTimeoutMs)
+        public RpcResponse RemoteRequest(byte[] args = null, int timeoutMs = defaultTimeoutMs, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposedOrShutdown();
 
             var request = CreateMessageRequest();
-            Task<RpcResponse> sendMessage = SendMessage(request, args, timeoutMs);
+            Task<RpcResponse> sendMessage = SendMessage(request, args, timeoutMs, cancellationToken);
             return sendMessage.Result;
         }
 
@@ -726,20 +758,21 @@ namespace SharedMemory
         /// </summary>
         /// <param name="args">Arguments (if any) as a byte array to be sent to the remote endpoint</param>
         /// <param name="timeoutMs">Timeout in milliseconds (defaults to 30sec)</param>
+        /// <param name="cancellationToken">A cancellation token</param>
         /// <returns></returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        public Task<RpcResponse> RemoteRequestAsync(byte[] args = null, int timeoutMs = defaultTimeoutMs)
+        public Task<RpcResponse> RemoteRequestAsync(byte[] args = null, int timeoutMs = defaultTimeoutMs, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposedOrShutdown();
 
             var request = CreateMessageRequest();
-            return SendMessage(request, args, timeoutMs);
+            return SendMessage(request, args, timeoutMs, cancellationToken);
         }
 
-        async Task<RpcResponse> SendMessage(RpcRequest request, byte[] payload, int timeout = defaultTimeoutMs)
+        async Task<RpcResponse> SendMessage(RpcRequest request, byte[] payload, int timeout = defaultTimeoutMs, CancellationToken cancellationToken = default)
         {
-            return await SendMessage(MessageType.RpcRequest, request, payload, timeout: timeout).ConfigureAwait(false);
+            return await SendMessage(MessageType.RpcRequest, request, payload, timeout: timeout, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -749,10 +782,12 @@ namespace SharedMemory
         /// <param name="request"></param>
         /// <param name="payload"></param>
         /// <param name="responseMsgId"></param>
+        /// <param name="timeout"></param>
+        /// <param name="cancellationToken"></param>
         /// <returns></returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
-        protected virtual Task<RpcResponse> SendMessage(MessageType msgType, RpcRequest request, byte[] payload, ulong responseMsgId = 0, int timeout = defaultTimeoutMs)
+        protected virtual Task<RpcResponse> SendMessage(MessageType msgType, RpcRequest request, byte[] payload, ulong responseMsgId = 0, int timeout = defaultTimeoutMs, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposedOrShutdown();
 
@@ -781,18 +816,9 @@ namespace SharedMemory
 
             if (success && msgType == MessageType.RpcRequest)
             {
-
                 if (request != null)
                 {
-
-                    if (timeout == 0)
-                        return Task.FromResult(new RpcResponse(false, null));
-
-                    if (timeout == Timeout.Infinite)
-                        return request.ResponseReady.Task;
-
-
-                    return request.ResponseReady.Task.TimeoutAfter(timeout);
+                    return request.ResponseReady.Task.TimeoutOrCancel(timeout, cancellationToken);
                 }
                 else
                 {
@@ -1045,7 +1071,7 @@ namespace SharedMemory
         private int _processCount = 0;
         private object _processLock = new object();
 
-        async Task ProcessCallHandler(RpcRequest request)
+        async Task ProcessCallHandler(RpcRequest request, CancellationToken cancellationToken = default)
         {
             // Mark as processing
             lock (_processLock)
@@ -1059,26 +1085,26 @@ namespace SharedMemory
                 if (RemoteCallHandler != null)
                 {
                     RemoteCallHandler(request.MsgId, request.Data);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId)
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId, cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
                 }
                 else if (AsyncRemoteCallHandler != null)
                 {
                     await AsyncRemoteCallHandler(request.MsgId, request.Data).ConfigureAwait(false);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId)
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), null, request.MsgId, cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
                 }
                 else if (RemoteCallHandlerWithResult != null)
                 {
                     var result = RemoteCallHandlerWithResult(request.MsgId, request.Data);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId)
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId, cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
                 }
                 else if (AsyncRemoteCallHandlerWithResult != null)
                 {
                     var result = await AsyncRemoteCallHandlerWithResult(request.MsgId, request.Data)
                         .ConfigureAwait(false);
-                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId)
+                    await SendMessage(MessageType.RpcResponse, CreateMessageRequest(), result, request.MsgId, cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
                 }
             }
