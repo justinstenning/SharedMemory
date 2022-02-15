@@ -28,7 +28,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+#if NETFULL
+using System.Security.AccessControl;
 using System.Security.Permissions;
+using System.Security.Principal;
+#endif
 using System.Text;
 using System.Threading;
 
@@ -59,6 +63,18 @@ namespace SharedMemory
         /// </summary>
         protected EventWaitHandle ReadWaitEvent { get; private set; }
 
+#if NETFULL
+        private static EventWaitHandleSecurity CreateDefaultWaitHandleSecurity()
+        {
+            EventWaitHandleSecurity eventWaitHandleSecurity = new EventWaitHandleSecurity();
+            eventWaitHandleSecurity.AddAccessRule(new EventWaitHandleAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null), 
+                EventWaitHandleRights.FullControl, AccessControlType.Allow));
+            return eventWaitHandleSecurity;
+        }
+
+        private static readonly EventWaitHandleSecurity waitHandleSecurity = CreateDefaultWaitHandleSecurity();
+#endif
+
         #region Constructors
 
         /// <summary>
@@ -70,8 +86,48 @@ namespace SharedMemory
         protected BufferWithLocks(string name, long bufferSize, bool ownsSharedMemory)
             : base(name, bufferSize, ownsSharedMemory)
         {
-            WriteWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_write");
-            ReadWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_read");
+#if NET45
+            EventWaitHandle writeWaitEvent;
+            if (EventWaitHandle.TryOpenExisting(Name + "_evt_write", out writeWaitEvent))
+            {
+                WriteWaitEvent = writeWaitEvent;
+            }
+            else
+            {
+                WriteWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_write", out _, waitHandleSecurity);
+            }
+            EventWaitHandle readWaitEvent;
+            if (EventWaitHandle.TryOpenExisting(Name + "_evt_read", out readWaitEvent))
+            {
+                ReadWaitEvent = readWaitEvent;
+            }
+            else
+            {
+                ReadWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_read", out _, waitHandleSecurity);
+            }
+#elif NET40 || NET35
+            WriteWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_write", out _, waitHandleSecurity);
+            ReadWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_read", out _, waitHandleSecurity);
+#elif NETCORE
+            EventWaitHandle writeWaitEvent;
+            if (EventWaitHandle.TryOpenExisting(Name + "_evt_write", out writeWaitEvent))
+            {
+                WriteWaitEvent = writeWaitEvent;
+            }
+            else
+            {
+                WriteWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_write");
+            }
+            EventWaitHandle readWaitEvent;
+            if (EventWaitHandle.TryOpenExisting(Name + "_evt_read", out readWaitEvent))
+            {
+                ReadWaitEvent = readWaitEvent;
+            }
+            else
+            {
+                ReadWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_read");
+            }
+#endif
         }
 
         #endregion

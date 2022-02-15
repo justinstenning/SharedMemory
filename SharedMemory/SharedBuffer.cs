@@ -29,7 +29,12 @@ using System.Collections.Generic;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Runtime.InteropServices;
+#if NETFULL
+using System.IO;
+using System.Security.AccessControl;
 using System.Security.Permissions;
+using System.Security.Principal;
+#endif
 using System.Text;
 using System.Threading;
 
@@ -191,6 +196,28 @@ namespace SharedMemory
 
         #region Open / Close
 
+#if NETFULL
+        private static readonly WellKnownSidType[] defaultAllowedList = {
+            WellKnownSidType.CreatorOwnerSid,
+            WellKnownSidType.BuiltinAdministratorsSid,
+            WellKnownSidType.LocalSystemSid,
+            WellKnownSidType.LocalServiceSid,
+            WellKnownSidType.NetworkServiceSid,
+            WellKnownSidType.WorldSid
+        };
+
+        private FileSecurity BuildSecurityDescriptor(IEnumerable<WellKnownSidType> allowedList)
+        {
+            FileSecurity fileSecurity = new FileSecurity();
+            foreach (WellKnownSidType allowed in allowedList)
+            {
+                SecurityIdentifier identity = new SecurityIdentifier(allowed, null);
+                fileSecurity.AddAccessRule(new FileSystemAccessRule(identity, FileSystemRights.FullControl, AccessControlType.Allow));
+            }
+            return fileSecurity;
+        }
+#endif
+
         /// <summary>
         /// Creates a new or opens an existing shared memory buffer with the name of <see cref="Name"/> depending on the value of <see cref="IsOwnerOfSharedMemory"/>. 
         /// </summary>
@@ -200,7 +227,11 @@ namespace SharedMemory
         /// <exception cref="System.IO.FileNotFoundException">If trying to open a new shared memory buffer that does not exist as a consumer of existing buffer.</exception>
         /// <exception cref="System.ArgumentOutOfRangeException">If trying to create a new shared memory buffer with a size larger than the logical addressable space.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA2202:Do not dispose objects multiple times")]
-        protected bool Open()
+        protected bool Open(
+#if !(NET35)
+            bool openExisting = false
+#endif
+            )
         {
             Close();
 
@@ -210,8 +241,28 @@ namespace SharedMemory
                 if (IsOwnerOfSharedMemory)
                 {
                     // Create a new shared memory mapping
+#if NETFULL && !(NET35)
+                    MemoryMappedFileSecurity memoryMappedFileSecurity = new MemoryMappedFileSecurity();
+                    memoryMappedFileSecurity.SetSecurityDescriptorBinaryForm(BuildSecurityDescriptor(defaultAllowedList).GetSecurityDescriptorBinaryForm());
+                    if (openExisting) {
+                        Mmf = MemoryMappedFile.CreateOrOpen(Name, SharedMemorySize, MemoryMappedFileAccess.ReadWrite,
+                            MemoryMappedFileOptions.DelayAllocatePages, memoryMappedFileSecurity, HandleInheritability.Inheritable);
+                    } else {
+                        Mmf = MemoryMappedFile.CreateNew(Name, SharedMemorySize, MemoryMappedFileAccess.ReadWrite,
+                            MemoryMappedFileOptions.DelayAllocatePages, memoryMappedFileSecurity, HandleInheritability.Inheritable);
+                    }
+#elif NET35
                     Mmf = MemoryMappedFile.CreateNew(Name, SharedMemorySize);
-
+#else
+                    if (openExisting)
+                    {
+                        Mmf = MemoryMappedFile.CreateOrOpen(Name, SharedMemorySize);
+                    }
+                    else
+                    {
+                        Mmf = MemoryMappedFile.CreateNew(Name, SharedMemorySize);
+                    }
+#endif
                     // Create a view to the entire region of the shared memory
                     View = Mmf.CreateViewAccessor(0, SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
                     View.SafeMemoryMappedViewHandle.AcquirePointer(ref ViewPtr);

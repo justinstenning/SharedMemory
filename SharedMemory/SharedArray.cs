@@ -76,13 +76,24 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The name of the shared memory array to be created.</param>
         /// <param name="length">The number of elements to make room for within the shared memory array.</param>
-        public SharedArray(string name, int length)
+#if !(NET35)
+        /// <param name="openExisting">Indicates whether to allow opening an existing if already exists.</param>
+#endif
+        public SharedArray(string name, int length
+#if !(NET35)
+            , bool openExisting = false
+#endif
+            )
             : base(name, Marshal.SizeOf(typeof(T)) * length, true)
         {
             Length = length;
             _elementSize = Marshal.SizeOf(typeof(T));
 
-            Open();
+            Open(
+#if !(NET35)
+                openExisting
+#endif
+            );
         }
 
         /// <summary>
