@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+    inputs:
+      version:
+        description: Package version. Empty packs the next patch after the newest v* tag, with suffix -ci.{run number}.
+        type: string
+        default: ''
+      release-notes-url:
+        description: Package release notes, the link to the GitHub Release.
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+# publish.yml calls this workflow and publishes only when it succeeds. A job
+# skipped by an if: does not fail the call, so no job here has one.
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-tags: true
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            version="$INPUT_VERSION"
+          else
+            newest="$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:lstrip=2)' 'refs/tags/v*')"
+            if [ -z "$newest" ]; then
+              echo "::error::No tag matches v*, so there is no version to take the CI version from"
+              exit 1
+            fi
+            if [[ ! "$newest" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::The newest v* tag, '$newest', is not v followed by a SemVer version"
+              exit 1
+            fi
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))-ci.$RUN_NUMBER"
+          fi
+          echo "Package version $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The DLLs get their assembly version from this build, so it takes the
+      # same version as the pack.
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet build SharedMemory.sln -c Release -p:Version="$VERSION"
+
+      - name: Pack
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_NOTES_URL: ${{ inputs.release-notes-url }}
+        run: dotnet pack SharedMemory/SharedMemory.csproj -c Release --no-build -p:Version="$VERSION" -p:PackageReleaseNotes="$RELEASE_NOTES_URL" -o artifacts
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
+          if-no-files-found: error
+
+  test:
+    name: test (${{ matrix.os }}, ${{ matrix.combination.framework }}, ${{ matrix.combination.library }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+        # The test framework, and the library build the tests run against.
+        combination:
+          - { framework: net10.0, library: netstandard2.1 }
+          - { framework: net48, library: net47 }
+          - { framework: net48, library: net4 }
+          - { framework: net48, library: net35 }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      # The Load tests run against a time limit that .NET Framework misses about
+      # half the time, so CI leaves them out.
+      - name: Test
+        run: dotnet test SharedMemory.Tests/SharedMemory.Tests.csproj -c Release -f ${{ matrix.combination.framework }} -p:LibraryTargetFramework=${{ matrix.combination.library }} --filter TestCategory!=Load --logger trx --results-directory TestResults
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: test-results-${{ matrix.os }}-${{ matrix.combination.framework }}-${{ matrix.combination.library }}
+          path: TestResults

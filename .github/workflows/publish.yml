@@ -1,0 +1,67 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  check-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      release-notes-url: ${{ steps.tag.outputs.release-notes-url }}
+    steps:
+      - name: Check the tag
+        id: tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::The release tag '$TAG' is not v followed by a SemVer version, such as v2.3.3 or v2.3.3-rc.1"
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "release-notes-url=https://github.com/justinstenning/SharedMemory/releases/tag/$TAG" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check-tag
+    uses: ./.github/workflows/ci.yml
+    with:
+      version: ${{ needs.check-tag.outputs.version }}
+      release-notes-url: ${{ needs.check-tag.outputs.release-notes-url }}
+
+  publish:
+    needs: [check-tag, build]
+    runs-on: ubuntu-latest
+    environment: nuget
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: packages
+
+      - name: Sign in to nuget.org
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: spazzarama
+
+      # Pushes each .nupkg with the .snupkg beside it. --skip-duplicate lets a
+      # rerun finish a push that stopped partway.
+      - name: Push
+        working-directory: packages
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: dotnet nuget push "*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
