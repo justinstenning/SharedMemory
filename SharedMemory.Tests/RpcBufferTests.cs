@@ -20,6 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#if HAS_RPC_BUFFER
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -66,8 +67,8 @@ namespace SharedMemoryTests
         [TestMethod]
         public void Constructor_BufferCapacityOutOfRange()
         {
-            Assert.ThrowsException<ArgumentOutOfRangeException>(() => new RpcBuffer(ipcName, 255));
-            Assert.ThrowsException<ArgumentOutOfRangeException>(() => new RpcBuffer(ipcName, 1024*1024 + 1));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RpcBuffer(ipcName, 255));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RpcBuffer(ipcName, 1024*1024 + 1));
         }
 
         [TestMethod]
@@ -288,8 +289,8 @@ namespace SharedMemoryTests
 
         }
 
-#if DEBUG
         [TestMethod]
+        [TestCategory("Load")]
         public void RPC_LoadTest_5k_Small()
         {
             ipcMaster = new RpcBuffer(ipcName, async (msgId, payload) =>
@@ -315,6 +316,7 @@ namespace SharedMemoryTests
         }
         
         [TestMethod]
+        [TestCategory("Load")]
         public void RPC_LoadTest_5k_Small_Multi_Thread()
         {
             // Warmup the Theadpool
@@ -354,6 +356,7 @@ namespace SharedMemoryTests
         }
 
         [TestMethod]
+        [TestCategory("Load")]
         public void RPC_LoadTest_1k_Large()
         {
             ipcMaster = new RpcBuffer(ipcName, async (msgId, payload) =>
@@ -383,6 +386,7 @@ namespace SharedMemoryTests
         }
 
         [TestMethod]
+        [TestCategory("Load")]
         public void RPC_LoadTest_NestedCalls()
         {
             ipcMaster = new RpcBuffer(ipcName, async (msgId, payload) =>
@@ -408,7 +412,6 @@ namespace SharedMemoryTests
 
             Assert.IsTrue(watch.ElapsedMilliseconds < 1000);
         }
-#endif
 
         [TestMethod]
         public void RPC_SlaveCallsMasterAfterClosed_Exception()
@@ -427,7 +430,7 @@ namespace SharedMemoryTests
                 Task.Delay(125).Wait();
             }
 
-            Assert.ThrowsException<InvalidOperationException>(() => ipcSlave.RemoteRequest(null));
+            Assert.ThrowsExactly<InvalidOperationException>(() => ipcSlave.RemoteRequest(null));
         }
         
         [TestMethod]
@@ -474,3 +477,4 @@ namespace SharedMemoryTests
         
     }
 }
+#endif
