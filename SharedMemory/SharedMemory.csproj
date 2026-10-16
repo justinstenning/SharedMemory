@@ -11,8 +11,40 @@
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <Company />
     <Authors>Justin Stenning</Authors>
-    <Copyright>Copyright (c) 2020 Justin Stenning</Copyright>
+    <Copyright>Copyright (c) 2014-2020 Justin Stenning</Copyright>
   </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>SharedMemory</PackageId>
+    <Title>SharedMemory</Title>
+    <Description>The SharedMemory library provides a set of C# classes that utilise a memory-mapped file for fast low-level inter-process communication (IPC) - specifically for sharing data between processes.
+
+It features:
+ * a lock-free FIFO circular buffer
+ * a simple fixed-size generic shared memory array class
+ * a bi-directional RPC implementation (.NET 4.5+ / .NET Standard 2.0+ only)
+ * an implementation of a shared memory buffer for read/write.
+ * support for memory-mapped files in .NET 3.5/4/4.5 and .NET Standard 2.0+
+ * fast generic structure reading/writing
+
+Usage: https://github.com/justinstenning/SharedMemory</Description>
+    <PackageTags>IPC RPC memory mapped file shared data circular ring buffer</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
+    <PackageProjectUrl>https://github.com/justinstenning/SharedMemory</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/justinstenning/SharedMemory</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>2.3.2</PackageValidationBaselineVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <PropertyGroup Condition=" '$(TargetFramework)' == 'netstandard2.1'">
     <DefineConstants>NETCORE;NETCORE3_0;NET40Plus</DefineConstants>

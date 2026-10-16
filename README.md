@@ -3,7 +3,7 @@ SharedMemory
 
 C# shared memory classes for sharing data between processes (Array, Buffer, Circular Buffer and RPC)
 
-[![Build status](https://ci.appveyor.com/api/projects/status/uc32kwm1281y4sie?svg=true)](https://ci.appveyor.com/project/spazzarama/sharedmemory)
+[![CI](https://github.com/justinstenning/SharedMemory/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/justinstenning/SharedMemory/actions/workflows/ci.yml)
 
 About
 -----
