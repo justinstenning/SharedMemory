@@ -17,6 +17,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SingleProcess", "Examples\S
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RpcTest", "Examples\RpcTest\RpcTest.csproj", "{295402B7-EEF8-4A79-968E-58135AE5D385}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SharedMemory.Tests.Peer", "SharedMemory.Tests.Peer\SharedMemory.Tests.Peer.csproj", "{81483DEC-11C0-4AEE-8850-C7984416D22E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -47,6 +49,10 @@ Global
 		{295402B7-EEF8-4A79-968E-58135AE5D385}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{295402B7-EEF8-4A79-968E-58135AE5D385}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{295402B7-EEF8-4A79-968E-58135AE5D385}.Release|Any CPU.Build.0 = Release|Any CPU
+		{81483DEC-11C0-4AEE-8850-C7984416D22E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{81483DEC-11C0-4AEE-8850-C7984416D22E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{81483DEC-11C0-4AEE-8850-C7984416D22E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{81483DEC-11C0-4AEE-8850-C7984416D22E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

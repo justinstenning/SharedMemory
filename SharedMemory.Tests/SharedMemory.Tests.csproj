@@ -10,19 +10,15 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
-  <!-- The library build under test. With -f net48, pass -p:LibraryTargetFramework=net4 or net35 to test those builds. -->
-  <PropertyGroup>
-    <LibraryTargetFramework Condition="'$(LibraryTargetFramework)' == '' and '$(TargetFramework)' == 'net10.0'">netstandard2.1</LibraryTargetFramework>
-    <LibraryTargetFramework Condition="'$(LibraryTargetFramework)' == '' and '$(TargetFramework)' == 'net48'">net47</LibraryTargetFramework>
-    <DefineConstants Condition="'$(LibraryTargetFramework)' != 'net4' and '$(LibraryTargetFramework)' != 'net35'">$(DefineConstants);HAS_RPC_BUFFER</DefineConstants>
-  </PropertyGroup>
+  <Import Project="LibraryTargetFramework.props" />
 
   <ItemGroup>
     <PackageReference Include="MSTest" Version="4.5.1" />
   </ItemGroup>
 
+  <!-- The second process in the two-process tests. It builds into peer\ in this project's output folder. -->
   <ItemGroup>
-    <ProjectReference Include="..\SharedMemory\SharedMemory.csproj" SetTargetFramework="TargetFramework=$(LibraryTargetFramework)" />
+    <ProjectReference Include="..\SharedMemory.Tests.Peer\SharedMemory.Tests.Peer.csproj" ReferenceOutputAssembly="false" SetTargetFramework="TargetFramework=$(TargetFramework)" />
   </ItemGroup>
 
 </Project>

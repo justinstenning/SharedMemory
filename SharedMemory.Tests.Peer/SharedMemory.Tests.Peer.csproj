@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net10.0;net48</TargetFrameworks>
+    <RootNamespace>SharedMemoryTests.Peer</RootNamespace>
+
+    <IsPackable>false</IsPackable>
+
+    <!-- The tests start the peer from peer\ in their own output folder. -->
+    <OutputPath>..\SharedMemory.Tests\bin\$(Configuration)\$(TargetFramework)\peer\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <Import Project="..\SharedMemory.Tests\LibraryTargetFramework.props" />
+
+  <!-- SharedMemory.Tests\Support holds the code the tests share with the peer. -->
+  <ItemGroup>
+    <Compile Include="..\SharedMemory.Tests\Support\*.cs" Link="Support\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

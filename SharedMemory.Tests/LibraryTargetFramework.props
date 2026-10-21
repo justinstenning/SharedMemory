@@ -1,0 +1,14 @@
+<Project>
+
+  <!-- The library build under test, for the tests and for the peer process they start. With -f net48, pass -p:LibraryTargetFramework=net4 or net35 to test those builds. -->
+  <PropertyGroup>
+    <LibraryTargetFramework Condition="'$(LibraryTargetFramework)' == '' and '$(TargetFramework)' == 'net10.0'">netstandard2.1</LibraryTargetFramework>
+    <LibraryTargetFramework Condition="'$(LibraryTargetFramework)' == '' and '$(TargetFramework)' == 'net48'">net47</LibraryTargetFramework>
+    <DefineConstants Condition="'$(LibraryTargetFramework)' != 'net4' and '$(LibraryTargetFramework)' != 'net35'">$(DefineConstants);HAS_RPC_BUFFER</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(MSBuildThisFileDirectory)..\SharedMemory\SharedMemory.csproj" SetTargetFramework="TargetFramework=$(LibraryTargetFramework)" />
+  </ItemGroup>
+
+</Project>
