@@ -4,9 +4,6 @@
     <TargetFrameworks>net10.0;netstandard2.1;netstandard2.0;net47;net46;net45;net4;net35</TargetFrameworks>
     <OutputPath>..\bin\$(Configuration)\</OutputPath>
     <DocumentationFile>..\bin\$(Configuration)\$(TargetFramework)\SharedMemory.xml</DocumentationFile>
-    <!-- With net10.0 in the list, the SDK prunes package references that a framework already provides, for every framework.
-         That would drop System.Reflection.Emit.Lightweight from the package's netstandard2.1 dependencies, which 2.3.2 lists. -->
-    <RestoreEnablePackagePruning>false</RestoreEnablePackagePruning>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -87,12 +84,6 @@ Usage: https://github.com/justinstenning/SharedMemory</Description>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
-    <PackageReference Include="System.Reflection.Emit.Lightweight">
-      <Version>4.7.0</Version>
-    </PackageReference>
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.1'">
     <PackageReference Include="System.Reflection.Emit.Lightweight">
       <Version>4.7.0</Version>
     </PackageReference>
