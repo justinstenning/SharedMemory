@@ -59,11 +59,15 @@ namespace SharedMemory
         /// <summary>
         /// Event signaled when data has been written if the reading index has caught up to the writing index
         /// </summary>
+        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. The buffer signals and waits on its own event there,
+        /// so a handle a subclass assigns is neither signalled nor waited on.</remarks>
         protected EventWaitHandle DataExists { get; set; }
 
         /// <summary>
         /// Event signaled when a node becomes available after reading if the writing index has caught up to the reading index
         /// </summary>
+        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. The buffer signals and waits on its own event there,
+        /// so a handle a subclass assigns is neither signalled nor waited on.</remarks>
         protected EventWaitHandle NodeAvailable { get; set; }
 
         /// <summary>

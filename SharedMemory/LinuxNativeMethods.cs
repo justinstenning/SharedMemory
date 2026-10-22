@@ -48,6 +48,14 @@ namespace SharedMemory
         internal const int EACCES = 13;
         internal const int EEXIST = 17;
         internal const int EWOULDBLOCK = 11;
+        internal const int EAGAIN = 11;
+        internal const int ETIMEDOUT = 110;
+
+        /// <summary>
+        /// <c>FUTEX_WAIT</c> and <c>FUTEX_WAKE</c>, without <c>FUTEX_PRIVATE_FLAG</c>: the word is in a file that other processes map.
+        /// </summary>
+        internal const int FUTEX_WAIT = 0;
+        internal const int FUTEX_WAKE = 1;
 
         internal const int AT_FDCWD = -100;
         internal const int AT_EMPTY_PATH = 0x1000;
@@ -101,6 +109,43 @@ namespace SharedMemory
 
         [LibraryImport("libc", EntryPoint = "geteuid")]
         internal static partial uint GetEffectiveUserId();
+
+        /// <summary>
+        /// <c>struct timespec</c> on 64-bit Linux: a relative timeout for <c>FUTEX_WAIT</c>, measured on the monotonic clock.
+        /// </summary>
+        internal struct Timespec
+        {
+            internal long Seconds;
+            internal long Nanoseconds;
+        }
+
+        /// <summary>
+        /// The number of the <c>futex</c> system call: 202 on x64, 98 on arm64.
+        /// </summary>
+        /// <exception cref="System.PlatformNotSupportedException">Any other architecture.</exception>
+        internal static long FutexSyscall
+        {
+            get
+            {
+                switch (RuntimeInformation.ProcessArchitecture)
+                {
+                    case Architecture.X64:
+                        return 202;
+                    case Architecture.Arm64:
+                        return 98;
+                    default:
+                        throw PlatformSupport.NotSupported("named events");
+                }
+            }
+        }
+
+        /// <summary>
+        /// <c>syscall(number, address, operation, value, timeout, address2, value3)</c>, with <paramref name="number"/> from <see cref="FutexSyscall"/>.
+        /// C declares <c>syscall</c> variadic. On Linux x64 and arm64 variadic integer and pointer arguments go in the same registers, and the seventh
+        /// on the stack, as fixed ones do, and glibc's <c>syscall</c> only moves them into place, so this fixed declaration makes the same call.
+        /// </summary>
+        [LibraryImport("libc", EntryPoint = "syscall", SetLastError = true)]
+        internal static partial long Futex(long number, int* address, int operation, int value, Timespec* timeout, int* address2, int value3);
     }
 }
 #endif

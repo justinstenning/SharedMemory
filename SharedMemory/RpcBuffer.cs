@@ -662,9 +662,19 @@ namespace SharedMemory
 
             Statistics = new RpcStatistics();
 
+#if NET10_0_OR_GREATER
+            // On Unix a named mutex that a thread holds keeps its name until that thread releases it or ends, even once every handle has
+            // been closed, and Dispose can close the owner's on its read thread. Which instance creates the mutex is all the election
+            // needs, so there the owner creates it without taking it.
+            bool takeMutex = OperatingSystem.IsWindows();
+            masterMutex = new Mutex(takeMutex, name + "SharedMemory_MasterMutex", out bool createdNew);
+
+            if (createdNew && (!takeMutex || masterMutex.WaitOne(500)))
+#else
             masterMutex = new Mutex(true, name + "SharedMemory_MasterMutex", out bool createdNew);
 
             if (createdNew && masterMutex.WaitOne(500))
+#endif
             {
                 instanceType = InstanceType.Master;
             }

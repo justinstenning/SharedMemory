@@ -47,6 +47,8 @@ namespace SharedMemory
     /// <item>Open: a file nobody holds is removed, and the name does not exist. Otherwise take the shared lock, then check that the name still leads to the
     /// same file, which a process removing it may have unlinked meanwhile.</item>
     /// <item>Close: whoever gets an exclusive lock was the last holder, and removes the file.</item>
+    /// <item>Create-or-open, for events: a file somebody holds is opened. Anything else is created, its contents written before it is published, and a
+    /// file nobody holds is removed first rather than opened, as a Windows event is gone once its last handle has closed.</item>
     /// </list>
     /// <para>A file is only ever removed by a process holding its exclusive lock, after checking that the name still leads to it, so a newer file published
     /// under the same name is never removed by mistake. Converting a shared lock to an exclusive one gives the shared lock up first, so a closer that fails
@@ -94,6 +96,32 @@ namespace SharedMemory
                 return OperatingSystem.IsLinux()
                     && (RuntimeInformation.ProcessArchitecture == Architecture.X64 || RuntimeInformation.ProcessArchitecture == Architecture.Arm64);
             }
+        }
+
+        /// <summary>
+        /// The file's path in /dev/shm.
+        /// </summary>
+        internal string FilePath
+        {
+            get { return _path; }
+        }
+
+        /// <summary>
+        /// The file's size when this instance created or opened it.
+        /// </summary>
+        internal long Length
+        {
+            get { return (long)_identity.Size; }
+        }
+
+        /// <summary>
+        /// Reads from the file at <paramref name="offset"/> through the locked descriptor. Unlike a mapping, a read leaves no reference behind for the lock
+        /// to outlive.
+        /// </summary>
+        /// <returns>The number of bytes read, fewer than asked for only at the end of the file.</returns>
+        internal int Read(Span<byte> buffer, long offset)
+        {
+            return RandomAccess.Read(_handle, buffer, offset);
         }
 
         /// <summary>
@@ -219,6 +247,87 @@ namespace SharedMemory
                 handle.Dispose();
                 if (attempt == Attempts)
                     throw KeptChanging(name, path);
+            }
+        }
+
+        /// <summary>
+        /// Opens the file somebody holds under <paramref name="name"/>, or else creates it holding <paramref name="contents"/>, as a named event is created
+        /// or opened on Windows. A file nobody holds was left by a process that died holding it: it is removed and the file created afresh, not opened.
+        /// </summary>
+        /// <remarks>Only a create writes a temporary file, so opening a file somebody holds needs no room in /dev/shm.</remarks>
+        /// <exception cref="IOException">/dev/shm has no room for a new file.</exception>
+        /// <exception cref="UnauthorizedAccessException">The file under the name belongs to another user or is not private to this one.</exception>
+        [SupportedOSPlatform("linux")]
+        internal static LinuxSharedFile CreateOrOpen(string name, byte[] contents)
+        {
+            uint uid = GetEffectiveUserId();
+            string path = Folder + UnixFiles.FileName(name, uid);
+            bool perUser = !UnixFiles.IsGlobal(name);
+            string temporary = null;
+            SafeFileHandle created = null;
+            Statx createdStatus = default;
+            try
+            {
+                for (int attempt = 1; ; attempt++)
+                {
+                    Statx foundStatus;
+                    SafeFileHandle found = OpenFile(path, name, perUser, uid, out foundStatus);
+                    if (found != null)
+                    {
+                        try
+                        {
+                            if (!TryLock(found, LOCK_EX | LOCK_NB, path))
+                            {
+                                // Somebody holds it: open it, unless it was removed while this process waited for its lock.
+                                Lock(found, LOCK_SH, path);
+                                if (IsNamed(path, foundStatus))
+                                {
+                                    var opened = new LinuxSharedFile(path, foundStatus, found);
+                                    found = null;
+                                    return opened;
+                                }
+                            }
+                            else
+                            {
+                                // Nobody holds it: its last holder died without closing it. Remove it, as that holder would have, and create a new one.
+                                RemoveIfNamed(path, foundStatus, true);
+                            }
+                        }
+                        finally
+                        {
+                            if (found != null)
+                                found.Dispose();
+                        }
+                    }
+
+                    // Nothing anybody holds is under the name: publish a new file, written in full first.
+                    if (created == null)
+                    {
+                        temporary = Folder + UnixFiles.TemporaryPrefix + UnixFiles.Base32(RandomNumberGenerator.GetBytes(17), 26);
+                        created = CreateTemporary(temporary, name, contents.Length);
+                        RandomAccess.Write(created, contents, 0);
+                        createdStatus = Status(created, temporary);
+                    }
+                    if (Link(temporary, path) == 0)
+                    {
+                        var published = new LinuxSharedFile(path, createdStatus, created);
+                        created = null;
+                        return published;
+                    }
+                    int error = Marshal.GetLastPInvokeError();
+                    if (error != EEXIST)
+                        throw Failure(error, "publish", path);
+                    // Another process published one first: open it.
+                    if (attempt == Attempts)
+                        throw KeptChanging(name, path);
+                }
+            }
+            finally
+            {
+                if (created != null)
+                    created.Dispose();
+                if (temporary != null)
+                    Unlink(temporary);
             }
         }
 

@@ -52,11 +52,13 @@ namespace SharedMemory
         /// <summary>
         /// An event handle used for blocking write operations.
         /// </summary>
+        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. Writes still block there.</remarks>
         protected EventWaitHandle WriteWaitEvent { get; private set; }
         
         /// <summary>
         /// An event handle used for blocking read operations.
         /// </summary>
+        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. Reads still block there.</remarks>
         protected EventWaitHandle ReadWaitEvent { get; private set; }
 
         private readonly NamedEvent _writeEvent;
@@ -279,8 +281,11 @@ namespace SharedMemory
         {
             if (disposeManagedResources)
             {
-                (WriteWaitEvent as IDisposable).Dispose();
-                (ReadWaitEvent as IDisposable).Dispose();
+                // Null on Linux and macOS
+                if (WriteWaitEvent != null)
+                    (WriteWaitEvent as IDisposable).Dispose();
+                if (ReadWaitEvent != null)
+                    (ReadWaitEvent as IDisposable).Dispose();
                 _writeEvent.Dispose();
                 _readEvent.Dispose();
             }
