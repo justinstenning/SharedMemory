@@ -82,15 +82,17 @@ namespace SharedMemory
                 return new RpcResponse(false, null);
             }
 
+            // WaitAsync is called as a static method, not as task.WaitAsync: in a build for .NET 6 or later, task.WaitAsync
+            // binds to Task<T>.WaitAsync, which throws TaskCanceledException where this one returns an unsuccessful response.
             if (millisecondsTimeout == Timeout.Infinite)
             {
-                return await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return await WaitAsync(task, cancellationToken).ConfigureAwait(false);
             }
 
             using (var cts = new CancellationTokenSource(millisecondsTimeout))
             {
                 var timeoutToken = cts.Token;
-                return await task.WaitAsync(cancellationToken).WaitAsync(timeoutToken).ConfigureAwait(false);
+                return await WaitAsync(WaitAsync(task, cancellationToken), timeoutToken).ConfigureAwait(false);
             }
         }
 

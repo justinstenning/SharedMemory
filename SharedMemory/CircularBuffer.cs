@@ -120,6 +120,9 @@ namespace SharedMemory
         #region Private field members
 
         private NodeHeader* _nodeHeader = null;
+
+        private NamedEvent _dataExists;
+        private NamedEvent _nodeAvailable;
         
         #endregion
 
@@ -271,8 +274,10 @@ namespace SharedMemory
         protected override bool DoOpen()
         {
             // Create signal events
-            DataExists = new EventWaitHandle(false, EventResetMode.AutoReset, Name + "_evt_dataexists");
-            NodeAvailable = new EventWaitHandle(false, EventResetMode.AutoReset, Name + "_evt_nodeavail");
+            _dataExists = NamedEvent.CreateOrOpen(Name + "_evt_dataexists", false, EventResetMode.AutoReset, () => DataExists);
+            DataExists = _dataExists.WaitHandle;
+            _nodeAvailable = NamedEvent.CreateOrOpen(Name + "_evt_nodeavail", false, EventResetMode.AutoReset, () => NodeAvailable);
+            NodeAvailable = _nodeAvailable.WaitHandle;
 
             if (IsOwnerOfSharedMemory)
             {
@@ -361,6 +366,16 @@ namespace SharedMemory
                 (NodeAvailable as IDisposable).Dispose();
                 NodeAvailable = null;
             }
+            if (_dataExists != null)
+            {
+                _dataExists.Dispose();
+                _dataExists = null;
+            }
+            if (_nodeAvailable != null)
+            {
+                _nodeAvailable.Dispose();
+                _nodeAvailable = null;
+            }
 
             _nodeHeader = null;
         }
@@ -383,7 +398,7 @@ namespace SharedMemory
                 if (node->Next == _nodeHeader->ReadEnd)
                 {
                     // No room is available, wait for room to become available
-                    if (NodeAvailable.WaitOne(timeout))
+                    if (_nodeAvailable.WaitOne(timeout))
                         continue;
 
                     // Timeout
@@ -431,7 +446,7 @@ namespace SharedMemory
 
                 // Signal the "data exists" event if read threads are waiting
                 if (blockIndex == _nodeHeader->ReadStart)
-                    DataExists.Set();
+                    _dataExists.Set();
             }
         }
 
@@ -597,7 +612,7 @@ namespace SharedMemory
                 if (blockIndex == _nodeHeader->WriteEnd)
                 {
                     // No data is available, wait for it
-                    if (DataExists.WaitOne(timeout))
+                    if (_dataExists.WaitOne(timeout))
                         continue;
 
                     // Timeout
@@ -647,7 +662,7 @@ namespace SharedMemory
 
                // If a writer thread is waiting on "node available" signal the event
                 if (node->Prev == _nodeHeader->WriteStart)
-                        NodeAvailable.Set();
+                        _nodeAvailable.Set();
             }
         }
 

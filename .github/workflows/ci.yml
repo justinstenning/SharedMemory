@@ -87,6 +87,7 @@ jobs:
         # The test framework, and the library build the tests run against.
         combination:
           - { framework: net10.0, library: netstandard2.1 }
+          - { framework: net10.0, library: net10.0 }
           - { framework: net48, library: net47 }
           - { framework: net48, library: net4 }
           - { framework: net48, library: net35 }

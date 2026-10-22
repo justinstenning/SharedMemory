@@ -140,6 +140,12 @@ namespace SharedMemory
 
         #endregion
 
+        #region Private field members
+
+        private NamedMapping _mapping;
+
+        #endregion
+
         #region Constructor / destructor
 
         /// <summary>
@@ -210,7 +216,8 @@ namespace SharedMemory
                 if (IsOwnerOfSharedMemory)
                 {
                     // Create a new shared memory mapping
-                    Mmf = MemoryMappedFile.CreateNew(Name, SharedMemorySize);
+                    _mapping = NamedMapping.CreateNew(Name, SharedMemorySize);
+                    Mmf = _mapping.File;
 
                     // Create a view to the entire region of the shared memory
                     View = Mmf.CreateViewAccessor(0, SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
@@ -223,7 +230,8 @@ namespace SharedMemory
                 else
                 {
                     // Open an existing shared memory mapping
-                    Mmf = MemoryMappedFile.OpenExisting(Name);
+                    _mapping = NamedMapping.OpenExisting(Name);
+                    Mmf = _mapping.File;
 
                     // Retrieve the header from the shared memory in order to initialise the correct size
                     using (var headerView = Mmf.CreateViewAccessor(0, HeaderOffset + Marshal.SizeOf(typeof(SharedHeader)), MemoryMappedFileAccess.Read))
@@ -319,11 +327,16 @@ namespace SharedMemory
             {
                 Mmf.Dispose();
             }
+            if (_mapping != null)
+            {
+                _mapping.Dispose();
+            }
             Header = null;
             ViewPtr = null;
             BufferStartPtr = null;
             View = null;
             Mmf = null;
+            _mapping = null;
         }
 
         /// <summary>
