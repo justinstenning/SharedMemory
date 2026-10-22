@@ -43,14 +43,16 @@ namespace SharedMemory
     /// on its state word with <c>futex</c>.
     /// </summary>
     /// <remarks>
-    /// <para>The file holds a magic number, the format version, the reset mode (0 auto, 1 manual), the state (0 not signalled), and the waiter count, then
-    /// zeros. Its lifetime is a buffer's (<see cref="LinuxSharedFile"/>), with create-or-open as for a Windows named event: a file somebody holds is opened
+    /// <para>The file holds a magic number, the format version, the reset mode (0 auto, 1 manual), the state, and the waiter count, then zeros. Bit 0 of the
+    /// state is the signal; bits 1 to 31 count the Sets that signalled the event, wrapping. Its lifetime is a buffer's (<see cref="LinuxSharedFile"/>), with create-or-open as for a Windows named event: a file somebody holds is opened
     /// whatever reset mode and initial state the opener asked for, and anything else under the name gives way to a new event in its creator's state.</para>
     /// <para>A Set writes the state and then reads the waiter count, and a waiter writes the count and then reads the state, each with a full barrier, so a
-    /// Set that finds no waiter can skip the wake call and still miss nobody on the way to sleep. <c>FUTEX_WAIT</c> sleeps only while the state is still 0.</para>
-    /// <para>A manual-reset waiter that <c>FUTEX_WAKE</c> woke returns true even if a Reset came first: Windows releases every thread waiting when a
-    /// manual-reset event is set, and only a Set wakes the word. An auto-reset waiter takes the signal when it runs, so a second Set before then finds the
-    /// event still signalled and adds nothing, where Windows would release a second waiter or leave the event signalled.</para>
+    /// Set that finds no waiter can skip the wake call and still miss nobody on the way to sleep. <c>FUTEX_WAIT</c> sleeps only while the state is still the
+    /// one the waiter last read.</para>
+    /// <para>A manual-reset waiter returns true once the count of Sets differs from the one it read when it began, even if a Reset has cleared the signal
+    /// since: Windows releases every thread waiting when a manual-reset event is set. A wake alone releases nobody, so a late wake call from a Set that lost
+    /// the CPU leaves a thread that began waiting after a later Reset blocked, as on Windows. An auto-reset waiter takes the signal when it runs, so a second
+    /// Set before then finds the event still signalled and adds nothing, where Windows would release a second waiter or leave the event signalled.</para>
     /// <para>The mapping and the file belong to a <see cref="SafeHandle"/> that every call holds a reference on. Disposing the event while another thread
     /// waits on it lets go of them, unmapping the region and running the close step, only when that wait returns: the event keeps its name meanwhile, as a
     /// Windows event does while a wait holds it. An event nobody disposes lets go of them when it is finalised.</para>
@@ -65,6 +67,16 @@ namespace SharedMemory
         const int ModeOffset = 8;
         const int StateOffset = 12;
         const int WaitersOffset = 16;
+
+        /// <summary>
+        /// Bit 0 of the state: the signal.
+        /// </summary>
+        const int Signalled = 1;
+
+        /// <summary>
+        /// What one Set adds to the state's count of Sets, in bits 1 to 31.
+        /// </summary>
+        const int OneSet = 2;
 
         readonly string _name;
         readonly long _futex;
@@ -158,7 +170,8 @@ namespace SharedMemory
             _region.DangerousAddRef(ref added);
             try
             {
-                return TryTake() || (millisecondsTimeout != 0 && Sleep(millisecondsTimeout));
+                int state = Volatile.Read(ref *_state);
+                return TryTake(ref state) || (millisecondsTimeout != 0 && Sleep(state, millisecondsTimeout));
             }
             finally
             {
@@ -168,7 +181,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Signals the event, waking one waiter (auto reset) or every waiter (manual reset).
+        /// Signals the event and counts the Set, waking one waiter (auto reset) or every waiter (manual reset). A signalled event stays as it is.
         /// </summary>
         internal bool Set()
         {
@@ -176,8 +189,18 @@ namespace SharedMemory
             _region.DangerousAddRef(ref added);
             try
             {
-                // The exchange is a full barrier: the waiter count is read after the state is written.
-                if (Interlocked.Exchange(ref *_state, 1) == 0 && Volatile.Read(ref *_waiters) != 0)
+                int state = Volatile.Read(ref *_state);
+                for (; ; )
+                {
+                    if ((state & Signalled) != 0)
+                        return true;
+                    // The compare-exchange is a full barrier: the waiter count is read after the state is written.
+                    int seen = Interlocked.CompareExchange(ref *_state, (state + OneSet) | Signalled, state);
+                    if (seen == state)
+                        break;
+                    state = seen;
+                }
+                if (Volatile.Read(ref *_waiters) != 0)
                     Wake(_manualReset ? int.MaxValue : 1);
                 return true;
             }
@@ -189,7 +212,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Clears the event.
+        /// Clears the signal, keeping the count of Sets.
         /// </summary>
         internal bool Reset()
         {
@@ -197,7 +220,7 @@ namespace SharedMemory
             _region.DangerousAddRef(ref added);
             try
             {
-                Interlocked.Exchange(ref *_state, 0);
+                Interlocked.And(ref *_state, ~Signalled);
                 return true;
             }
             finally
@@ -217,20 +240,27 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Takes the signal if there is one: any state but 0 is a signal, and an auto-reset event clears it for this waiter alone.
+        /// Takes the signal if <paramref name="state"/>, the state as last read, has it: a manual-reset event keeps it, and an auto-reset event clears it for
+        /// this waiter alone. When it returns false, <paramref name="state"/> is the state as it then was, without the signal.
         /// </summary>
-        bool TryTake()
+        bool TryTake(ref int state)
         {
-            int state = Volatile.Read(ref *_state);
-            if (state == 0)
-                return false;
-            return _manualReset || Interlocked.CompareExchange(ref *_state, 0, state) == state;
+            while ((state & Signalled) != 0)
+            {
+                if (_manualReset)
+                    return true;
+                int seen = Interlocked.CompareExchange(ref *_state, state & ~Signalled, state);
+                if (seen == state)
+                    return true;
+                state = seen;
+            }
+            return false;
         }
 
         /// <summary>
-        /// Waits for a signal as one of the event's counted waiters.
+        /// Waits for a signal as one of the event's counted waiters. <paramref name="start"/> is the state when the wait began.
         /// </summary>
-        bool Sleep(int millisecondsTimeout)
+        bool Sleep(int start, int millisecondsTimeout)
         {
             long deadline = millisecondsTimeout == Timeout.Infinite ? 0 : Stopwatch.GetTimestamp() + millisecondsTimeout * Stopwatch.Frequency / 1000;
             // The increment is a full barrier: the state is read after the count is written.
@@ -239,7 +269,11 @@ namespace SharedMemory
             {
                 for (; ; )
                 {
-                    if (TryTake())
+                    int state = Volatile.Read(ref *_state);
+                    if (TryTake(ref state))
+                        return true;
+                    // A Set since the wait began released this waiter, whether or not a Reset has cleared the signal since.
+                    if (_manualReset && (state & ~Signalled) != (start & ~Signalled))
                         return true;
 
                     Timespec remaining;
@@ -254,17 +288,13 @@ namespace SharedMemory
                         timeout = &remaining;
                     }
 
-                    if (Futex(_futex, _state, FUTEX_WAIT, 0, timeout, null, 0) == 0)
+                    // Woken, or EAGAIN (the state had changed), EINTR (a signal), or ETIMEDOUT: look again; the deadline ends the wait.
+                    if (Futex(_futex, _state, FUTEX_WAIT, state, timeout, null, 0) != 0)
                     {
-                        // Only a Set wakes the word. For a manual-reset event that releases this waiter whatever has happened since.
-                        if (_manualReset)
-                            return true;
-                        continue;
+                        int error = Marshal.GetLastPInvokeError();
+                        if (error != EAGAIN && error != EINTR && error != ETIMEDOUT)
+                            throw FutexFailure("wait", error);
                     }
-                    // EAGAIN: the state was no longer 0. EINTR: a signal. ETIMEDOUT: look once more, then the deadline ends the wait.
-                    int error = Marshal.GetLastPInvokeError();
-                    if (error != EAGAIN && error != EINTR && error != ETIMEDOUT)
-                        throw FutexFailure("wait", error);
                 }
             }
             finally

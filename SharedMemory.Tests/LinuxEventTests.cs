@@ -1,6 +1,7 @@
 #if NET
 using System;
 using System.IO;
+using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -223,6 +224,65 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
+        /// The state word: bit 0 is the signal, and bits 1 to 31 count the Sets that signalled the event. A Set on a signalled
+        /// event changes nothing, and a Reset or an auto-reset wait clears the signal and keeps the count.
+        /// </summary>
+        [TestMethod]
+        [OSCondition(OperatingSystems.Linux)]
+        [DataRow(EventResetMode.ManualReset)]
+        [DataRow(EventResetMode.AutoReset)]
+        public void StateWord_Bit0IsTheSignal_TheRestCountsSets(EventResetMode mode)
+        {
+            string name = Guid.NewGuid().ToString();
+            string path = PerUserPath(name);
+            using (var e = TestEvent.CreateOrOpen(name, false, mode))
+            {
+                Assert.AreEqual(0, State(path));
+                e.Set();
+                Assert.AreEqual(1 << 1 | 1, State(path));
+                e.Set();
+                Assert.AreEqual(1 << 1 | 1, State(path), "A Set on a signalled event should change nothing.");
+                if (mode == EventResetMode.ManualReset)
+                    e.Reset();
+                else
+                    Assert.IsTrue(e.WaitOne(0));
+                Assert.AreEqual(1 << 1, State(path));
+                e.Set();
+                Assert.AreEqual(2 << 1 | 1, State(path));
+            }
+        }
+
+        /// <summary>
+        /// A manual-reset waiter returns true only if a Set came while it waited, not for any wake. A Set that loses the CPU
+        /// between reading the waiter count and its wake call wakes the word after whatever came meanwhile: here a Reset, then a
+        /// thread that starts waiting. The test makes that late wake itself, with no Set, and the thread must stay blocked, as
+        /// on Windows, where it began waiting after the Reset.
+        /// </summary>
+        [TestMethod]
+        [OSCondition(OperatingSystems.Linux)]
+        public void ManualReset_WakeWithoutASet_DoesNotReleaseAThreadThatBeganAfterTheReset()
+        {
+            string name = Guid.NewGuid().ToString();
+            string path = PerUserPath(name);
+            using (var setter = TestEvent.CreateOrOpen(name, false, EventResetMode.ManualReset))
+            using (var waiter = TestEvent.CreateOrOpen(name, false, EventResetMode.ManualReset))
+            {
+                setter.Set();
+                setter.Reset();
+                Task<bool> wait = Wait(waiter);
+                AssertWaiterCount(path, 1);
+                Thread.Sleep(100);
+
+                Assert.AreEqual(1L, WakeStateWord(path), "The wake should have found the waiting thread.");
+                Assert.IsFalse(wait.Wait(300), "A wake with no Set released a thread that began waiting after the Reset.");
+
+                setter.Set();
+                Assert.IsTrue(wait.Wait(5000), "The Set did not release the waiting thread.");
+                Assert.IsTrue(wait.Result);
+            }
+        }
+
+        /// <summary>
         /// A wait in progress holds its event, as on Windows: disposing the event while another thread waits on it keeps the
         /// file under its name, so another opener reaches the waiter, and the file goes when the wait returns.
         /// </summary>
@@ -330,6 +390,40 @@ namespace SharedMemoryTests
         {
             return BitConverter.ToInt32(File.ReadAllBytes(path), 16);
         }
+
+        static int State(string path)
+        {
+            return BitConverter.ToInt32(File.ReadAllBytes(path), 12);
+        }
+
+        /// <summary>
+        /// <c>FUTEX_WAKE</c> on the event's state word, from this test's own mapping of the file, waking every waiter.
+        /// </summary>
+        /// <returns>How many waiters it woke.</returns>
+        static unsafe long WakeStateWord(string path)
+        {
+            long futex = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? 98 : 202;
+            using (var file = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+            using (var map = MemoryMappedFile.CreateFromFile(file, null, 0, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, true))
+            using (var view = map.CreateViewAccessor(0, EventSize, MemoryMappedFileAccess.ReadWrite))
+            {
+                byte* region = null;
+                view.SafeMemoryMappedViewHandle.AcquirePointer(ref region);
+                try
+                {
+                    long woken = Syscall(futex, (IntPtr)(region + view.PointerOffset + 12), 1 /* FUTEX_WAKE */, int.MaxValue, IntPtr.Zero, IntPtr.Zero, 0);
+                    Assert.IsTrue(woken >= 0, "futex wake failed: " + Marshal.GetLastPInvokeErrorMessage());
+                    return woken;
+                }
+                finally
+                {
+                    view.SafeMemoryMappedViewHandle.ReleasePointer();
+                }
+            }
+        }
+
+        [DllImport("libc", EntryPoint = "syscall", SetLastError = true)]
+        static extern long Syscall(long number, IntPtr address, int operation, int value, IntPtr timeout, IntPtr address2, int value3);
 
         static void AssertWaiterCount(string path, int expected)
         {
