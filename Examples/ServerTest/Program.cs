@@ -83,7 +83,7 @@ namespace ServerTest
                     {
                         readData = dataList[iterations % 255];
 
-                        int amount = theServer.Write(readData, 100);
+                        int amount = theServer.Write(readData, timeout: 100);
                         //int amount = theServer.Write<byte>(readData, 100);
 
                         if (amount == 0)

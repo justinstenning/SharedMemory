@@ -122,7 +122,7 @@ namespace SingleProcess
                 for (; ; )
                 {
                     startTick = clientTime.ElapsedTicks;
-                    int amount = client.Read(testData, 100);
+                    int amount = client.Read(testData, timeout: 100);
                     bytesRead += amount;
                     if (amount == 0)
                         Interlocked.Increment(ref clientWaitCount);
@@ -155,7 +155,7 @@ namespace SingleProcess
                 {
                     if (writeCount <= elements)
                     {
-                        int amount = writer.Write(dataList[random.Next(0, dataListCount)], 100);
+                        int amount = writer.Write(dataList[random.Next(0, dataListCount)], timeout: 100);
                         bytesWritten += amount;
                         if (amount == 0)
                             Interlocked.Increment(ref serverWaitCount);
