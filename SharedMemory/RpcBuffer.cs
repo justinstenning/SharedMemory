@@ -566,7 +566,9 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Dispose has completed
+        /// Whether <see cref="Dispose()"/> has closed the buffers. It usually has by the time it returns. If the thread that reads the
+        /// buffer, or a send under way, has not let go of them within about 1 s, they close in the background once they are free,
+        /// and this turns true then.
         /// </summary>
         public bool DisposeFinished
         {
@@ -625,9 +627,18 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
         /// <param name="remoteCallHandler">Action to handle requests with no response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
+        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
+        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
+        /// fails if its master has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// after about 1 s.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
+        /// open by an earlier slave.</exception>
         public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -639,9 +650,18 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
         /// <param name="asyncRemoteCallHandler">Asynchronous action to handle requests with no response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
+        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
+        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
+        /// fails if its master has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// after about 1 s.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
+        /// open by an earlier slave.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], Task> asyncRemoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -653,9 +673,18 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
         /// <param name="remoteCallHandlerWithResult">Function to handle requests with a response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
+        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
+        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
+        /// fails if its master has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// after about 1 s.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
+        /// open by an earlier slave.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], byte[]> remoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -667,9 +696,18 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
         /// <param name="asyncRemoteCallHandlerWithResult">Function to asynchronously handle requests with a response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
+        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
+        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
+        /// fails if its master has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// after about 1 s.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
+        /// open by an earlier slave.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], Task<byte[]>> asyncRemoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -680,9 +718,18 @@ namespace SharedMemory
         /// Construct a new RpcBuffer
         /// </summary>
         /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
+        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
+        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
+        /// fails if its master has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// after about 1 s.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
+        /// open by an earlier slave.</exception>
         public RpcBuffer(string name, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10)
         {
             if (bufferCapacity < 256) // min 256 bytes
@@ -819,9 +866,14 @@ namespace SharedMemory
         /// Send a remote request on the channel, blocking until a result is returned
         /// </summary>
         /// <param name="args">Arguments (if any) as a byte array to be sent to the remote endpoint</param>
-        /// <param name="timeoutMs">Timeout in milliseconds (defaults to 30sec)</param>
+        /// <param name="timeoutMs">How long the whole call may take, in milliseconds (defaults to 30 s): the waits to send the request,
+        /// for room in the buffer, and for the response share it. <see cref="Timeout.Infinite"/> waits without limit. 0 sends the
+        /// request and returns without its response, with <see cref="RpcResponse.Success"/> false; that send waits for the send lock
+        /// without limit, and up to about 1 s a packet for room.</param>
         /// <param name="cancellationToken">A cancellation token</param>
-        /// <returns>The returned response</returns>
+        /// <returns>The response. Its <see cref="RpcResponse.Success"/> is false if the request could not be sent, no response came
+        /// within <paramref name="timeoutMs"/>, the call was cancelled, the remote handler threw, the response arrived damaged, or
+        /// this instance was disposed while the request waited.</returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
         public RpcResponse RemoteRequest(byte[] args = null, int timeoutMs = defaultTimeoutMs, CancellationToken cancellationToken = default)
@@ -839,9 +891,16 @@ namespace SharedMemory
         /// Send a remote request on the channel (awaitable)
         /// </summary>
         /// <param name="args">Arguments (if any) as a byte array to be sent to the remote endpoint</param>
-        /// <param name="timeoutMs">Timeout in milliseconds (defaults to 30sec)</param>
+        /// <param name="timeoutMs">How long the whole call may take, in milliseconds (defaults to 30 s): the waits to send the request,
+        /// for room in the buffer, and for the response share it. <see cref="Timeout.Infinite"/> waits without limit. 0 sends the
+        /// request and returns without its response, with <see cref="RpcResponse.Success"/> false; that send waits for the send lock
+        /// without limit, and up to about 1 s a packet for room.</param>
         /// <param name="cancellationToken">A cancellation token</param>
-        /// <returns></returns>
+        /// <returns>A task for the response. Its <see cref="RpcResponse.Success"/> is false if the request could not be sent, no response came
+        /// within <paramref name="timeoutMs"/>, the call was cancelled, the remote handler threw, the response arrived damaged, or
+        /// this instance was disposed while the request waited.
+        /// The request is sent, waits for the send lock and for room included, before the task is returned. Code after an await
+        /// of the task does not run on the thread that reads the buffer.</returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
         public Task<RpcResponse> RemoteRequestAsync(byte[] args = null, int timeoutMs = defaultTimeoutMs, CancellationToken cancellationToken = default)
@@ -1435,7 +1494,10 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
+        /// Closes the channel. Requests still waiting for a response complete at once, with <see cref="RpcResponse.Success"/> false.
+        /// Waits up to about 1 s in all for the thread that reads the buffer to stop and for a send under way to end, then closes the
+        /// buffers; past that, they close in the background once they are free (see <see cref="DisposeFinished"/>). It does not wait
+        /// for request handlers still running, so their replies may not be sent.
         /// </summary>
         public void Dispose()
         {

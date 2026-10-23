@@ -38,6 +38,10 @@ namespace SharedMemory
     /// <summary>
     /// A lock-free FIFO shared memory circular buffer (or ring buffer) utilising a <see cref="MemoryMappedFile"/>.
     /// </summary>
+    /// <remarks>
+    /// <para>Readers compete for items: each item goes to the one reader that claims its node first, not to every reader.</para>
+    /// <para>A buffer of <see cref="NodeCount"/> nodes holds at most <see cref="NodeCount"/> - 1 unread items, because one node always stays free.</para>
+    /// </remarks>
 #if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
@@ -169,12 +173,12 @@ namespace SharedMemory
         public struct Node
         {
             /// <summary>
-            /// The previous node.
+            /// The next node.
             /// </summary>
             public int Next;
 
             /// <summary>
-            /// The next node.
+            /// The previous node.
             /// </summary>
             public int Prev;
 
@@ -212,7 +216,7 @@ namespace SharedMemory
         /// Creates and opens a new <see cref="CircularBuffer"/> instance with the specified name, node count and buffer size per node.
         /// </summary>
         /// <param name="name">The name of the shared memory to be created</param>
-        /// <param name="nodeCount">The number of nodes within the circular linked-list (minimum of 2)</param>
+        /// <param name="nodeCount">The number of nodes within the circular linked-list (minimum of 2). The buffer holds at most <paramref name="nodeCount"/> - 1 unread items.</param>
         /// <param name="nodeBufferSize">The buffer size per node in bytes. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.SharedHeader) + Marshal.SizeOf(CircularBuffer.NodeHeader) + (Marshal.SizeOf(CircularBuffer.Node) * nodeCount) + (bufferSize * nodeCount)</code></param>
         /// <remarks>
         /// <para>The maximum total shared memory size is dependent upon the system and current memory fragmentation.</para>
