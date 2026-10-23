@@ -667,7 +667,11 @@ namespace SharedMemory
             // been closed, and Dispose can close the owner's on its read thread. Which instance creates the mutex is all the election
             // needs, so there the owner creates it without taking it.
             bool takeMutex = OperatingSystem.IsWindows();
-            masterMutex = new Mutex(takeMutex, name + "SharedMemory_MasterMutex", out bool createdNew);
+            bool createdNew;
+            if (takeMutex)
+                masterMutex = new Mutex(true, name + "SharedMemory_MasterMutex", out createdNew);
+            else
+                masterMutex = CreateUnixElectionMutex(name + "SharedMemory_MasterMutex", out createdNew);
 
             if (createdNew && (!takeMutex || masterMutex.WaitOne(500)))
 #else
@@ -1248,5 +1252,30 @@ namespace SharedMemory
         }
 
         #endregion
+
+#if NET10_0_OR_GREATER
+        /// <summary>
+        /// Creates or opens the election mutex on Unix, unowned, with the scope of the channel's buffers: one user's processes in every POSIX
+        /// session for a name without a prefix or with <c>Local\</c>, every process on the machine for a <c>Global\</c> name.
+        /// </summary>
+        /// <remarks>
+        /// <para>Without options .NET gives a named mutex on Unix one POSIX session's scope, and every terminal is its own session, so two
+        /// programs started from two terminals would both become owners. <c>Local\</c> is dropped because .NET refuses it beside
+        /// <c>CurrentSessionOnly = false</c>; the buffers' files treat <c>Local\X</c> and <c>X</c> as one name too.</para>
+        /// <para>A <c>Global\</c> name is not given <c>CurrentUserOnly</c>: .NET would then make <c>Global\X</c> the same mutex as <c>X</c>,
+        /// whose buffers are other files, and an RpcBuffer on one would open the other's channel instead of owning its own.</para>
+        /// </remarks>
+        static Mutex CreateUnixElectionMutex(string mutexName, out bool createdNew)
+        {
+            const string LocalScope = "Local\\";
+            bool global = mutexName.StartsWith("Global\\", StringComparison.Ordinal);
+            // Only Local\X with no other backslash: Local\Global\X would become X's mutex, while its buffers are other files. Kept whole, it is
+            // refused by .NET, as a backslash after the prefix is on Windows.
+            if (mutexName.StartsWith(LocalScope, StringComparison.Ordinal) && mutexName.IndexOf('\\', LocalScope.Length) < 0)
+                mutexName = mutexName.Substring(LocalScope.Length);
+            var options = new NamedWaitHandleOptions { CurrentUserOnly = !global, CurrentSessionOnly = false };
+            return new Mutex(false, mutexName, options, out createdNew);
+        }
+#endif
     }
 }

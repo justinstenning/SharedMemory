@@ -26,6 +26,7 @@
 
 #if NET10_0_OR_GREATER
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -47,6 +48,8 @@ namespace SharedMemory
     /// <item>Open: a file nobody holds is removed, and the name does not exist. Otherwise take the shared lock, then check that the name still leads to the
     /// same file, which a process removing it may have unlinked meanwhile.</item>
     /// <item>Close: whoever gets an exclusive lock was the last holder, and removes the file.</item>
+    /// <item>Exit: when the process exits normally, the close step runs for every file it still holds, disposed or not, as Windows closes a
+    /// process's handles at exit (<see cref="Held"/>). The mappings stay until the process ends.</item>
     /// <item>Create-or-open, for events: a file somebody holds is opened. Anything else is created, its contents written before it is published, and a
     /// file nobody holds is removed first rather than opened, as a Windows event is gone once its last handle has closed.</item>
     /// </list>
@@ -68,6 +71,8 @@ namespace SharedMemory
 
         readonly string _path;
         readonly Statx _identity;
+        readonly object _closing = new object();
+        WeakReference<LinuxSharedFile> _held;
         SafeFileHandle _handle;
 
         LinuxSharedFile(string path, Statx identity, SafeFileHandle handle)
@@ -122,6 +127,19 @@ namespace SharedMemory
         internal int Read(Span<byte> buffer, long offset)
         {
             return RandomAccess.Read(_handle, buffer, offset);
+        }
+
+        /// <summary>
+        /// Has the close step run when the process exits normally, if nothing has run it by then (<see cref="Held"/>). The owner calls it once it has
+        /// finished with <see cref="Read"/> and <see cref="OpenForMapping"/>, which use the locked descriptor that the close step closes.
+        /// </summary>
+        internal void CloseAtExit()
+        {
+            lock (_closing)
+            {
+                if (_handle != null && _held == null)
+                    _held = Held.Add(this);
+            }
         }
 
         /// <summary>
@@ -340,14 +358,25 @@ namespace SharedMemory
             GC.SuppressFinalize(this);
         }
 
+        /// <summary>
+        /// The close step, once, whichever of dispose, the finaliser, and the process's exit comes first. The others wait for it to finish, so that
+        /// the process does not exit while another thread is halfway through it, and then find nothing left to close.
+        /// </summary>
         void Close()
         {
-            SafeFileHandle handle = _handle;
-            _handle = null;
-            if (handle == null || handle.IsClosed)
-                return;
-            CloseStep(handle, _path, _identity);
-            handle.Dispose();
+            lock (_closing)
+            {
+                SafeFileHandle handle = _handle;
+                _handle = null;
+                if (handle == null)
+                    return;
+                if (_held != null)
+                    Held.Remove(_held);
+                if (handle.IsClosed)
+                    return;
+                CloseStep(handle, _path, _identity);
+                handle.Dispose();
+            }
         }
 
         /// <summary>
@@ -508,6 +537,58 @@ namespace SharedMemory
                     throw Failure(error, "lock", path);
             }
             return true;
+        }
+
+        /// <summary>
+        /// The files this process holds, whose close step runs when the process exits normally (<see cref="AppDomain.ProcessExit"/>, which .NET raises
+        /// when <c>Main</c> returns or on <see cref="Environment.Exit"/>). Without it a buffer disposed just before the process ends, whose dispose its
+        /// owner had deferred to another thread, or never disposed, would keep its file until the name is next used or the user logs out, since .NET
+        /// runs no finalisers at exit. A process ended by a signal, SIGTERM and SIGINT included, by an unhandled exception, or by a kill still leaves
+        /// its files.
+        /// </summary>
+        /// <remarks>
+        /// <para>Only the close step runs. The mappings stay: other threads go on running until the process ends and may still use them.</para>
+        /// <para>The references are weak, so that a file nobody disposes is still collected and finalised. They track resurrection, so that a file
+        /// collected but not yet finalised when the process exits, after which no finaliser runs, still gets its close step.</para>
+        /// </remarks>
+        static class Held
+        {
+            static readonly HashSet<WeakReference<LinuxSharedFile>> Files = new HashSet<WeakReference<LinuxSharedFile>>();
+
+            static Held()
+            {
+                AppDomain.CurrentDomain.ProcessExit += (sender, e) => CloseAll();
+            }
+
+            internal static WeakReference<LinuxSharedFile> Add(LinuxSharedFile file)
+            {
+                var entry = new WeakReference<LinuxSharedFile>(file, true);
+                lock (Files)
+                    Files.Add(entry);
+                return entry;
+            }
+
+            internal static void Remove(WeakReference<LinuxSharedFile> entry)
+            {
+                lock (Files)
+                    Files.Remove(entry);
+            }
+
+            static void CloseAll()
+            {
+                WeakReference<LinuxSharedFile>[] entries;
+                lock (Files)
+                {
+                    entries = new WeakReference<LinuxSharedFile>[Files.Count];
+                    Files.CopyTo(entries);
+                }
+                foreach (WeakReference<LinuxSharedFile> entry in entries)
+                {
+                    LinuxSharedFile file;
+                    if (entry.TryGetTarget(out file))
+                        file.Close();
+                }
+            }
         }
 
         static FileNotFoundException NotFound(string name, string path)

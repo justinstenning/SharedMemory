@@ -99,6 +99,7 @@ namespace SharedMemory
             {
                 mapped = linuxFile.OpenForMapping();
                 var file = MemoryMappedFile.CreateFromFile(mapped, null, capacity, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, false);
+                linuxFile.CloseAtExit();
                 return new NamedMapping(file) { _linuxFile = linuxFile };
             }
             catch

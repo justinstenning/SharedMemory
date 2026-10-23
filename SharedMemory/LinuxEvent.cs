@@ -124,6 +124,7 @@ namespace SharedMemory
                 map = MemoryMappedFile.CreateFromFile(mapped, null, 0, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, false);
                 mapped = null;
                 view = map.CreateViewAccessor(0, Size, MemoryMappedFileAccess.ReadWrite);
+                file.CloseAtExit();
                 return new LinuxEvent(name, futex, manualReset, new Region(file, map, view));
             }
             catch
