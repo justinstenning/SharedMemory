@@ -32,7 +32,8 @@ using System.Text;
 namespace SharedMemory
 {
     /// <summary>
-    /// The rules for SharedMemory's files on Unix: which file a name maps to, and which files found under a name may be used.
+    /// The rules for SharedMemory's files on Unix: which file a name maps to, and which files found under a name may be used. On Linux the file is the
+    /// memory itself, in /dev/shm; on macOS it is a lock file under /var/tmp, which names the <c>shm_open</c> object that holds the memory.
     /// </summary>
     /// <remarks>
     /// Every build compiles this, so that its tests run on every OS. Only the net10.0 build uses it, on Unix.
@@ -65,6 +66,12 @@ namespace SharedMemory
         /// </summary>
         internal const int HashCharacters = 26;
 
+        /// <summary>
+        /// The folder that holds the macOS lock folders. Not /tmp, whose nightly cleaner deletes files whose three times are all over 3 days old,
+        /// held or not, and nothing a holder does moves a lock file's times.
+        /// </summary>
+        internal const string LockRoot = "/var/tmp/";
+
         const string GlobalScope = "Global\\";
         const string LocalScope = "Local\\";
         const string Base32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -89,41 +96,82 @@ namespace SharedMemory
         /// </remarks>
         internal static string FileName(string name, uint uid)
         {
-            string scope;
+            string scope = IsGlobal(name) ? "global." : "u" + uid.ToString(CultureInfo.InvariantCulture) + ".";
+            string fileName = Prefix + scope + Escape(name);
+            byte[] bytes = Encoding.UTF8.GetBytes(fileName);
+            if (bytes.Length <= MaxFileNameBytes)
+                return fileName;
+            return Kept(bytes) + "~" + Hash(bytes);
+        }
+
+        /// <summary>
+        /// The macOS lock file name for <paramref name="name"/>, in the folder <see cref="LockFolder"/> gives: <c>{X}~{H}</c>.
+        /// </summary>
+        /// <remarks>
+        /// <para><c>{X}</c> is the rest of the name escaped as in <see cref="FileName"/>, cut back to its first 200 bytes, at the start of a character, when longer.
+        /// <c>{H}</c> is the first 26 characters of the RFC 4648 base32 encoding of the SHA-256 of the whole of <c>{X}</c>'s UTF-8 bytes, before any cut.</para>
+        /// <para>Every name has the hash, because the volume that holds /var/tmp folds case and Unicode normalisation (and <c>ß</c> with <c>SS</c>): <c>TEST</c>
+        /// and <c>test</c>, or <c>café</c> composed and decomposed, would otherwise be one file there, where Windows and Linux keep them apart.</para>
+        /// </remarks>
+        internal static string LockFileName(string name)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(Escape(name));
+            return (bytes.Length <= KeptBytes ? Encoding.UTF8.GetString(bytes) : Kept(bytes)) + "~" + Hash(bytes);
+        }
+
+        /// <summary>
+        /// The folder of the macOS lock file for <paramref name="name"/> in a process whose effective user ID is <paramref name="uid"/>, with its
+        /// trailing slash: <c>/var/tmp/.SharedMemory-global/</c> for <c>Global\X</c>, and <c>/var/tmp/.SharedMemory-uid{uid}/</c> for <c>Local\X</c> or <c>X</c>.
+        /// </summary>
+        internal static string LockFolder(string name, uint uid)
+        {
+            return LockRoot + (IsGlobal(name) ? ".SharedMemory-global/" : ".SharedMemory-uid" + uid.ToString(CultureInfo.InvariantCulture) + "/");
+        }
+
+        /// <summary>
+        /// The rest of <paramref name="name"/> once a <c>Global\</c> or <c>Local\</c> prefix is taken off, in UTF-8 terms, with <c>%</c>, <c>/</c>, <c>\</c>,
+        /// and characters below 0x20 written as <c>%XX</c> in upper-case hex.
+        /// </summary>
+        static string Escape(string name)
+        {
             string rest;
             if (IsGlobal(name))
-            {
-                scope = "global.";
                 rest = name.Substring(GlobalScope.Length);
-            }
             else
-            {
-                scope = "u" + uid.ToString(CultureInfo.InvariantCulture) + ".";
                 rest = name.StartsWith(LocalScope, StringComparison.Ordinal) ? name.Substring(LocalScope.Length) : name;
-            }
 
-            var fileName = new StringBuilder(Prefix.Length + scope.Length + rest.Length);
-            fileName.Append(Prefix).Append(scope);
+            var escaped = new StringBuilder(rest.Length);
             // Characters from U+0080 up encode to bytes of 0x80 and above, which are never escaped, so escaping characters escapes the bytes.
             foreach (char c in rest)
             {
                 if (c == '%' || c == '/' || c == '\\' || c < 0x20)
-                    fileName.Append('%').Append(((int)c).ToString("X2", CultureInfo.InvariantCulture));
+                    escaped.Append('%').Append(((int)c).ToString("X2", CultureInfo.InvariantCulture));
                 else
-                    fileName.Append(c);
+                    escaped.Append(c);
             }
+            return escaped.ToString();
+        }
 
-            byte[] bytes = Encoding.UTF8.GetBytes(fileName.ToString());
-            if (bytes.Length <= MaxFileNameBytes)
-                return fileName.ToString();
-
+        /// <summary>
+        /// The first 200 of <paramref name="bytes"/>, cut back to the start of a character if one straddles byte 200. <paramref name="bytes"/> holds more than 200.
+        /// </summary>
+        static string Kept(byte[] bytes)
+        {
             int kept = KeptBytes;
             while (kept > 0 && (bytes[kept] & 0xC0) == 0x80)
                 kept--;
+            return Encoding.UTF8.GetString(bytes, 0, kept);
+        }
+
+        /// <summary>
+        /// The first 26 characters of the base32 encoding of the SHA-256 of <paramref name="bytes"/>.
+        /// </summary>
+        static string Hash(byte[] bytes)
+        {
             byte[] hash;
             using (SHA256 sha = SHA256.Create())
                 hash = sha.ComputeHash(bytes);
-            return Encoding.UTF8.GetString(bytes, 0, kept) + "~" + Base32(hash, HashCharacters);
+            return Base32(hash, HashCharacters);
         }
 
         /// <summary>
@@ -171,6 +219,40 @@ namespace SharedMemory
             if ((mode & GroupOrOtherWrite) != 0)
                 return "group or others can write to it (mode " + Convert.ToString((int)(mode & 0xFFF), 8).PadLeft(4, '0') + ")";
             return null;
+        }
+
+        /// <summary>
+        /// Why a macOS lock folder found under its name must not be used, or null if it may be.
+        /// </summary>
+        /// <param name="perUser">Whether it is a per-user folder (not the <c>Global\</c> one).</param>
+        /// <param name="uid">The effective user ID of this process.</param>
+        /// <param name="owner">The user ID that owns the folder.</param>
+        /// <param name="mode">The folder's mode, its type bits included, from <c>lstat</c>, so that a symbolic link is seen as one.</param>
+        /// <remarks>
+        /// A per-user folder must be a folder of the effective user's with mode 0700, so that nobody else can put a lock file in it. The global folder must
+        /// be a folder with mode 1777, like /tmp: anyone may add a lock file, and only a file's owner may remove it. Whoever made it first owns it.
+        /// </remarks>
+        internal static string FolderRefusal(bool perUser, uint uid, uint owner, uint mode)
+        {
+            const uint TypeMask = 0xF000;      // S_IFMT
+            const uint Directory = 0x4000;     // S_IFDIR
+            const uint SymbolicLink = 0xA000;  // S_IFLNK
+
+            if ((mode & TypeMask) == SymbolicLink)
+                return "it is a symbolic link";
+            if ((mode & TypeMask) != Directory)
+                return "it is not a folder";
+            if (perUser && owner != uid)
+                return "it belongs to user " + owner.ToString(CultureInfo.InvariantCulture) + ", not " + uid.ToString(CultureInfo.InvariantCulture);
+            uint expected = perUser ? 0x1C0u : 0x3FFu; // 0700, 01777
+            if ((mode & 0xFFF) != expected)
+                return "its mode is " + Octal(mode) + ", not " + Octal(expected);
+            return null;
+        }
+
+        static string Octal(uint mode)
+        {
+            return Convert.ToString((int)(mode & 0xFFF), 8).PadLeft(4, '0');
         }
     }
 }

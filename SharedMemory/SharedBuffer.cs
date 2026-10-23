@@ -118,11 +118,12 @@ namespace SharedMemory
         #region Protected field members
 
         /// <summary>
-        /// Memory mapped file
+        /// Memory mapped file. Null on macOS, where the net10.0 build maps the memory without a <see cref="MemoryMappedFile"/>.
         /// </summary>
         protected MemoryMappedFile Mmf;
         /// <summary>
-        /// Memory mapped view
+        /// Memory mapped view. Null on macOS, where the net10.0 build maps the memory without a <see cref="MemoryMappedFile"/>;
+        /// <see cref="ViewPtr"/>, <see cref="BufferStartPtr"/>, and <see cref="Header"/> are set there as everywhere else.
         /// </summary>
         protected MemoryMappedViewAccessor View;
         /// <summary>
@@ -143,6 +144,10 @@ namespace SharedMemory
         #region Private field members
 
         private NamedMapping _mapping;
+#if NET10_0_OR_GREATER
+        // Where the memory is mapped without a MemoryMappedFile (macOS), the struct reads and writes go through this instead of View.
+        private System.IO.UnmanagedMemoryAccessor _mappedView;
+#endif
 
         #endregion
 
@@ -213,6 +218,11 @@ namespace SharedMemory
             try
             {
                 // Attempts to create or open the shared memory with a name of this.Name
+#if NET10_0_OR_GREATER
+                if (NamedMapping.MapsWithoutFile)
+                    OpenWithoutFile();
+                else
+#endif
                 if (IsOwnerOfSharedMemory)
                 {
                     // Create a new shared memory mapping
@@ -297,7 +307,11 @@ namespace SharedMemory
             SharedHeader header = new SharedHeader();
             header.SharedMemorySize = SharedMemorySize;
             header.Shutdown = 0;
+#if NET10_0_OR_GREATER
+            (View ?? _mappedView).Write<SharedHeader>(HeaderOffset, ref header);
+#else
             View.Write<SharedHeader>(HeaderOffset, ref header);
+#endif
         }
 
         /// <summary>
@@ -306,7 +320,11 @@ namespace SharedMemory
         /// </summary>
         public virtual void Close()
         {
+#if NET10_0_OR_GREATER
+            if (IsOwnerOfSharedMemory && (View != null || _mappedView != null))
+#else
             if (IsOwnerOfSharedMemory && View != null)
+#endif
             {
                 // Indicates to any open instances that the owner is no longer open
 #pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
@@ -327,6 +345,13 @@ namespace SharedMemory
             {
                 Mmf.Dispose();
             }
+#if NET10_0_OR_GREATER
+            if (_mappedView != null)
+            {
+                _mappedView.Dispose();
+                _mappedView = null;
+            }
+#endif
             if (_mapping != null)
             {
                 _mapping.Dispose();
@@ -360,7 +385,11 @@ namespace SharedMemory
         protected virtual void Write<T>(ref T source, long bufferPosition = 0)
             where T : struct
         {
+#if NET10_0_OR_GREATER
+            (View ?? _mappedView).Write<T>(BufferOffset + bufferPosition, ref source);
+#else
             View.Write<T>(BufferOffset + bufferPosition, ref source);
+#endif
         }
 
         /// <summary>
@@ -440,7 +469,11 @@ namespace SharedMemory
         protected virtual void Read<T>(out T data, long bufferPosition = 0)
             where T : struct
         {
+#if NET10_0_OR_GREATER
+            (View ?? _mappedView).Read<T>(BufferOffset + bufferPosition, out data);
+#else
             View.Read<T>(BufferOffset + bufferPosition, out data);
+#endif
         }
 
         /// <summary>
@@ -520,5 +553,34 @@ namespace SharedMemory
         }
 
         #endregion
+
+#if NET10_0_OR_GREATER
+        /// <summary>
+        /// <see cref="Open"/>'s mapping where the memory is mapped without a <see cref="MemoryMappedFile"/> (macOS): <see cref="Mmf"/> and <see cref="View"/>
+        /// stay null, the pointers come from the mapping, and the struct reads and writes go through an accessor of the same size as <see cref="View"/>
+        /// would have, so that they check their bounds as they do elsewhere.
+        /// </summary>
+        private void OpenWithoutFile()
+        {
+            if (IsOwnerOfSharedMemory)
+            {
+                // Create a new shared memory mapping
+                _mapping = NamedMapping.CreateNew(Name, SharedMemorySize);
+                ViewPtr = _mapping.Pointer;
+                BufferStartPtr = ViewPtr + BufferOffset;
+            }
+            else
+            {
+                // Open an existing shared memory mapping, a whole number of pages, and size the buffer from its header
+                _mapping = NamedMapping.OpenExisting(Name);
+                ViewPtr = _mapping.Pointer;
+                BufferSize = ((SharedHeader*)(ViewPtr + HeaderOffset))->SharedMemorySize - Marshal.SizeOf(typeof(SharedHeader));
+                BufferStartPtr = ViewPtr + HeaderOffset + Marshal.SizeOf(typeof(SharedHeader));
+            }
+            _mappedView = new System.IO.UnmanagedMemoryAccessor(_mapping.Memory, 0, SharedMemorySize, System.IO.FileAccess.ReadWrite);
+            Header = (SharedHeader*)(ViewPtr + HeaderOffset);
+            InitialiseHeader();
+        }
+#endif
     }
 }

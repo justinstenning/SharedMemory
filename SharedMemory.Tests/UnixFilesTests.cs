@@ -6,9 +6,9 @@ using SharedMemory;
 namespace SharedMemoryTests
 {
     /// <summary>
-    /// The rules for SharedMemory's files on Unix: names to file names, and which files may be used. They are pure
-    /// functions in every library build, so these run on every OS. The expected long names were computed apart from the
-    /// library, in Python, from the rules as written.
+    /// The rules for SharedMemory's files on Unix: names to Linux file names and macOS lock file names, and which files
+    /// and lock folders may be used. They are pure functions in every library build, so these run on every OS. The
+    /// expected long names and hashes were computed apart from the library, in Python, from the rules as written.
     /// </summary>
     [TestClass]
     public class UnixFilesTests
@@ -193,6 +193,158 @@ namespace SharedMemoryTests
         public void Refusal_NotARegularFile(bool perUser, uint mode)
         {
             Assert.AreEqual("it is not a regular file", UnixFiles.Refusal(perUser, Uid, Uid, mode));
+        }
+
+        const uint MacUid = 502;
+
+        [TestMethod]
+        [DataRow("TEST", "/var/tmp/.SharedMemory-uid502/TEST~STXALEZV4WD6KAOMJP4QME7AQF")]
+        [DataRow("test", "/var/tmp/.SharedMemory-uid502/test~T6DNBAMIJR6WLGRP5KQMKWWQCW")]
+        [DataRow("Local\\TEST", "/var/tmp/.SharedMemory-uid502/TEST~STXALEZV4WD6KAOMJP4QME7AQF")]
+        [DataRow("Global\\TEST", "/var/tmp/.SharedMemory-global/TEST~STXALEZV4WD6KAOMJP4QME7AQF")]
+        [DataRow("a/b%c", "/var/tmp/.SharedMemory-uid502/a%2Fb%25c~I6CGOVAJQWCGJXCW4RVQ5MO27S")]
+        [DataRow("TEST_evt_dataexists", "/var/tmp/.SharedMemory-uid502/TEST_evt_dataexists~SFP4VEMNC5AD2MPUBLL6FURVDV")]
+        [DataRow("caf\u00E9", "/var/tmp/.SharedMemory-uid502/caf\u00E9~QUHX3RBZCD7YSD4IPHAO2JX6NF")]
+        [DataRow("cafe\u0301", "/var/tmp/.SharedMemory-uid502/cafe\u0301~QHXQMC6NTCW4PASOWXA23KB4GJ")]
+        public void LockFile_SpecificationSamples(string name, string expected)
+        {
+            Assert.AreEqual(expected, UnixFiles.LockFolder(name, MacUid) + UnixFiles.LockFileName(name));
+        }
+
+        /// <summary>
+        /// The Mac's volume folds case, Unicode normalisation, and ß with SS, so names that Windows and Linux keep apart
+        /// must differ in more than those: their hashes, upper-case letters and digits that no folding changes, differ.
+        /// </summary>
+        [TestMethod]
+        [DataRow("TEST", "test")]
+        [DataRow("TEST", "Test")]
+        [DataRow("test", "Test")]
+        [DataRow("caf\u00E9", "cafe\u0301")]
+        [DataRow("Stra\u00DFe", "STRASSE")]
+        public void LockFileName_NamesTheVolumeFoldsTogether_DifferInTheirHash(string first, string second)
+        {
+            string firstName = UnixFiles.LockFileName(first);
+            string secondName = UnixFiles.LockFileName(second);
+
+            string firstHash = firstName.Substring(firstName.LastIndexOf('~') + 1);
+            string secondHash = secondName.Substring(secondName.LastIndexOf('~') + 1);
+            Assert.AreNotEqual(firstHash, secondHash);
+        }
+
+        [TestMethod]
+        [DataRow("Test", "Test~KMXKVPMVOSEA3P3WXG4MYAEDFQ")]
+        [DataRow("Stra\u00DFe", "Stra\u00DFe~LCRXPDAYYQLSNTKTYKSMO7OL5W")]
+        [DataRow("STRASSE", "STRASSE~XF4ALLYJJFUU2EW6ZBENZUUU73")]
+        public void LockFileName_EveryNameHasTheHash(string name, string expected)
+        {
+            Assert.AreEqual(expected, UnixFiles.LockFileName(name));
+        }
+
+        [TestMethod]
+        public void LockFolder_LocalPrefixIsTheUsersAndGlobalIsShared()
+        {
+            Assert.AreEqual("/var/tmp/.SharedMemory-uid502/", UnixFiles.LockFolder("TEST", MacUid));
+            Assert.AreEqual("/var/tmp/.SharedMemory-uid502/", UnixFiles.LockFolder("Local\\TEST", MacUid));
+            Assert.AreEqual("/var/tmp/.SharedMemory-uid0/", UnixFiles.LockFolder("TEST", 0));
+            Assert.AreEqual("/var/tmp/.SharedMemory-global/", UnixFiles.LockFolder("Global\\TEST", MacUid));
+            Assert.AreEqual("/var/tmp/.SharedMemory-global/", UnixFiles.LockFolder("Global\\TEST", 0));
+            Assert.AreEqual("/var/tmp/.SharedMemory-uid502/", UnixFiles.LockFolder("global\\TEST", MacUid));
+            Assert.AreEqual(UnixFiles.LockFileName("TEST"), UnixFiles.LockFileName("Local\\TEST"));
+            Assert.AreEqual(UnixFiles.LockFileName("TEST"), UnixFiles.LockFileName("Global\\TEST"));
+            Assert.AreEqual("Global%5CTEST~67ZKTU6H3BOIWQLDNOCOELQTZP", UnixFiles.LockFileName("Local\\Global\\TEST"));
+        }
+
+        [TestMethod]
+        public void LockFileName_200Bytes_IsKeptWhole()
+        {
+            Assert.AreEqual(new string('a', 200) + "~YKUQRWMPLX4YPLPEDNP44IJQM7", UnixFiles.LockFileName(new string('a', 200)));
+        }
+
+        [TestMethod]
+        public void LockFileName_201Bytes_KeepsFirst200BytesThenTheHashOfTheWhole()
+        {
+            string actual = UnixFiles.LockFileName(new string('a', 201));
+
+            Assert.AreEqual(new string('a', 200) + "~VEXP3AQQSNZ6LD42EBLN5YA6QB", actual);
+            Assert.AreEqual(227, Encoding.UTF8.GetByteCount(actual));
+        }
+
+        [TestMethod]
+        public void LockFileName_LongNamesSharingTheirFirst200Bytes_StayApart()
+        {
+            Assert.AreEqual(new string('a', 200) + "~BNFLUCKD6XTTNKEATJBNX6RSHR", UnixFiles.LockFileName(new string('a', 240) + "1"));
+            Assert.AreEqual(new string('a', 200) + "~SIDNZNM5NPIIEL5GJPCE2C4FB3", UnixFiles.LockFileName(new string('a', 240) + "2"));
+        }
+
+        [TestMethod]
+        public void LockFileName_CharacterAcrossByte200_IsCutBeforeIt()
+        {
+            // 199 bytes of 'a'; U+00E9 is bytes 199 and 200.
+            Assert.AreEqual(new string('a', 199) + "~ZCV24UDPOOEJW6NCDB6QEAF6Y7", UnixFiles.LockFileName(new string('a', 199) + "\u00E9bbb"));
+        }
+
+        [TestMethod]
+        public void LockFileName_LongNameIsMeasuredAfterEscaping()
+        {
+            var kept = new StringBuilder();
+            for (int i = 0; i < 66; i++)
+                kept.Append("%2F");
+            Assert.AreEqual(kept + "%2~BXRGTEE63XCDXJCIUTWIYAUKSY", UnixFiles.LockFileName(new string('/', 100)));
+        }
+
+        [TestMethod]
+        public void LockFileName_LongGlobalName()
+        {
+            Assert.AreEqual("/var/tmp/.SharedMemory-global/" + new string('g', 200) + "~CUJKN5W3QDZUIXZK6VMY3QBKZZ",
+                UnixFiles.LockFolder("Global\\" + new string('g', 300), MacUid) + UnixFiles.LockFileName("Global\\" + new string('g', 300)));
+        }
+
+        [TestMethod]
+        [DataRow(true, MacUid, Directory | 0x1C0u)]     // 0700
+        [DataRow(false, MacUid, Directory | 0x3FFu)]    // 01777
+        [DataRow(false, 501u, Directory | 0x3FFu)]      // made first by another user
+        [DataRow(false, 0u, Directory | 0x3FFu)]
+        public void FolderRefusal_UsableFolders(bool perUser, uint owner, uint mode)
+        {
+            Assert.IsNull(UnixFiles.FolderRefusal(perUser, MacUid, owner, mode));
+        }
+
+        [TestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public void FolderRefusal_SymbolicLink(bool perUser)
+        {
+            Assert.AreEqual("it is a symbolic link", UnixFiles.FolderRefusal(perUser, MacUid, MacUid, SymbolicLink | 0x1EDu));
+        }
+
+        [TestMethod]
+        [DataRow(true, Regular | 0x1C0u)]
+        [DataRow(false, Regular | 0x3FFu)]
+        [DataRow(true, 0x1000u | 0x1C0u)]  // FIFO
+        public void FolderRefusal_NotAFolder(bool perUser, uint mode)
+        {
+            Assert.AreEqual("it is not a folder", UnixFiles.FolderRefusal(perUser, MacUid, MacUid, mode));
+        }
+
+        [TestMethod]
+        public void FolderRefusal_PerUserFolderOfAnotherUser()
+        {
+            Assert.AreEqual("it belongs to user 501, not 502", UnixFiles.FolderRefusal(true, MacUid, 501, Directory | 0x1C0));
+            Assert.AreEqual("it belongs to user 0, not 502", UnixFiles.FolderRefusal(true, MacUid, 0, Directory | 0x1C0));
+        }
+
+        [TestMethod]
+        [DataRow(true, 0x1EDu, "its mode is 0755, not 0700")]
+        [DataRow(true, 0x1E8u, "its mode is 0750, not 0700")]
+        [DataRow(true, 0x140u, "its mode is 0500, not 0700")]
+        [DataRow(true, 0x3C0u, "its mode is 1700, not 0700")]
+        [DataRow(false, 0x1EDu, "its mode is 0755, not 1777")]
+        [DataRow(false, 0x1FFu, "its mode is 0777, not 1777")]
+        [DataRow(false, 0x3EDu, "its mode is 1755, not 1777")]
+        [DataRow(false, 0x1C0u, "its mode is 0700, not 1777")]
+        public void FolderRefusal_WrongMode(bool perUser, uint permissions, string reason)
+        {
+            Assert.AreEqual(reason, UnixFiles.FolderRefusal(perUser, MacUid, MacUid, Directory | permissions));
         }
     }
 }

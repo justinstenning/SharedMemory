@@ -39,6 +39,9 @@ namespace SharedMemory
     /// <para>On Linux x64 and arm64 the net10.0 build maps a file in /dev/shm, which this type holds open and removes when the last process
     /// lets go of it (<c>LinuxSharedFile</c>). <see cref="File"/> comes from <c>MemoryMappedFile.CreateFromFile</c>
     /// on a second descriptor of that file, so <see cref="SharedBuffer"/> maps its views as on Windows.</para>
+    /// <para>On macOS the net10.0 build maps an <c>shm_open</c> object, which a lock file under /var/tmp names (<c>MacSharedObject</c>).
+    /// No <see cref="MemoryMappedFile"/> can be made from it, so <see cref="File"/> is null, and <see cref="SharedBuffer"/> works from
+    /// <c>Memory</c> and <c>Pointer</c> instead (<c>MapsWithoutFile</c>).</para>
     /// <para>Elsewhere the net10.0 build throws <see cref="PlatformNotSupportedException"/>, naming the platform. The other builds leave it to
     /// <see cref="MemoryMappedFile"/>, which throws its own.</para>
     /// </remarks>
@@ -46,6 +49,7 @@ namespace SharedMemory
     {
 #if NET10_0_OR_GREATER
         private LinuxSharedFile _linuxFile;
+        private MacSharedObject _macObject;
 #endif
 
         private NamedMapping(MemoryMappedFile file)
@@ -62,6 +66,8 @@ namespace SharedMemory
 #if NET10_0_OR_GREATER
             if (LinuxSharedFile.IsSupported)
                 return Map(LinuxSharedFile.Create(name, size), size);
+            if (MacSharedObject.IsSupported)
+                return Map(MacSharedObject.Create(name, size));
             if (!OperatingSystem.IsWindows())
                 throw PlatformSupport.NotSupported("named shared memory");
 #endif
@@ -77,6 +83,8 @@ namespace SharedMemory
 #if NET10_0_OR_GREATER
             if (LinuxSharedFile.IsSupported)
                 return Map(LinuxSharedFile.Open(name), 0);
+            if (MacSharedObject.IsSupported)
+                return Map(MacSharedObject.Open(name));
             if (!OperatingSystem.IsWindows())
                 throw PlatformSupport.NotSupported("named shared memory");
 #endif
@@ -89,6 +97,47 @@ namespace SharedMemory
         internal MemoryMappedFile File { get; private set; }
 
 #if NET10_0_OR_GREATER
+        /// <summary>
+        /// Whether the memory is mapped here without a <see cref="MemoryMappedFile"/>, as on macOS: <see cref="File"/> is null, and
+        /// <see cref="Memory"/> and <see cref="Pointer"/> stand in for a view of it.
+        /// </summary>
+        internal static bool MapsWithoutFile
+        {
+            get { return MacSharedObject.IsSupported; }
+        }
+
+        /// <summary>
+        /// Where <see cref="MapsWithoutFile"/>, the whole of the memory as mapped, which may run past the buffer to the end of a page; otherwise null.
+        /// </summary>
+        internal System.Runtime.InteropServices.SafeBuffer Memory
+        {
+            get { return _macObject != null ? _macObject.Memory : null; }
+        }
+
+        /// <summary>
+        /// Where <see cref="MapsWithoutFile"/>, the start of <see cref="Memory"/>, valid until this instance is disposed; otherwise null.
+        /// </summary>
+        internal unsafe byte* Pointer { get; private set; }
+
+        /// <summary>
+        /// Takes over <paramref name="macObject"/>, holding a pointer into its mapping until <see cref="Dispose"/>.
+        /// </summary>
+        private static unsafe NamedMapping Map(MacSharedObject macObject)
+        {
+            try
+            {
+                byte* pointer = null;
+                macObject.Memory.AcquirePointer(ref pointer);
+                macObject.CloseAtExit();
+                return new NamedMapping(null) { _macObject = macObject, Pointer = pointer };
+            }
+            catch
+            {
+                macObject.Dispose();
+                throw;
+            }
+        }
+
         /// <summary>
         /// Maps <paramref name="linuxFile"/>, all of it when <paramref name="capacity"/> is 0, and takes it over.
         /// </summary>
@@ -114,7 +163,8 @@ namespace SharedMemory
 
         /// <summary>
         /// Releases what this instance holds besides <see cref="File"/>, which <see cref="SharedBuffer"/> disposes. On Windows that is nothing;
-        /// on Linux it is the file, which is removed if no other process holds it.
+        /// on Linux it is the file, which is removed if no other process holds it; on macOS the mapping, and the object and its lock file,
+        /// which are removed if no other process holds them.
         /// </summary>
         public void Dispose()
         {
@@ -123,6 +173,12 @@ namespace SharedMemory
             {
                 _linuxFile.Dispose();
                 _linuxFile = null;
+            }
+            if (_macObject != null)
+            {
+                _macObject.Memory.ReleasePointer();
+                _macObject.Dispose();
+                _macObject = null;
             }
 #endif
         }
