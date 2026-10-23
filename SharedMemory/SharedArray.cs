@@ -159,6 +159,7 @@ namespace SharedMemory
         /// <param name="startIndex">The zero-based index of the shared memory array element to begin writing to.</param>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is less than 0 -or- length of <paramref name="buffer"/> + <paramref name="startIndex"/> is greater than <see cref="Length"/>.</exception>
         /// <exception cref="ArgumentNullException"><paramref name="buffer"/> must not be null</exception>
+        /// <exception cref="TimeoutException">A read lock held through <see cref="BufferWithLocks.AcquireReadLock"/> kept the write waiting for longer than <see cref="BufferWithLocks.ReadWriteTimeout"/>.</exception>
         public void Write(T[] buffer, int startIndex = 0)
         {
             if (buffer == null)
@@ -166,7 +167,7 @@ namespace SharedMemory
             if (startIndex < 0 || startIndex > Length - buffer.Length)
                 throw new ArgumentOutOfRangeException("startIndex");
 
-            base.Write(buffer, startIndex * _elementSize);
+            base.Write(buffer, (long)startIndex * _elementSize);
         }
 
         #endregion
