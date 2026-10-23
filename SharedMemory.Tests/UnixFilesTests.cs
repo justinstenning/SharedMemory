@@ -346,5 +346,50 @@ namespace SharedMemoryTests
         {
             Assert.AreEqual(reason, UnixFiles.FolderRefusal(perUser, MacUid, MacUid, Directory | permissions));
         }
+
+        /// <summary>
+        /// The election mutex on macOS: the name RpcBuffer passes elsewhere, <c>~</c>, and 26 base32 characters of its SHA-256,
+        /// <c>Global\</c> included, for three names, the hashes computed apart from the library.
+        /// </summary>
+        [TestMethod]
+        [DataRow("TESTSharedMemory_MasterMutex", "TESTSharedMemory_MasterMutex~AJBIHJLAWEI3LCI5HYPHG5KDGG")]
+        [DataRow("testSharedMemory_MasterMutex", "testSharedMemory_MasterMutex~X7BXTZHTUMTU5YWIGH2KS6OVUG")]
+        [DataRow("Global\\TESTSharedMemory_MasterMutex", "Global\\TESTSharedMemory_MasterMutex~NRNFSN2CF47SS3W2EL2VBW232A")]
+        public void ElectionMutexName_TheNameThenItsHash(string mutexName, string expected)
+        {
+            Assert.AreEqual(expected, UnixFiles.ElectionMutexName(mutexName));
+        }
+
+        /// <summary>
+        /// .NET takes 255 UTF-8 bytes after a <c>Global\</c>, so 228 before the suffix. A longer name keeps its first 200
+        /// bytes, cut back to the start of a character, before the suffix; the hash is still of the whole name.
+        /// </summary>
+        [TestMethod]
+        public void ElectionMutexName_228Bytes_KeptWhole()
+        {
+            string mutexName = new string('k', 204) + "SharedMemory_MasterMutex";
+            Assert.AreEqual(mutexName + "~IVI4Y2T4Q73IDSJFCQLIWESEII", UnixFiles.ElectionMutexName(mutexName));
+        }
+
+        [TestMethod]
+        public void ElectionMutexName_229Bytes_KeepsTheFirst200()
+        {
+            string mutexName = new string('k', 205) + "SharedMemory_MasterMutex";
+            Assert.AreEqual(new string('k', 200) + "~NYJHFPA54WZVZHLYHQBL7WJTTB", UnixFiles.ElectionMutexName(mutexName));
+        }
+
+        [TestMethod]
+        public void ElectionMutexName_CutThroughACharacter_CutsBackToItsStart()
+        {
+            string mutexName = "a" + new string('\u00E9', 120) + "SharedMemory_MasterMutex";
+            Assert.AreEqual("a" + new string('\u00E9', 99) + "~S2XAP6I3UKPL2MINSVNWYOE2DS", UnixFiles.ElectionMutexName(mutexName));
+        }
+
+        [TestMethod]
+        public void ElectionMutexName_LongGlobalName_KeepsThePrefixAnd200BytesAfterIt()
+        {
+            string mutexName = "Global\\" + new string('g', 230) + "SharedMemory_MasterMutex";
+            Assert.AreEqual("Global\\" + new string('g', 200) + "~MONUTEFS52WNIEKWDYCWJXVHSA", UnixFiles.ElectionMutexName(mutexName));
+        }
     }
 }

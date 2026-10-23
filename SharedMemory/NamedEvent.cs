@@ -36,7 +36,8 @@ namespace SharedMemory
     /// <para>On Windows the event is a named <see cref="EventWaitHandle"/>. The owning class assigns it to its protected property and disposes it from there,
     /// and every wait and signal goes to the handle that property holds at the time, so a subclass that replaced the property is still honoured.</para>
     /// <para>On Linux x64 and arm64 the net10.0 build keeps the event in a file in /dev/shm of its own (<c>LinuxEvent</c>), and waits on it with
-    /// <c>futex</c>. <see cref="WaitHandle"/> is null there, and the owning class's property is never read.</para>
+    /// <c>futex</c>. On macOS x64 and arm64 it keeps the event in an <c>shm_open</c> object named by a lock file (<c>MacEvent</c>), and waits on it
+    /// with <c>os_sync_wait_on_address</c>, which macOS 14.4 added. <see cref="WaitHandle"/> is null there, and the owning class's property is never read.</para>
     /// <para>Elsewhere the net10.0 build throws <see cref="PlatformNotSupportedException"/>, naming the platform. The other builds leave it to
     /// <see cref="EventWaitHandle"/>, which throws its own.</para>
     /// </remarks>
@@ -45,6 +46,7 @@ namespace SharedMemory
         private readonly Func<EventWaitHandle> _exposedHandle;
 #if NET10_0_OR_GREATER
         private LinuxEvent _linuxEvent;
+        private MacEvent _macEvent;
 #endif
 
         private NamedEvent(EventWaitHandle waitHandle, Func<EventWaitHandle> exposedHandle)
@@ -66,6 +68,8 @@ namespace SharedMemory
 #if NET10_0_OR_GREATER
             if (LinuxSharedFile.IsSupported)
                 return new NamedEvent(null, exposedHandle) { _linuxEvent = LinuxEvent.CreateOrOpen(name, initialState, mode) };
+            if (MacSharedObject.IsSupported)
+                return new NamedEvent(null, exposedHandle) { _macEvent = MacEvent.CreateOrOpen(name, initialState, mode) };
             if (!OperatingSystem.IsWindows())
                 throw PlatformSupport.NotSupported("named events");
 #endif
@@ -73,7 +77,7 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// The named <see cref="EventWaitHandle"/>, for the owning class to assign to its protected property. Null on Linux.
+        /// The named <see cref="EventWaitHandle"/>, for the owning class to assign to its protected property. Null on Linux and macOS.
         /// </summary>
         internal EventWaitHandle WaitHandle { get; private set; }
 
@@ -86,6 +90,8 @@ namespace SharedMemory
 #if NET10_0_OR_GREATER
             if (_linuxEvent != null)
                 return _linuxEvent.WaitOne(millisecondsTimeout);
+            if (_macEvent != null)
+                return _macEvent.WaitOne(millisecondsTimeout);
 #endif
             return _exposedHandle().WaitOne(millisecondsTimeout);
         }
@@ -98,6 +104,8 @@ namespace SharedMemory
 #if NET10_0_OR_GREATER
             if (_linuxEvent != null)
                 return _linuxEvent.Set();
+            if (_macEvent != null)
+                return _macEvent.Set();
 #endif
             return _exposedHandle().Set();
         }
@@ -110,19 +118,24 @@ namespace SharedMemory
 #if NET10_0_OR_GREATER
             if (_linuxEvent != null)
                 return _linuxEvent.Reset();
+            if (_macEvent != null)
+                return _macEvent.Reset();
 #endif
             return _exposedHandle().Reset();
         }
 
         /// <summary>
         /// Releases what this instance holds besides <see cref="WaitHandle"/>, which the owning class disposes. On Windows that is nothing;
-        /// on Linux it is the event's file, which is removed if no other process holds it. Later waits and signals throw <see cref="ObjectDisposedException"/>.
+        /// on Linux it is the event's file, and on macOS its object and lock file, which are removed if no other process holds them. Later waits and signals
+        /// throw <see cref="ObjectDisposedException"/>.
         /// </summary>
         public void Dispose()
         {
 #if NET10_0_OR_GREATER
             if (_linuxEvent != null)
                 _linuxEvent.Dispose();
+            if (_macEvent != null)
+                _macEvent.Dispose();
 #endif
         }
     }

@@ -58,6 +58,7 @@ namespace SharedMemory
         internal const int EACCES = 13;
         internal const int EEXIST = 17;
         internal const int EWOULDBLOCK = 35;
+        internal const int ETIMEDOUT = 60;
 
         /// <summary>
         /// The fields of Darwin's <c>struct stat</c> the backend reads, in the 64-bit inode layout (144 bytes) that arm64's <c>stat</c> functions and
@@ -195,6 +196,104 @@ namespace SharedMemory
 
         [LibraryImport(Library, EntryPoint = "lstat$INODE64", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
         private static partial int LstatX64(string path, Stat* status);
+
+        /// <summary>
+        /// The <c>os_sync</c> calls that wait on a word in memory and wake its waiters, which macOS 14.4 added. Looked up once in libSystem, so that an
+        /// older macOS gets a <see cref="System.PlatformNotSupportedException"/> naming them rather than an <see cref="System.EntryPointNotFoundException"/>
+        /// partway through a wait. Every call passes the shared flag, without which no other process's wake reaches the waiter. A failed call returns -1,
+        /// with errno, read straight after the call as <c>LibraryImport</c>'s generated code reads it.
+        /// </summary>
+        internal static class OsSync
+        {
+            /// <summary>
+            /// <c>OS_SYNC_WAIT_ON_ADDRESS_SHARED</c> and <c>OS_SYNC_WAKE_BY_ADDRESS_SHARED</c>: the word is in memory other processes map.
+            /// </summary>
+            const uint Shared = 1;
+
+            /// <summary>
+            /// <c>OS_CLOCK_MACH_ABSOLUTE_TIME</c>, the only clock the timed wait takes. Its timeout is relative, in nanoseconds, and 0 is refused.
+            /// </summary>
+            const uint MachAbsoluteTime = 32;
+
+            /// <summary>
+            /// The functions, in the order <see cref="Missing"/> takes their addresses.
+            /// </summary>
+            internal static readonly string[] Names =
+            {
+                "os_sync_wait_on_address", "os_sync_wait_on_address_with_timeout", "os_sync_wake_by_address_any", "os_sync_wake_by_address_all",
+            };
+
+            static readonly delegate* unmanaged<void*, ulong, nuint, uint, int> WaitOnAddress;
+            static readonly delegate* unmanaged<void*, ulong, nuint, uint, uint, ulong, int> WaitOnAddressWithTimeout;
+            static readonly delegate* unmanaged<void*, nuint, uint, int> WakeAny;
+            static readonly delegate* unmanaged<void*, nuint, uint, int> WakeAll;
+
+            static OsSync()
+            {
+                var exports = new nint[Names.Length];
+                nint library;
+                if (NativeLibrary.TryLoad(Library, out library))
+                {
+                    for (int i = 0; i < Names.Length; i++)
+                        NativeLibrary.TryGetExport(library, Names[i], out exports[i]);
+                }
+                Unsupported = Missing(exports);
+                if (Unsupported != null)
+                    return;
+                WaitOnAddress = (delegate* unmanaged<void*, ulong, nuint, uint, int>)exports[0];
+                WaitOnAddressWithTimeout = (delegate* unmanaged<void*, ulong, nuint, uint, uint, ulong, int>)exports[1];
+                WakeAny = (delegate* unmanaged<void*, nuint, uint, int>)exports[2];
+                WakeAll = (delegate* unmanaged<void*, nuint, uint, int>)exports[3];
+            }
+
+            /// <summary>
+            /// Why named events cannot work here, or null if every function was found.
+            /// </summary>
+            internal static string Unsupported { get; private set; }
+
+            /// <summary>
+            /// Which of <see cref="Names"/> have no address in <paramref name="exports"/>, as the reason events are not supported, or null if none.
+            /// </summary>
+            internal static string Missing(nint[] exports)
+            {
+                var missing = new System.Collections.Generic.List<string>();
+                for (int i = 0; i < Names.Length; i++)
+                {
+                    if (exports[i] == 0)
+                        missing.Add(Names[i]);
+                }
+                return missing.Count == 0 ? null : "libSystem lacks " + string.Join(", ", missing) + ", which macOS 14.4 added";
+            }
+
+            /// <summary>
+            /// Sleeps while the 4-byte word at <paramref name="address"/> holds <paramref name="value"/>, until a wake, a signal, or
+            /// <paramref name="nanoseconds"/> pass; 0 nanoseconds waits without a timeout.
+            /// </summary>
+            /// <param name="error">errno when the call returns -1, else 0.</param>
+            /// <returns>0 or more once woken or if the word already differs; -1 on a timeout (<see cref="ETIMEDOUT"/>), a signal (<see cref="EINTR"/>), or a failure.</returns>
+            internal static int Wait(int* address, int value, ulong nanoseconds, out int error)
+            {
+                int result;
+                if (nanoseconds == 0)
+                    result = WaitOnAddress(address, (uint)value, sizeof(int), Shared);
+                else
+                    result = WaitOnAddressWithTimeout(address, (uint)value, sizeof(int), Shared, MachAbsoluteTime, nanoseconds);
+                error = result < 0 ? Marshal.GetLastSystemError() : 0;
+                return result;
+            }
+
+            /// <summary>
+            /// Wakes one waiter on the word at <paramref name="address"/>, or all of them.
+            /// </summary>
+            /// <param name="error">errno when the call returns -1, else 0.</param>
+            /// <returns>0 or more; -1 with <see cref="ENOENT"/> if nobody waited there, or on a failure.</returns>
+            internal static int Wake(int* address, bool all, out int error)
+            {
+                int result = all ? WakeAll(address, sizeof(int), Shared) : WakeAny(address, sizeof(int), Shared);
+                error = result < 0 ? Marshal.GetLastSystemError() : 0;
+                return result;
+            }
+        }
     }
 }
 #endif

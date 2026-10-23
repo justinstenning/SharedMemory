@@ -13,7 +13,8 @@ namespace SharedMemoryTests
     /// <summary>
     /// Starts SharedMemory.Tests.RpcPeer as a second process and sends it one command at a time. The commands are listed
     /// in the peer's Program.cs. On Linux it can start the peer in a POSIX session of its own, with util-linux's setsid,
-    /// which execs the peer in the same process. Disposing kills the peer if it is still running.
+    /// which execs the peer in the same process; on macOS, which has no setsid command, with perl, which it ships. perl's
+    /// setsid returns -1 on failure, which is true, hence the comparison. Disposing kills the peer if it is still running.
     /// </summary>
     sealed class RpcPeerProcess : IDisposable
     {
@@ -41,7 +42,7 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// Starts the peer, in a session of its own if <paramref name="ownSession"/> is set and this is Linux, and checks
+        /// Starts the peer, in a session of its own if <paramref name="ownSession"/> is set and this is Linux or macOS, and checks
         /// that it loaded the same SharedMemory.dll as the tests.
         /// </summary>
         public static RpcPeerProcess Start(bool ownSession)
@@ -53,7 +54,8 @@ namespace SharedMemoryTests
             if (!File.Exists(host))
                 host = "dotnet";
             bool setsid = ownSession && OperatingSystem.IsLinux();
-            var start = new ProcessStartInfo(setsid ? "setsid" : host)
+            bool perl = ownSession && OperatingSystem.IsMacOS();
+            var start = new ProcessStartInfo(setsid ? "setsid" : perl ? "/usr/bin/perl" : host)
             {
                 UseShellExecute = false,
                 RedirectStandardInput = true,
@@ -62,7 +64,14 @@ namespace SharedMemoryTests
                 CreateNoWindow = true,
                 WorkingDirectory = folder,
             };
-            if (setsid)
+            if (perl)
+            {
+                start.ArgumentList.Add("-MPOSIX");
+                start.ArgumentList.Add("-e");
+                start.ArgumentList.Add("POSIX::setsid() > 0 or die \"setsid: $!\\n\"; exec @ARGV or die \"exec: $!\\n\"");
+                start.ArgumentList.Add("--");
+            }
+            if (setsid || perl)
                 start.ArgumentList.Add(host);
             start.ArgumentList.Add("exec");
             start.ArgumentList.Add(Path.Combine(folder, "SharedMemory.Tests.RpcPeer.dll"));

@@ -254,5 +254,24 @@ namespace SharedMemory
         {
             return Convert.ToString((int)(mode & 0xFFF), 8).PadLeft(4, '0');
         }
+
+        /// <summary>
+        /// The name of an <c>RpcBuffer</c> channel's election mutex on macOS: <paramref name="mutexName"/>, the name it has elsewhere, then <c>~</c>
+        /// and the first 26 characters of the RFC 4648 base32 encoding of the SHA-256 of its UTF-8 bytes, <c>Global\</c> included.
+        /// </summary>
+        /// <remarks>
+        /// .NET keeps its named mutexes in files on the volume that holds /tmp and $TMPDIR, which folds case and Unicode normalisation, so the channels
+        /// <c>TEST</c> and <c>test</c> would otherwise share one election. .NET takes 255 UTF-8 bytes after a <c>Global\</c>: where the rest and the
+        /// suffix would pass that, the rest keeps its first 200 bytes, cut back to the start of a character, as a long lock file name does.
+        /// </remarks>
+        internal static string ElectionMutexName(string mutexName)
+        {
+            string scope = IsGlobal(mutexName) ? GlobalScope : "";
+            byte[] rest = Encoding.UTF8.GetBytes(mutexName.Substring(scope.Length));
+            string suffix = "~" + Hash(Encoding.UTF8.GetBytes(mutexName));
+            if (rest.Length + suffix.Length <= MaxFileNameBytes)
+                return mutexName + suffix;
+            return scope + Kept(rest) + suffix;
+        }
     }
 }

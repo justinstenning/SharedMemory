@@ -1264,6 +1264,8 @@ namespace SharedMemory
         /// <c>CurrentSessionOnly = false</c>; the buffers' files treat <c>Local\X</c> and <c>X</c> as one name too.</para>
         /// <para>A <c>Global\</c> name is not given <c>CurrentUserOnly</c>: .NET would then make <c>Global\X</c> the same mutex as <c>X</c>,
         /// whose buffers are other files, and an RpcBuffer on one would open the other's channel instead of owning its own.</para>
+        /// <para>On macOS the name ends with a hash of itself (<see cref="UnixFiles.ElectionMutexName"/>): .NET's mutex files there are on a volume that
+        /// folds case, where <c>TEST</c> and <c>test</c> would share one election, while their buffers are separate.</para>
         /// </remarks>
         static Mutex CreateUnixElectionMutex(string mutexName, out bool createdNew)
         {
@@ -1273,6 +1275,8 @@ namespace SharedMemory
             // refused by .NET, as a backslash after the prefix is on Windows.
             if (mutexName.StartsWith(LocalScope, StringComparison.Ordinal) && mutexName.IndexOf('\\', LocalScope.Length) < 0)
                 mutexName = mutexName.Substring(LocalScope.Length);
+            if (OperatingSystem.IsMacOS())
+                mutexName = UnixFiles.ElectionMutexName(mutexName);
             var options = new NamedWaitHandleOptions { CurrentUserOnly = !global, CurrentSessionOnly = false };
             return new Mutex(false, mutexName, options, out createdNew);
         }

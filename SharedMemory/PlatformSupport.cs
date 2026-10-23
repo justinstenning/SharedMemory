@@ -44,6 +44,17 @@ namespace SharedMemory
             return new PlatformNotSupportedException("SharedMemory does not support " + feature + " on " + Describe() + ".");
         }
 
+        /// <summary>
+        /// The exception for a <paramref name="feature"/> this platform lacks, naming the platform, its version, the process architecture, and
+        /// <paramref name="reason"/>.
+        /// </summary>
+        /// <param name="feature">What is missing, as it reads after "does not support".</param>
+        /// <param name="reason">Why, as it reads after the platform and a colon.</param>
+        internal static PlatformNotSupportedException NotSupported(string feature, string reason)
+        {
+            return new PlatformNotSupportedException("SharedMemory does not support " + feature + " on " + Describe() + ": " + reason + ".");
+        }
+
         private static string Describe()
         {
             return OperatingSystemName() + " " + Environment.OSVersion.Version + " (" + RuntimeInformation.ProcessArchitecture + ")";

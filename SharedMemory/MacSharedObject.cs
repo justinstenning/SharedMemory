@@ -40,7 +40,7 @@ using static SharedMemory.MacNativeMethods;
 namespace SharedMemory
 {
     /// <summary>
-    /// A buffer's memory on macOS: an <c>shm_open</c> object, mapped, and the lock file under /var/tmp that names it, which this process holds with a
+    /// A buffer's or an event's memory on macOS: an <c>shm_open</c> object, mapped, and the lock file under /var/tmp that names it, which this process holds with a
     /// shared <c>flock</c> until it is disposed or finalised.
     /// </summary>
     /// <remarks>
@@ -54,6 +54,8 @@ namespace SharedMemory
     /// first, and the link tried again; otherwise the name is in use, and the new object is removed.</item>
     /// <item>Open: a lock file nobody holds is removed with its object, and the name does not exist. Otherwise take the shared lock, check that the name
     /// still leads to the same file, and open and map the whole of the object it names.</item>
+    /// <item>Create or open, for an event: a lock file somebody holds is opened as above; otherwise the object is created as above, holding the
+    /// creator's contents before its lock file is published, a lock file nobody holds having been removed with its object first.</item>
     /// <item>Close: let go of the shared lock, then whoever gets an exclusive lock was the last holder, and removes the object and then the lock file.</item>
     /// <item>Exit: when the process exits normally, the close step runs for every lock file it still holds, as on Linux (<see cref="ClosedAtExit"/>).</item>
     /// </list>
@@ -133,6 +135,22 @@ namespace SharedMemory
         /// Disposing this instance unmaps it once nobody holds a pointer into it.
         /// </summary>
         internal Mapping Memory { get; private set; }
+
+        /// <summary>
+        /// The lock file's path, for messages.
+        /// </summary>
+        internal string LockFilePath
+        {
+            get { return _path; }
+        }
+
+        /// <summary>
+        /// The name of the object, as the lock file records it, for messages.
+        /// </summary>
+        internal string ObjectName
+        {
+            get { return _objectName; }
+        }
 
         /// <summary>
         /// Has the close step run when the process exits normally, if nothing has run it by then (<see cref="ClosedAtExit"/>).
@@ -255,7 +273,7 @@ namespace SharedMemory
                         Mapping memory;
                         try
                         {
-                            memory = OpenObject(objectName, name, path);
+                            memory = OpenObject(objectName, name, path, false);
                         }
                         catch
                         {
@@ -275,6 +293,115 @@ namespace SharedMemory
                 handle.Dispose();
                 if (attempt == Attempts)
                     throw KeptChanging(name, path);
+            }
+        }
+
+        /// <summary>
+        /// Opens the object somebody holds under <paramref name="name"/>, or else creates one holding <paramref name="contents"/> and its lock file, as a
+        /// named event is created or opened on Windows. A lock file nobody holds was left by a process that died holding it: it is removed with its
+        /// object and the object created afresh, not opened.
+        /// </summary>
+        /// <remarks>
+        /// Only a create makes an object. One that loses the race to publish its lock file opens the winner's, and keeps its own object and temporary
+        /// lock file for another attempt until it returns. An opener maps the whole object; one of 0 bytes is not mapped, and its
+        /// <see cref="Memory"/> is empty.
+        /// </remarks>
+        /// <exception cref="IOException">There is no memory for a new object, or the lock file under the name is not one this version reads.</exception>
+        /// <exception cref="FileNotFoundException">The object a held lock file names is gone.</exception>
+        /// <exception cref="UnauthorizedAccessException">The lock folder or the lock file under the name is not private to this user.</exception>
+        [SupportedOSPlatform("macos")]
+        internal static MacSharedObject CreateOrOpen(string name, byte[] contents)
+        {
+            uint uid = GetEffectiveUserId();
+            bool perUser = !UnixFiles.IsGlobal(name);
+            string folder = Folder(name, uid, perUser, true);
+            string path = folder + UnixFiles.LockFileName(name);
+            string temporary = null;
+            string objectName = null;
+            SafeFileHandle created = null;
+            Mapping memory = null;
+            Stat createdStatus = default;
+            try
+            {
+                for (int attempt = 1; ; attempt++)
+                {
+                    Stat foundStatus;
+                    string foundObject;
+                    SafeFileHandle found = OpenLockFile(path, name, perUser, uid, out foundStatus, out foundObject);
+                    if (found != null)
+                    {
+                        try
+                        {
+                            if (!TryLock(found, LOCK_EX | LOCK_NB, path))
+                            {
+                                // Somebody holds it: open it, unless it was removed while this process waited for its lock.
+                                Lock(found, LOCK_SH, path);
+                                if (IsNamed(path, foundStatus))
+                                {
+                                    Mapping opened;
+                                    try
+                                    {
+                                        opened = OpenObject(foundObject, name, path, true);
+                                    }
+                                    catch
+                                    {
+                                        CloseStep(found, path, foundStatus, foundObject);
+                                        throw;
+                                    }
+                                    var result = new MacSharedObject(path, foundStatus, foundObject, found, opened);
+                                    found = null;
+                                    return result;
+                                }
+                            }
+                            else
+                            {
+                                // Nobody holds it: its last holder died without closing it. Remove it, as that holder would have, and create a new one.
+                                RemoveIfNamed(path, foundStatus, foundObject, true);
+                            }
+                        }
+                        finally
+                        {
+                            if (found != null)
+                                found.Dispose();
+                        }
+                    }
+
+                    // Nothing anybody holds is under the name: publish a new object, written in full first.
+                    if (created == null)
+                    {
+                        temporary = folder + UnixFiles.TemporaryPrefix + RandomName();
+                        objectName = "/SM" + RandomName();
+                        created = CreateLockFile(temporary, objectName);
+                        memory = CreateObject(objectName, name, contents.Length);
+                        Marshal.Copy(contents, 0, memory.DangerousGetHandle(), contents.Length);
+                        createdStatus = Status(created, temporary);
+                    }
+                    if (Link(temporary, path) == 0)
+                    {
+                        var published = new MacSharedObject(path, createdStatus, objectName, created, memory);
+                        created = null;
+                        memory = null;
+                        return published;
+                    }
+                    int error = Marshal.GetLastPInvokeError();
+                    if (error != EEXIST)
+                        throw Failure(error, "publish", path);
+                    // Another process published one first: open it.
+                    if (attempt == Attempts)
+                        throw KeptChanging(name, path);
+                }
+            }
+            finally
+            {
+                if (memory != null)
+                {
+                    memory.Dispose();
+                    ShmUnlink(objectName);
+                }
+                if (created != null)
+                    created.Dispose();
+                if (temporary != null)
+                    Unlink(temporary);
             }
         }
 
@@ -451,8 +578,9 @@ namespace SharedMemory
         /// Opens and maps the whole of the object <paramref name="objectName"/>, which the lock file <paramref name="path"/> names. Its size is a whole
         /// number of pages; <see cref="SharedBuffer"/> reads the buffer's own size from its header.
         /// </summary>
+        /// <param name="emptyAllowed">Whether an object of 0 bytes, which cannot be mapped, gives an empty mapping rather than an <see cref="IOException"/>.</param>
         /// <exception cref="FileNotFoundException">The object is gone, though its lock file is held: launchd removes a user's objects when the user logs out.</exception>
-        static Mapping OpenObject(string objectName, string name, string path)
+        static Mapping OpenObject(string objectName, string name, string path, bool emptyAllowed)
         {
             int fd = ShmOpen(objectName, O_RDWR | O_CLOEXEC, 0);
             if (fd < 0)
@@ -467,6 +595,8 @@ namespace SharedMemory
                 Stat status;
                 if (FileStatus(fd, &status) != 0)
                     throw Failure(Marshal.GetLastPInvokeError(), "read the status of", objectName);
+                if (status.Size == 0 && emptyAllowed)
+                    return Mapping.Empty();
                 nint address = Mmap(0, (nuint)status.Size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
                 if (address == -1)
                     throw Failure(Marshal.GetLastPInvokeError(), "map", objectName);
@@ -676,6 +806,16 @@ namespace SharedMemory
                 var mapping = new Mapping();
                 mapping.SetHandle(address);
                 mapping.Initialize((ulong)length);
+                return mapping;
+            }
+
+            /// <summary>
+            /// A mapping of nothing, for an object of 0 bytes, which <c>mmap</c> refuses. Its handle is invalid, so releasing it unmaps nothing.
+            /// </summary>
+            internal static Mapping Empty()
+            {
+                var mapping = new Mapping();
+                mapping.Initialize(0);
                 return mapping;
             }
 

@@ -768,8 +768,9 @@ namespace SharedMemoryTests
         /// <summary>
         /// What the tests look at on macOS beyond the lock files: the folders, the object a lock file names, and the object's
         /// status, which only fstat on a descriptor from shm_open gives. Run on arm64, whose fstat has the 64-bit inode layout.
+        /// The event and RPC tests use it too.
         /// </summary>
-        static unsafe class Files
+        internal static unsafe class Files
         {
             public const string MacFolder = "/var/tmp/";
 
