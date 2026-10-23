@@ -235,6 +235,8 @@ namespace SharedMemory
         /// Opens an existing <see cref="CircularBuffer"/> with the specified name.
         /// </summary>
         /// <param name="name">The name of an existing <see cref="CircularBuffer"/> previously created with <see cref="SharedBuffer.IsOwnerOfSharedMemory"/>=true</param>
+        /// <remarks>If the owner is still initialising the buffer, this waits up to 1 s for it to finish.</remarks>
+        /// <exception cref="InvalidOperationException">The owner had not finished initialising the buffer after 1 s.</exception>
         public CircularBuffer(string name)
             : this(name, 0, 0, false)
         {
@@ -279,21 +281,42 @@ namespace SharedMemory
                 // Retrieve pointer to node header
                 _nodeHeader = (NodeHeader*)(BufferStartPtr + NodeHeaderOffset);
 
-                // Initialise the node header
-                InitialiseNodeHeader();
-
-                // Initialise nodes entries
+                // Initialise nodes entries first: an opener takes a non-zero NodeCount to mean the buffer is ready
                 InitialiseLinkedListNodes();
+
+                // Initialise the node header, writing NodeCount last
+                InitialiseNodeHeader();
             }
             else
             {
-                // Load the NodeHeader
+                // Load the NodeHeader, waiting for the owner to finish initialising it
                 _nodeHeader = (NodeHeader*)(BufferStartPtr + NodeHeaderOffset);
-                NodeCount = _nodeHeader->NodeCount;
+                NodeCount = WaitForNodeCount();
                 NodeBufferSize = _nodeHeader->NodeBufferSize;
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Reads the node count from the node header, waiting up to 1 s while it is 0 because the owner is still initialising the buffer.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The node count was still 0 after 1 s.</exception>
+        private int WaitForNodeCount()
+        {
+            // A fenced read, so that the node list and NodeBufferSize written before NodeCount are read after it
+            int nodeCount = Interlocked.CompareExchange(ref _nodeHeader->NodeCount, 0, 0);
+            if (nodeCount != 0)
+                return nodeCount;
+
+            var waited = System.Diagnostics.Stopwatch.StartNew();
+            while ((nodeCount = Interlocked.CompareExchange(ref _nodeHeader->NodeCount, 0, 0)) == 0)
+            {
+                if (waited.ElapsedMilliseconds >= 1000)
+                    throw new InvalidOperationException(String.Format("The circular buffer \"{0}\" is not ready: its node count was still 0 after waiting 1 s for its owner to initialise it.", Name));
+                Thread.Sleep(1);
+            }
+            return nodeCount;
         }
 
         /// <summary>
@@ -310,8 +333,11 @@ namespace SharedMemory
             header.WriteEnd = 0;
             header.WriteStart = 0;
             header.NodeBufferSize = NodeBufferSize;
-            header.NodeCount = NodeCount;
+            header.NodeCount = 0;
             base.Write<NodeHeader>(ref header, NodeHeaderOffset);
+
+            // NodeCount goes last, with a full fence, so an opener that reads it non-zero also sees everything written before it
+            Interlocked.Exchange(ref _nodeHeader->NodeCount, NodeCount);
         }
 
         /// <summary>
@@ -376,14 +402,19 @@ namespace SharedMemory
         /// <returns>An unsafe pointer to the node if successful, otherwise null</returns>
         protected virtual Node* GetNodeForWriting(int timeout)
         {
+            long waitStart = 0;
             for (; ; )
             {
                 int blockIndex = _nodeHeader->WriteStart;
                 Node* node = this[blockIndex];
                 if (node->Next == _nodeHeader->ReadEnd)
                 {
-                    // No room is available, wait for room to become available
-                    if (NodeAvailable.WaitOne(timeout))
+                    // No room is available, wait for room to become available. Room can appear without
+                    // NodeAvailable being set, so wait in slices of at most 10 ms and look at the ring again
+                    // between them. The last slice ends the wait, as a single wait for the whole timeout did.
+                    int remaining = RemainingTimeout(timeout, ref waitStart);
+                    int wait = remaining == Timeout.Infinite || remaining > 10 ? 10 : remaining;
+                    if (NodeAvailable.WaitOne(wait) || wait != remaining)
                         continue;
 
                     // Timeout
@@ -398,6 +429,23 @@ namespace SharedMemory
                 // Another thread has already acquired this node for writing, try again.
                 continue;
             }
+        }
+
+        /// <summary>
+        /// The part of <paramref name="timeout"/> left since the wait started, in milliseconds, or 0 once it has passed.
+        /// </summary>
+        /// <param name="timeout">The caller's timeout in milliseconds. 0, <see cref="Timeout.Infinite"/> and other negative values are returned as they are.</param>
+        /// <param name="waitStart">0 on the first call, which sets it to when the wait started.</param>
+        private static int RemainingTimeout(int timeout, ref long waitStart)
+        {
+            if (timeout <= 0)
+                return timeout;
+
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (waitStart == 0)
+                waitStart = now;
+            long remaining = timeout - (now - waitStart) * 1000 / System.Diagnostics.Stopwatch.Frequency;
+            return remaining <= 0 ? 0 : (int)remaining;
         }
 
         /// <summary>
