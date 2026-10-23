@@ -198,18 +198,7 @@ namespace SharedMemory
             if (count == 0)
                 return;
 
-            void* ptr = source.ToPointer();
-            byte* p = (byte*)FastStructure.GetPtr<T>(ref buffer[0]);
-            if (FastStructure<T>.CopyFromMemory != null)
-            {
-                FastStructure<T>.CopyFromMemory(buffer, index, ptr, elementSize * count);
-                return;
-            }
-#if NETCORE
-            Buffer.MemoryCopy(ptr, p + (index * elementSize), elementSize * count, elementSize * count);
-#else
-            UnsafeNativeMethods.CopyMemoryPtr(p + (index * elementSize), ptr, (uint)(elementSize * count));
-#endif
+            FastStructure<T>.CopyFromMemory(buffer, index, source.ToPointer(), elementSize * count);
         }
 
         /// <summary>
@@ -270,18 +259,7 @@ namespace SharedMemory
             if (count == 0)
                 return;
 
-            void* ptr = destination.ToPointer();
-            byte* p = (byte*)FastStructure.GetPtr<T>(ref buffer[0]);
-            if (FastStructure<T>.CopyToMemory != null)
-            {
-                FastStructure<T>.CopyToMemory(buffer, index, ptr, elementSize * count);
-                return;
-            }
-#if NETCORE
-            Buffer.MemoryCopy(p + (index * elementSize), ptr, elementSize * count, elementSize * count);
-#else
-            UnsafeNativeMethods.CopyMemoryPtr(ptr, p + (index * elementSize), (uint)(elementSize * count));
-#endif
+            FastStructure<T>.CopyToMemory(buffer, index, destination.ToPointer(), elementSize * count);
         }
 
         /// <summary>
@@ -397,14 +375,14 @@ namespace SharedMemory
         internal unsafe delegate void PinnedCopyDelegate(T[] array, int index, void* memory, long byteCount);
 
         /// <summary>
-        /// Copies from memory into an array field by field, where T is not copied as a block of memory; otherwise null.
+        /// Copies from memory into an array, which stays pinned for the whole copy.
         /// </summary>
-        internal static readonly PinnedCopyDelegate CopyFromMemory;
+        internal static readonly PinnedCopyDelegate CopyFromMemory = BuildPinnedCopy(true);
 
         /// <summary>
-        /// Copies from an array into memory field by field, where T is not copied as a block of memory; otherwise null.
+        /// Copies from an array into memory, with the array pinned for the whole copy.
         /// </summary>
-        internal static readonly PinnedCopyDelegate CopyToMemory;
+        internal static readonly PinnedCopyDelegate CopyToMemory = BuildPinnedCopy(false);
 
         private static DynamicMethod method;
         private static DynamicMethod methodLoad;
@@ -485,6 +463,61 @@ namespace SharedMemory
             generator.Emit(OpCodes.Sizeof, typeof(T));
             generator.Emit(OpCodes.Ret);
             return ((SizeOfDelegate)sizeOf.CreateDelegate(typeof(SizeOfDelegate)))();
+        }
+
+        /// <summary>
+        /// Emits a copy between memory and an array that holds a reference to the array's first element in a pinned local, so
+        /// that a garbage collection cannot move the array while the copy runs. A pinned <see cref="System.Runtime.InteropServices.GCHandle"/>
+        /// cannot do this for every T: the .NET Framework refuses one for an array of structures with bool or char fields.
+        /// </summary>
+        private static unsafe PinnedCopyDelegate BuildPinnedCopy(bool intoArray)
+        {
+            DynamicMethod copy = new DynamicMethod((intoArray ? "CopyFromMemory<" : "CopyToMemory<") + typeof(T).FullName + ">",
+                null, new Type[4] { typeof(T[]), typeof(int), typeof(void*), typeof(long) }, typeof(FastStructure).Module, true);
+
+            ILGenerator generator = copy.GetILGenerator();
+            generator.DeclareLocal(typeof(T).MakeByRefType(), true);
+            generator.Emit(OpCodes.Ldarg_0);
+            generator.Emit(OpCodes.Ldarg_1);
+            generator.Emit(OpCodes.Ldelema, typeof(T));
+            generator.Emit(OpCodes.Stloc_0);
+#if NETCORE
+            // Buffer.MemoryCopy(source, destination, destinationSizeInBytes, sourceBytesToCopy)
+            if (intoArray)
+            {
+                generator.Emit(OpCodes.Ldarg_2);
+                generator.Emit(OpCodes.Ldloc_0);
+                generator.Emit(OpCodes.Conv_U);
+            }
+            else
+            {
+                generator.Emit(OpCodes.Ldloc_0);
+                generator.Emit(OpCodes.Conv_U);
+                generator.Emit(OpCodes.Ldarg_2);
+            }
+            generator.Emit(OpCodes.Ldarg_3);
+            generator.Emit(OpCodes.Ldarg_3);
+            generator.Emit(OpCodes.Call, typeof(Buffer).GetMethod("MemoryCopy", new Type[4] { typeof(void*), typeof(void*), typeof(long), typeof(long) }));
+#else
+            // UnsafeNativeMethods.CopyMemoryPtr(destination, source, count)
+            if (intoArray)
+            {
+                generator.Emit(OpCodes.Ldloc_0);
+                generator.Emit(OpCodes.Conv_U);
+                generator.Emit(OpCodes.Ldarg_2);
+            }
+            else
+            {
+                generator.Emit(OpCodes.Ldarg_2);
+                generator.Emit(OpCodes.Ldloc_0);
+                generator.Emit(OpCodes.Conv_U);
+            }
+            generator.Emit(OpCodes.Ldarg_3);
+            generator.Emit(OpCodes.Conv_U4);
+            generator.Emit(OpCodes.Call, typeof(UnsafeNativeMethods).GetMethod("CopyMemoryPtr", BindingFlags.Static | BindingFlags.NonPublic));
+#endif
+            generator.Emit(OpCodes.Ret);
+            return (PinnedCopyDelegate)copy.CreateDelegate(typeof(PinnedCopyDelegate));
         }
 
         private unsafe static GetPtrDelegate BuildFunction()
