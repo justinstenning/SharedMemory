@@ -858,8 +858,8 @@ namespace SharedMemoryTests
                 int count = writeBuf.Length;
                 while (count > 0)
                 {
-                    var b = writeBuf[indx++];
-                    Marshal.WriteByte(addr, indx, b);
+                    Marshal.WriteByte(addr, indx, writeBuf[indx]);
+                    indx++;
                     count--;
                 }
                 return writeBuf.Length;
@@ -872,7 +872,8 @@ namespace SharedMemoryTests
                 int count = readBuf.Length;
                 while (count > 0)
                 {
-                    readBuf[indx++] = Marshal.ReadByte(addr, indx);
+                    readBuf[indx] = Marshal.ReadByte(addr, indx);
+                    indx++;
                     count--;
                 }
                 return readBuf.Length;
