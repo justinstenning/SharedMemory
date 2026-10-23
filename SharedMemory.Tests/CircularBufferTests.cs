@@ -25,6 +25,8 @@
 //   http://www.codeproject.com/Articles/14740/Fast-IPC-Communication-Using-Shared-Memory-and-Int
 
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Threading.Tasks;
@@ -887,6 +889,220 @@ namespace SharedMemoryTests
                     for (var i = 0; i < writeBuf.Length; i++)
                         Assert.AreEqual(writeBuf[i], readBuf[i], String.Format("Data written does not match data read at index {0}", i));
                 }
+            }
+        }
+
+        [TestMethod]
+        public void Write_RingFullTimeout0_ReturnsAtOnce()
+        {
+            string name = Guid.NewGuid().ToString();
+            byte[] data = new byte[] { 1, 2, 3, 4 };
+
+            using (var smr = new CircularBuffer(name, 2, 32))
+            {
+                // A ring of 2 nodes holds one item
+                Assert.AreEqual(data.Length, smr.Write(data, timeout: 0));
+
+                var timer = Stopwatch.StartNew();
+                for (int i = 0; i < 10; i++)
+                    Assert.AreEqual(0, smr.Write(data, timeout: 0));
+                timer.Stop();
+
+                Assert.IsTrue(timer.ElapsedMilliseconds < 50, String.Format("10 writes to a full ring with timeout 0 took {0} ms", timer.ElapsedMilliseconds));
+            }
+        }
+
+        [TestMethod]
+        public void Write_RingFull_WaitsForWholeTimeout()
+        {
+            string name = Guid.NewGuid().ToString();
+            byte[] data = new byte[] { 1, 2, 3, 4 };
+
+            using (var smr = new CircularBuffer(name, 2, 32))
+            {
+                Assert.AreEqual(data.Length, smr.Write(data, timeout: 0));
+
+                var timer = Stopwatch.StartNew();
+                Assert.AreEqual(0, smr.Write(data, timeout: 200));
+                timer.Stop();
+
+                // Windows can end a wait up to one timer tick (15.6 ms) early
+                Assert.IsTrue(timer.ElapsedMilliseconds >= 180 && timer.ElapsedMilliseconds < 2000, String.Format("A write to a full ring with timeout 200 gave up after {0} ms", timer.ElapsedMilliseconds));
+            }
+        }
+
+        #endregion
+
+        #region Start-up tests (#77)
+
+        /// <summary>
+        /// An owner that can put its node header and node list back into the state that an opener in another
+        /// process sees while the owner is still initialising them.
+        /// </summary>
+        unsafe class InitialisingCircularBuffer : CircularBuffer
+        {
+            /// <summary>
+            /// The node count in shared memory each time the owner's list build asked where the node buffers start
+            /// </summary>
+            public readonly List<int> SharedNodeCountsDuringListBuild = new List<int>();
+
+            public InitialisingCircularBuffer(string name, int nodeCount, int nodeBufferSize)
+                : base(name, nodeCount, nodeBufferSize)
+            {
+            }
+
+            protected override long NodeBufferOffset
+            {
+                get
+                {
+                    if (BufferStartPtr != null)
+                        SharedNodeCountsDuringListBuild.Add(SharedNodeCount);
+                    return base.NodeBufferOffset;
+                }
+            }
+
+            NodeHeader* SharedNodeHeader
+            {
+                get { return (NodeHeader*)(BufferStartPtr + NodeHeaderOffset); }
+            }
+
+            /// <summary>
+            /// The node count in shared memory, which an opener reads
+            /// </summary>
+            public int SharedNodeCount
+            {
+                get { return SharedNodeHeader->NodeCount; }
+                set { SharedNodeHeader->NodeCount = value; }
+            }
+
+            /// <summary>
+            /// Sets every node's <see cref="CircularBuffer.Node.Next"/> to 0, as it is before the owner builds the list
+            /// </summary>
+            public void ClearNodeList()
+            {
+                for (int i = 0; i < NodeCount; i++)
+                    this[i]->Next = 0;
+            }
+
+            /// <summary>
+            /// Links each node to the one after it, as the owner does when it builds the list
+            /// </summary>
+            public void BuildNodeList()
+            {
+                for (int i = 0; i < NodeCount; i++)
+                    this[i]->Next = (i + 1) % NodeCount;
+            }
+        }
+
+        [TestMethod]
+        public void Constructor_Producer_WritesNodeCountAfterNodeList()
+        {
+            string name = Guid.NewGuid().ToString();
+
+            using (var owner = new InitialisingCircularBuffer(name, 4, 32))
+            {
+                Assert.AreNotEqual(0, owner.SharedNodeCountsDuringListBuild.Count, "The node list build was not seen");
+                foreach (int nodeCount in owner.SharedNodeCountsDuringListBuild)
+                    Assert.AreEqual(0, nodeCount, "The owner wrote the node count before it finished building the node list");
+                Assert.AreEqual(4, owner.SharedNodeCount);
+            }
+        }
+
+        [TestMethod]
+        public void Write_OpenedBeforeNodeListBuilt_WritesOnceListIsBuilt()
+        {
+            string name = Guid.NewGuid().ToString();
+            byte[] data = new byte[] { 1, 2, 3, 4 };
+
+            using (var owner = new InitialisingCircularBuffer(name, 4, 32))
+            {
+                owner.ClearNodeList();
+
+                using (var opener = new CircularBuffer(name))
+                using (var writing = new ManualResetEvent(false))
+                {
+                    var write = Task.Factory.StartNew(() =>
+                    {
+                        writing.Set();
+                        var timer = Stopwatch.StartNew();
+                        int written = opener.Write(data, timeout: 1000);
+                        return new long[] { written, timer.ElapsedMilliseconds };
+                    }, TaskCreationOptions.LongRunning);
+
+                    writing.WaitOne();
+                    Thread.Sleep(50);
+                    owner.BuildNodeList();
+
+                    Assert.IsTrue(write.Wait(5000), "Write did not return");
+                    Assert.AreEqual(data.Length, write.Result[0], "Write gave up although the node list was built 50 ms into its 1000 ms timeout");
+                    if (write.Result[1] < 25)
+                        Assert.Inconclusive(String.Format("Write took {0} ms: it started after the node list was built, so it did not wait for it", write.Result[1]));
+                }
+            }
+        }
+
+        [TestMethod]
+        public void Constructor_ConsumerBeforeNodeCountWritten_WaitsForNodeCount()
+        {
+            string name = Guid.NewGuid().ToString();
+
+            using (var owner = new InitialisingCircularBuffer(name, 4, 32))
+            using (var opening = new ManualResetEvent(false))
+            {
+                owner.SharedNodeCount = 0;
+
+                long openMilliseconds = 0;
+                var open = Task.Factory.StartNew(() =>
+                {
+                    opening.Set();
+                    var timer = Stopwatch.StartNew();
+                    var opened = new CircularBuffer(name);
+                    openMilliseconds = timer.ElapsedMilliseconds;
+                    return opened;
+                }, TaskCreationOptions.LongRunning);
+
+                opening.WaitOne();
+                Thread.Sleep(100);
+                bool openedEarly = open.IsCompleted;
+                owner.SharedNodeCount = 4;
+
+                Assert.IsTrue(open.Wait(5000), "The open did not return");
+                using (var opener = open.Result)
+                {
+                    Assert.AreEqual(4, opener.NodeCount);
+                    Assert.AreEqual(32, opener.NodeBufferSize);
+                    Assert.IsFalse(openedEarly, "The open returned before the node count was written");
+                    if (openMilliseconds < 50)
+                        Assert.Inconclusive(String.Format("The open took {0} ms: it started after the node count was written, so it did not wait for it", openMilliseconds));
+                }
+            }
+        }
+
+        [TestMethod]
+        public void Constructor_ConsumerNodeCountStays0_InvalidOperationException()
+        {
+            string name = Guid.NewGuid().ToString();
+
+            using (var owner = new InitialisingCircularBuffer(name, 4, 32))
+            {
+                owner.SharedNodeCount = 0;
+
+                var timer = Stopwatch.StartNew();
+                var e = Assert.ThrowsExactly<InvalidOperationException>(() =>
+                {
+                    using (new CircularBuffer(name))
+                    {
+                    }
+                });
+                timer.Stop();
+
+                Assert.Contains(name, e.Message);
+                Assert.IsTrue(timer.ElapsedMilliseconds >= 900 && timer.ElapsedMilliseconds < 5000, String.Format("The open gave up after {0} ms", timer.ElapsedMilliseconds));
+            }
+
+            // The failed open released its mapping: once the owner has gone, the name can be created again
+            using (new CircularBuffer(name, 4, 32))
+            {
             }
         }
 
