@@ -347,8 +347,34 @@ namespace SharedMemory
         protected virtual void Write<T>(ref T source, long bufferPosition = 0)
             where T : struct
         {
+#if NET40Plus
+            FastStructure<T>.StructureToPtr(ref source, StructureAt<T>(bufferPosition));
+#else
             View.Write<T>(BufferOffset + bufferPosition, ref source);
+#endif
         }
+
+#if NET40Plus
+        /// <summary>
+        /// The address of a <typeparamref name="T"/> at <paramref name="bufferPosition"/>, checked as the view accessor that
+        /// copied single structures up to version 2.3.3 checked it, with the same exceptions.
+        /// </summary>
+        private IntPtr StructureAt<T>(long bufferPosition)
+            where T : struct
+        {
+            long capacity = View.Capacity;
+            long position = BufferOffset + bufferPosition;
+            if (position < 0)
+                throw new ArgumentOutOfRangeException("position", "Non-negative number required.");
+            if (position > capacity - FastStructure<T>.Size)
+            {
+                if (position >= capacity)
+                    throw new ArgumentOutOfRangeException("position", "The position may not be greater or equal to the capacity of the accessor.");
+                throw new ArgumentException("There are not enough bytes remaining in the buffer for a " + typeof(T).FullName + " at this position.", "position");
+            }
+            return new IntPtr(BufferStartPtr + bufferPosition);
+        }
+#endif
 
         /// <summary>
         /// Writes an array of <typeparamref name="T"/> into the buffer
@@ -427,7 +453,11 @@ namespace SharedMemory
         protected virtual void Read<T>(out T data, long bufferPosition = 0)
             where T : struct
         {
+#if NET40Plus
+            data = FastStructure<T>.PtrToStructure(StructureAt<T>(bufferPosition));
+#else
             View.Read<T>(BufferOffset + bufferPosition, out data);
+#endif
         }
 
         /// <summary>

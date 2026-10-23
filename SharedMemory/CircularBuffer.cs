@@ -547,7 +547,7 @@ namespace SharedMemory
         public virtual int Write<T>(ref T source, int timeout = 1000)
             where T : struct
         {
-            int structSize = Marshal.SizeOf(typeof(T));
+            int structSize = FastStructure.SizeOf<T>();
             if (structSize > NodeBufferSize)
                 throw new ArgumentOutOfRangeException("T", "The size of structure " + typeof(T).Name + " is larger than NodeBufferSize");
 
@@ -760,7 +760,7 @@ namespace SharedMemory
         public virtual int Read<T>(out T destination, int timeout = 1000)
             where T: struct
         {
-            int structSize = Marshal.SizeOf(typeof(T));
+            int structSize = FastStructure.SizeOf<T>();
             if (structSize > NodeBufferSize)
                 throw new ArgumentOutOfRangeException("T", "The size of structure " + typeof(T).Name + " is larger than NodeBufferSize");
 

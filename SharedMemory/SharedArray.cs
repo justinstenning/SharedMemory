@@ -34,6 +34,15 @@ namespace SharedMemory
     /// <summary>
     /// A generic fixed-length shared memory array of structures with support for simple inter-process read/write synchronisation.
     /// </summary>
+    /// <remarks>
+    /// Shared memory holds each element in one layout in every process: the layout 64-bit .NET 10 gives it. So processes on
+    /// .NET Framework, .NET Core and .NET 5 or later can share structures holding a <see cref="DateTime"/> or a <see cref="decimal"/>.
+    /// Where the running runtime lays a structure out that way, it is copied as a block of memory; where it does not, as .NET
+    /// Framework does for those structures, it is copied field by field, which is slower. Structures holding an
+    /// <see cref="IntPtr"/>, a <see cref="UIntPtr"/>, a pointer, a generic structure, or a .NET structure other than
+    /// <see cref="DateTime"/>, <see cref="TimeSpan"/>, <see cref="decimal"/> and <see cref="Guid"/> keep the runtime's own
+    /// layout, which is not portable across bitness or runtimes.
+    /// </remarks>
     /// <typeparam name="T">The structure type that will be stored in the elements of this fixed array buffer.</typeparam>
 #if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
@@ -77,10 +86,10 @@ namespace SharedMemory
         /// <param name="name">The name of the shared memory array to be created.</param>
         /// <param name="length">The number of elements to make room for within the shared memory array.</param>
         public SharedArray(string name, int length)
-            : base(name, Marshal.SizeOf(typeof(T)) * length, true)
+            : base(name, FastStructure.SizeOf<T>() * length, true)
         {
             Length = length;
-            _elementSize = Marshal.SizeOf(typeof(T));
+            _elementSize = FastStructure.SizeOf<T>();
 
             Open();
         }
@@ -93,7 +102,7 @@ namespace SharedMemory
         public SharedArray(string name)
             : base(name, 0, false)
         {
-            _elementSize = Marshal.SizeOf(typeof(T));
+            _elementSize = FastStructure.SizeOf<T>();
 
             Open();
         }

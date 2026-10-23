@@ -98,7 +98,7 @@ namespace System.IO.MemoryMappedFiles
         internal unsafe void Write<T>(long position, ref T structure)
             where T: struct
         {
-            uint elementSize = (uint)Marshal.SizeOf(typeof(T));
+            uint elementSize = (uint)FastStructure.SizeOf<T>();
             if (position > this._view.Size - elementSize)
                 throw new ArgumentOutOfRangeException("position", "");
 
@@ -118,7 +118,7 @@ namespace System.IO.MemoryMappedFiles
         internal unsafe void WriteArray<T>(long position, T[] buffer, int index, int count)
             where T : struct
         {
-            uint elementSize = (uint)Marshal.SizeOf(typeof(T));
+            uint elementSize = (uint)FastStructure.SizeOf<T>();
 
             if (position > this._view.Size - (elementSize * count))
                 throw new ArgumentOutOfRangeException("position");
@@ -145,7 +145,7 @@ namespace System.IO.MemoryMappedFiles
         internal unsafe void Read<T>(long position, out T structure)
             where T: struct
         {
-            uint size = (uint)Marshal.SizeOf(typeof(T));
+            uint size = (uint)FastStructure.SizeOf<T>();
             if (position > this._view.Size - size)
                 throw new ArgumentOutOfRangeException("position", "");
             try
