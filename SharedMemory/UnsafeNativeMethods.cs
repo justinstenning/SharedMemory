@@ -45,11 +45,11 @@ namespace SharedMemory
         /// <param name="dest"></param>
         /// <param name="src"></param>
         /// <param name="count"></param>
-        [DllImport("kernel32.dll", EntryPoint = "CopyMemory", SetLastError = false)]
+        [DllImport("kernel32.dll", EntryPoint = "RtlMoveMemory", SetLastError = false)]
         [SecurityCritical]
         internal static extern void CopyMemory(IntPtr dest, IntPtr src, uint count);
 
-        [DllImport("kernel32.dll", EntryPoint = "CopyMemory", SetLastError = false)]
+        [DllImport("kernel32.dll", EntryPoint = "RtlMoveMemory", SetLastError = false)]
         [SecurityCritical]
         internal static extern unsafe void CopyMemoryPtr(void* dest, void* src, uint count);
 #endif
