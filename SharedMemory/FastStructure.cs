@@ -103,6 +103,7 @@ namespace SharedMemory
         /// <param name="buffer"></param>
         /// <param name="startIndex"></param>
         /// <returns></returns>
+        /// <exception cref="ArgumentException">The structure does not fit in <paramref name="buffer"/> from <paramref name="startIndex"/>.</exception>
         public static unsafe void CopyTo<T>(ref T structure, byte[] buffer, int startIndex = 0)
             where T : struct
         {
@@ -110,6 +111,8 @@ namespace SharedMemory
                 throw new ArgumentNullException("buffer");
             if (startIndex > buffer.Length || startIndex < 0)
                 throw new ArgumentOutOfRangeException("startIndex");
+            if (buffer.Length - startIndex < FastStructure<T>.Size)
+                throw new ArgumentException("The structure does not fit in the buffer from startIndex.");
 
             fixed (byte* p = &buffer[startIndex])
             {
@@ -141,6 +144,7 @@ namespace SharedMemory
         /// <param name="buffer"></param>
         /// <param name="startIndex"></param>
         /// <returns></returns>
+        /// <exception cref="ArgumentException"><paramref name="buffer"/> holds less than one structure from <paramref name="startIndex"/>.</exception>
         public static unsafe T FromBytes<T>(byte[] buffer, int startIndex = 0)
             where T : struct
         {
@@ -148,6 +152,8 @@ namespace SharedMemory
                 throw new ArgumentNullException("buffer");
             if (startIndex > buffer.Length || startIndex < 0)
                 throw new ArgumentOutOfRangeException("startIndex");
+            if (buffer.Length - startIndex < FastStructure<T>.Size)
+                throw new ArgumentException("The buffer holds less than one structure from startIndex.");
 
             fixed (byte* p = &buffer[startIndex])
             {
@@ -189,6 +195,8 @@ namespace SharedMemory
                 throw new ArgumentOutOfRangeException("index");
             if (buffer.Length - index < count)
                 throw new ArgumentException("Invalid offset into array specified by index and count");
+            if (count == 0)
+                return;
 
             void* ptr = source.ToPointer();
             byte* p = (byte*)FastStructure.GetPtr<T>(ref buffer[0]);
@@ -223,6 +231,8 @@ namespace SharedMemory
                 throw new ArgumentOutOfRangeException("index");
             if (buffer.Length - index < count)
                 throw new ArgumentException("Invalid offset into array specified by index and count");
+            if (count == 0)
+                return;
 
             void* ptr = source.ToPointer();
 
@@ -257,6 +267,8 @@ namespace SharedMemory
                 throw new ArgumentOutOfRangeException("index");
             if (buffer.Length - index < count)
                 throw new ArgumentException("Invalid offset into array specified by index and count");
+            if (count == 0)
+                return;
 
             void* ptr = destination.ToPointer();
             byte* p = (byte*)FastStructure.GetPtr<T>(ref buffer[0]);
@@ -291,6 +303,8 @@ namespace SharedMemory
                 throw new ArgumentOutOfRangeException("index");
             if (buffer.Length - index < count)
                 throw new ArgumentException("Invalid offset into array specified by index and count");
+            if (count == 0)
+                return;
 
             void* ptr = destination.ToPointer();
             fixed (byte* p = &buffer[0])
