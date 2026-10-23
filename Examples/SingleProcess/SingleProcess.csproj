@@ -2,7 +2,9 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFrameworks>netcoreapp3.0;netcoreapp2.0;net47;net46;net45;net4;net35</TargetFrameworks>
+    <TargetFrameworks>net10.0;netcoreapp3.0;netcoreapp2.0;net47;net46;net45;net4;net35</TargetFrameworks>
+    <!-- C# 14, net10.0's default, makes field a keyword in property accessors, where CommandLineParser.cs names a variable field. -->
+    <LangVersion Condition="'$(TargetFramework)' == 'net10.0'">13.0</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>
