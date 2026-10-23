@@ -107,6 +107,41 @@ namespace SharedMemoryTests
             Assert.IsTrue(ApproximatelyEqual(12.13999, asList.Sum()));
         }
 
+        [TestMethod]
+        public void ArraySlice_ToArrayAndToList_ReturnTheSlice()
+        {
+            var slice = new ArraySlice<int>(new[] { 1, 2, 3, 4, 5 }, 1, 3);
+
+            CollectionAssert.AreEqual(new[] { 2, 3, 4 }, slice.ToArray());
+            CollectionAssert.AreEqual(new[] { 2, 3, 4 }, slice.ToList());
+            CollectionAssert.AreEqual(new[] { 2, 3, 4 }, new List<int>(slice));
+        }
+
+        [TestMethod]
+        public void ArraySlice_ICollectionCopyTo_CopiesAtArrayIndex()
+        {
+            ICollection<int> slice = new ArraySlice<int>(new[] { 1, 2, 3, 4, 5 }, 1, 3);
+            var destination = new int[5];
+
+            slice.CopyTo(destination, 1);
+
+            CollectionAssert.AreEqual(new[] { 0, 2, 3, 4, 0 }, destination);
+            Assert.ThrowsExactly<ArgumentException>(() => slice.CopyTo(new int[3], 1), "too small from arrayIndex");
+            Assert.ThrowsExactly<ArgumentNullException>(() => slice.CopyTo(null, 0), "null");
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => slice.CopyTo(new int[5], -1), "negative arrayIndex");
+        }
+
+        [TestMethod]
+        public void ArraySlice_ICollectionCopyTo_OntoItsOwnArray_CopiesLikeArrayCopy()
+        {
+            var array = new[] { 1, 2, 3, 4, 5 };
+            ICollection<int> slice = new ArraySlice<int>(array, 0, 3);
+
+            slice.CopyTo(array, 1);
+
+            CollectionAssert.AreEqual(new[] { 1, 1, 2, 3, 5 }, array);
+        }
+
 
 
         // http://stackoverflow.com/a/2411661/75129

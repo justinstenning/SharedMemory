@@ -417,5 +417,213 @@ namespace SharedMemoryTests
                 sma.Write(new int[0]);
             }
         }
+
+        // SharedArray<T>.Write(T[], startIndex), size and offset checks, and ICollection<T>.CopyTo (#80, #83)
+
+        static T[] ReadAll<T>(SharedArray<T> array) where T : struct
+        {
+            var all = new T[array.Length];
+            array.CopyTo(all);
+            return all;
+        }
+
+        [TestMethod]
+        public void Write_StartIndex_WritesFromThatElement()
+        {
+            using (var sma = new SharedArray<byte>(Guid.NewGuid().ToString(), 16))
+            {
+                sma.Write(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }, 2);
+
+                CollectionAssert.AreEqual(new byte[] { 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0 }, ReadAll(sma));
+            }
+        }
+
+        [TestMethod]
+        public void Write_IntsAtStartIndex_WritesFromThatElement()
+        {
+            using (var sma = new SharedArray<int>(Guid.NewGuid().ToString(), 16))
+            {
+                sma.Write(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 }, 2);
+
+                CollectionAssert.AreEqual(new[] { 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0, 0 }, ReadAll(sma));
+            }
+        }
+
+        [TestMethod]
+        public void Write_ShortArrayAtStartIndex_Writes()
+        {
+            using (var sma = new SharedArray<int>(Guid.NewGuid().ToString(), 16))
+            {
+                sma.Write(new[] { 1, 2, 3, 4 }, 2);
+
+                CollectionAssert.AreEqual(new[] { 0, 0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, ReadAll(sma));
+            }
+        }
+
+        [TestMethod]
+        public void Write_Array_WaitsAtTheWriteGate()
+        {
+            var name = Guid.NewGuid().ToString();
+            using (var sma = new SharedArray<int>(name, 16))
+            using (var smr = new SharedArray<int>(name))
+            {
+                sma.ReadWriteTimeout = 50;
+                // A reader's lock closes the write gate until it is released
+                Assert.IsTrue(smr.AcquireReadLock(1000));
+                try
+                {
+                    Assert.ThrowsExactly<TimeoutException>(() => sma.Write(new[] { 1, 2 }), "startIndex 0");
+                    Assert.ThrowsExactly<TimeoutException>(() => sma.Write(new[] { 1, 2 }, 2), "startIndex 2");
+                }
+                finally
+                {
+                    smr.ReleaseReadLock();
+                }
+
+                CollectionAssert.AreEqual(new int[16], ReadAll(sma), "written while the write gate was closed");
+            }
+        }
+
+        unsafe struct Big4096
+        {
+            public fixed byte Data[4096];
+        }
+
+        [TestMethod]
+        public void Constructor_SizeWrapsPastInt32_ThrowsArgumentOutOfRange()
+        {
+            // 4096 x 1048577 bytes is 2^32 + 4096, which wrapped to 4096 as an int
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            {
+                using (new SharedArray<Big4096>(Guid.NewGuid().ToString(), 1048577))
+                {
+                }
+            });
+            Assert.AreEqual("length", ex.ParamName);
+        }
+
+        [TestMethod]
+        public void Constructor_SizeOverInt32Max_ThrowsArgumentOutOfRangeForLength()
+        {
+            // 8 x 300,000,000 bytes wrapped to a negative int, reported as a bad bufferSize
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            {
+                using (new SharedArray<long>(Guid.NewGuid().ToString(), 300000000))
+                {
+                }
+            });
+            Assert.AreEqual("length", ex.ParamName);
+        }
+
+        [TestMethod]
+        public void CopyTo_StartIndexNearInt32Max_ThrowsArgumentOutOfRange()
+        {
+            // buffer.Length + startIndex wrapped past the range check, and the read landed on the shared header
+            using (var sma = new SharedArray<long>(Guid.NewGuid().ToString(), 4))
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => sma.CopyTo(new long[2], int.MaxValue - 1));
+                Assert.AreEqual("startIndex", ex.ParamName);
+            }
+        }
+
+        [TestMethod]
+        public void Write_StartIndexNearInt32Max_ThrowsArgumentOutOfRange()
+        {
+            using (var sma = new SharedArray<long>(Guid.NewGuid().ToString(), 4))
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => sma.Write(new long[] { 1, 2 }, int.MaxValue - 1));
+                Assert.AreEqual("startIndex", ex.ParamName);
+                CollectionAssert.AreEqual(new long[4], ReadAll(sma));
+            }
+        }
+
+        [TestMethod]
+        public void CopyTo_StartIndex_ReadsFromThatElement()
+        {
+            // The public CopyTo keeps its meaning: startIndex is the shared array's element to start reading from
+            using (var sma = new SharedArray<int>(Guid.NewGuid().ToString(), 5))
+            {
+                sma.Write(new[] { 1, 2, 3, 4, 5 });
+                var destination = new int[2];
+
+                sma.CopyTo(destination, 3);
+
+                CollectionAssert.AreEqual(new[] { 4, 5 }, destination);
+            }
+        }
+
+        [TestMethod]
+        public void ICollectionCopyTo_ArrayIndex_CopiesEveryElementThere()
+        {
+            using (var sma = new SharedArray<int>(Guid.NewGuid().ToString(), 3))
+            {
+                sma.Write(new[] { 7, 8, 9 });
+                var destination = new int[5];
+
+                ((ICollection<int>)sma).CopyTo(destination, 1);
+
+                CollectionAssert.AreEqual(new[] { 0, 7, 8, 9, 0 }, destination);
+            }
+        }
+
+        [TestMethod]
+        public void ICollectionCopyTo_BadArguments_ThrowAsTheInterfaceSays()
+        {
+            using (var sma = new SharedArray<int>(Guid.NewGuid().ToString(), 3))
+            {
+                ICollection<int> collection = sma;
+
+                Assert.ThrowsExactly<ArgumentException>(() => collection.CopyTo(new int[3], 1), "too small from arrayIndex");
+                Assert.ThrowsExactly<ArgumentNullException>(() => collection.CopyTo(null, 0), "null");
+                Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => collection.CopyTo(new int[5], -1), "negative arrayIndex");
+            }
+        }
+
+        [TestMethod]
+        public void ListAddRange_SharedArray_AppendsItsElements()
+        {
+            using (var sma = new SharedArray<int>(Guid.NewGuid().ToString(), 3))
+            {
+                sma.Write(new[] { 7, 8, 9 });
+                var list = new List<int> { 1 };
+
+                list.AddRange(sma);
+
+                CollectionAssert.AreEqual(new[] { 1, 7, 8, 9 }, list);
+            }
+        }
+
+        [TestMethod]
+        public void Constructor_NegativeLengthWhoseSizeWrapped_ThrowsArgumentOutOfRange()
+        {
+            // 4 x -1073741823 bytes wrapped to 4 as an int, which made an array whose Length was negative
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            {
+                using (new SharedArray<int>(Guid.NewGuid().ToString(), -1073741823))
+                {
+                }
+            });
+        }
+
+        [TestMethod]
+        public void ICollectionCopyTo_WhileAWriterHoldsTheLock_WaitsAtTheReadGate()
+        {
+            var name = Guid.NewGuid().ToString();
+            using (var sma = new SharedArray<int>(name, 3))
+            using (var smr = new SharedArray<int>(name))
+            {
+                smr.ReadWriteTimeout = 50;
+                // A writer's lock closes the read gate until it is released
+                Assert.IsTrue(sma.AcquireWriteLock(1000));
+                try
+                {
+                    Assert.ThrowsExactly<TimeoutException>(() => ((ICollection<int>)smr).CopyTo(new int[3], 0));
+                }
+                finally
+                {
+                    sma.ReleaseWriteLock();
+                }
+            }
+        }
     }
 }
