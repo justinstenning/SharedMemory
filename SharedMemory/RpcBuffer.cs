@@ -731,17 +731,28 @@ namespace SharedMemory
 
             this.bufferCapacity = bufferCapacity;
             this.bufferNodeCount = bufferNodeCount;
-            if (instanceType == InstanceType.Master)
+            try
             {
-                WriteBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
-                ReadBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
+                if (instanceType == InstanceType.Master)
+                {
+                    WriteBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
+                    ReadBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
+                }
+                else
+                {
+                    ReadBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF");
+                    WriteBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF");
+                    this.bufferCapacity = ReadBuffer.NodeBufferSize;
+                    this.bufferNodeCount = ReadBuffer.NodeCount;
+                }
             }
-            else
+            catch
             {
-                ReadBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF");
-                WriteBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF");
-                this.bufferCapacity = ReadBuffer.NodeBufferSize;
-                this.bufferNodeCount = ReadBuffer.NodeCount;
+                // Free the names now, rather than when the garbage collector finalises what was made
+                WriteBuffer?.Dispose();
+                ReadBuffer?.Dispose();
+                masterMutex?.Close();
+                throw;
             }
 
             this.msgBufferLength = Convert.ToInt32(this.bufferCapacity) - protocolLength;
