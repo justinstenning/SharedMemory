@@ -982,7 +982,7 @@ namespace SharedMemory
                             }
 
                             int packetSize = header.PayloadSize < msgBufferLength ? header.PayloadSize :
-                                (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize % msgBufferLength);
+                                (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize - (header.TotalPackets - 1) * msgBufferLength);
 
                             if (header.PayloadSize > 0)
                             {
