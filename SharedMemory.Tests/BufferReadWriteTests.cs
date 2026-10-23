@@ -81,5 +81,23 @@ namespace SharedMemoryTests
                     Assert.Fail("Failed to acquire read lock after releasing write lock.");
             }
         }
+
+        [TestMethod]
+        public void Write_EmptyArray_ReturnsNormally()
+        {
+            using (var buf = new SharedMemory.BufferReadWrite(Guid.NewGuid().ToString(), 1024))
+            {
+                buf.Write(new byte[0]);
+            }
+        }
+
+        [TestMethod]
+        public void Read_EmptyArray_ReturnsNormally()
+        {
+            using (var buf = new SharedMemory.BufferReadWrite(Guid.NewGuid().ToString(), 1024))
+            {
+                buf.Read(new byte[0]);
+            }
+        }
     }
 }

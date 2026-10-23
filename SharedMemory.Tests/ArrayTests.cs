@@ -399,5 +399,23 @@ namespace SharedMemoryTests
                 Assert.IsTrue(a.IsReadOnly);
             }
         }
+
+        [TestMethod]
+        public void CopyTo_EmptyArray_ReturnsNormally()
+        {
+            using (var sma = new SharedArray<int>(Guid.NewGuid().ToString(), 10))
+            {
+                sma.CopyTo(new int[0]);
+            }
+        }
+
+        [TestMethod]
+        public void Write_EmptyArray_ReturnsNormally()
+        {
+            using (var sma = new SharedArray<int>(Guid.NewGuid().ToString(), 10))
+            {
+                sma.Write(new int[0]);
+            }
+        }
     }
 }
