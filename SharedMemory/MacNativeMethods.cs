@@ -46,6 +46,7 @@ namespace SharedMemory
         internal const int LOCK_SH = 1;
         internal const int LOCK_EX = 2;
         internal const int LOCK_NB = 4;
+        internal const int LOCK_UN = 8;
 
         internal const int PROT_READ = 1;
         internal const int PROT_WRITE = 2;

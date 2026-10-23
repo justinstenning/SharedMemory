@@ -645,6 +645,50 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
+        /// Two holders that close at the same moment: one of them must find it was the last, and remove the file (on macOS the
+        /// lock file and its object). A failed LOCK_EX | LOCK_NB drops the shared lock it would have converted on Linux and keeps
+        /// it on macOS, where two close steps that overlap could each see the other's lock and both leave. Two hundred rounds,
+        /// the two disposes released together.
+        /// </summary>
+        [TestMethod]
+        [OSCondition(OperatingSystems.Linux | OperatingSystems.OSX)]
+        public void TwoHoldersCloseAtOnce_OneRemovesTheFile()
+        {
+            var left = new List<int>();
+            for (int round = 0; round < 200; round++)
+            {
+                string name = Guid.NewGuid().ToString();
+                string path = PerUserPath(name);
+                var owner = new EventFreeBuffer(name, Size);
+                var opener = new EventFreeBuffer(name);
+                string objectName = OperatingSystem.IsMacOS() ? Files.ObjectNamedBy(path) : null;
+                using (var start = new Barrier(2))
+                {
+                    var other = new Thread(() =>
+                    {
+                        start.SignalAndWait();
+                        opener.Dispose();
+                    });
+                    other.Start();
+                    start.SignalAndWait();
+                    owner.Dispose();
+                    other.Join();
+                }
+
+                if (File.Exists(path))
+                {
+                    left.Add(round);
+                    if (objectName != null)
+                        Files.RemoveObject(objectName);
+                    File.Delete(path);
+                }
+                else if (objectName != null)
+                    Assert.IsFalse(Files.ObjectExists(objectName), "round " + round + ": the lock file went without its object");
+            }
+            Assert.AreEqual(0, left.Count, "Rounds whose file nobody removed: " + string.Join(", ", left));
+        }
+
+        /// <summary>
         /// The buffer's file on Linux, or its lock file on macOS, for a per-user name.
         /// </summary>
         static string PerUserPath(string name)

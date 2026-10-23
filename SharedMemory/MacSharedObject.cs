@@ -54,7 +54,7 @@ namespace SharedMemory
     /// first, and the link tried again; otherwise the name is in use, and the new object is removed.</item>
     /// <item>Open: a lock file nobody holds is removed with its object, and the name does not exist. Otherwise take the shared lock, check that the name
     /// still leads to the same file, and open and map the whole of the object it names.</item>
-    /// <item>Close: whoever gets an exclusive lock was the last holder, and removes the object and then the lock file.</item>
+    /// <item>Close: let go of the shared lock, then whoever gets an exclusive lock was the last holder, and removes the object and then the lock file.</item>
     /// <item>Exit: when the process exits normally, the close step runs for every lock file it still holds, as on Linux (<see cref="ClosedAtExit"/>).</item>
     /// </list>
     /// <para>The lock file is written before its object exists and removed after its object is gone, so every object has a file that names it: a process
@@ -592,9 +592,17 @@ namespace SharedMemory
         /// <summary>
         /// The close step, which never throws: if this was the last holder, remove the object and its lock file.
         /// </summary>
+        /// <remarks>
+        /// The shared lock goes first. A <c>LOCK_EX | LOCK_NB</c> that fails keeps it on macOS, where Linux drops it inside the call, so two holders
+        /// closing at once would each find the other's lock and both leave the lock file and its object. Without it, the second to try finds the
+        /// first gone.
+        /// </remarks>
         static void CloseStep(SafeFileHandle handle, string path, Stat identity, string objectName)
         {
             int result;
+            do
+                result = Flock(handle, LOCK_UN);
+            while (result != 0 && Marshal.GetLastPInvokeError() == EINTR);
             do
                 result = Flock(handle, LOCK_EX | LOCK_NB);
             while (result != 0 && Marshal.GetLastPInvokeError() == EINTR);
