@@ -24,6 +24,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace SharedMemory
@@ -764,7 +765,24 @@ namespace SharedMemory
         }
 
         object mutex = new object();
-        ulong messageId = 1;
+        // A restarted peer does not reuse the ids of the instance before it, so a late reply to that instance matches no request
+        ulong messageId = RandomMessageId();
+
+        static ulong RandomMessageId()
+        {
+            var bytes = new byte[8];
+            using (var random = RandomNumberGenerator.Create())
+            {
+                ulong id;
+                do
+                {
+                    random.GetBytes(bytes);
+                    id = BitConverter.ToUInt64(bytes, 0);
+                }
+                while (id == 0);
+                return id;
+            }
+        }
 
         /// <summary>
         /// Constructs a new request message, giving it a new unique MsgId
