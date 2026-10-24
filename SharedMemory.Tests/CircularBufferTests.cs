@@ -55,7 +55,7 @@ namespace SharedMemoryTests
             }
             catch (ArgumentException ae)
             {
-                Assert.AreEqual(ae.ParamName, "name");
+                Assert.AreEqual("name", ae.ParamName);
                 return;
             }
         }
@@ -95,7 +95,7 @@ namespace SharedMemoryTests
             }
             catch (ArgumentOutOfRangeException aor)
             {
-                Assert.AreEqual(aor.ParamName, "nodeCount");
+                Assert.AreEqual("nodeCount", aor.ParamName);
                 return;
             }
         }
@@ -114,7 +114,7 @@ namespace SharedMemoryTests
             }
             catch (ArgumentOutOfRangeException aor)
             {
-                Assert.AreEqual(aor.ParamName, "nodeCount");
+                Assert.AreEqual("nodeCount", aor.ParamName);
                 return;
             }
         }

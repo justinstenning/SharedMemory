@@ -45,7 +45,7 @@ namespace SharedMemoryTests
             var b = new[] { 1.0, 2, 3, 4, 5, 99, 1024 };
             var sliceb = new ArraySlice<double>(b);
 
-            Assert.AreEqual(a, slicea.List);
+            Assert.AreSame(a, slicea.List);
             Assert.AreEqual(0, slicea.Offset);
             Assert.AreEqual(7, slicea.Count);
             Assert.IsTrue(slicea.Equals(sliceaSame));
@@ -81,7 +81,7 @@ namespace SharedMemoryTests
             var b = new[] { 1.0, 2, 3, 4, 5, 99, 1024 };
             var sliceb = new ArraySlice<double>(b, 2, 3);
 
-            Assert.AreEqual(a, slicea.List);
+            Assert.AreSame(a, slicea.List);
             Assert.AreEqual(2, slicea.Offset);
             Assert.AreEqual(3, slicea.Count);
             Assert.IsTrue(slicea.Equals(sliceaSame));

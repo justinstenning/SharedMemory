@@ -65,7 +65,7 @@ namespace SharedMemoryTests
                         // Read should timeout with TimeoutException because buf.ReleaseWriteLock has not been called
                         buf2.Read(readData);
                     }
-                    catch (TimeoutException e)
+                    catch (TimeoutException)
                     {
                         timedout = true;
                     }
