@@ -45,11 +45,11 @@ namespace SharedMemory
         /// <param name="dest"></param>
         /// <param name="src"></param>
         /// <param name="count"></param>
-        [DllImport("kernel32.dll", EntryPoint = "CopyMemory", SetLastError = false)]
+        [DllImport("kernel32.dll", EntryPoint = "RtlMoveMemory", SetLastError = false)]
         [SecurityCritical]
         internal static extern void CopyMemory(IntPtr dest, IntPtr src, uint count);
 
-        [DllImport("kernel32.dll", EntryPoint = "CopyMemory", SetLastError = false)]
+        [DllImport("kernel32.dll", EntryPoint = "RtlMoveMemory", SetLastError = false)]
         [SecurityCritical]
         internal static extern unsafe void CopyMemoryPtr(void* dest, void* src, uint count);
 #endif
@@ -146,8 +146,8 @@ namespace SharedMemory
         internal static extern SafeMemoryMappedFileHandle CreateFileMapping(SafeFileHandle hFile, IntPtr lpAttributes, FileMapProtection fProtect, int dwMaxSizeHi, int dwMaxSizeLo, string lpName);
         internal static SafeMemoryMappedFileHandle CreateFileMapping(SafeFileHandle hFile, FileMapProtection flProtect, Int64 ddMaxSize, string lpName)
         {
-            int hi = (Int32)(ddMaxSize / Int32.MaxValue);
-            int lo = (Int32)(ddMaxSize % Int32.MaxValue);
+            int hi = (Int32)(ddMaxSize >> 32);
+            int lo = (Int32)(ddMaxSize & 0xFFFFFFFF);
             return CreateFileMapping(hFile, IntPtr.Zero, flProtect, hi, lo, lpName);
         }
 
@@ -163,8 +163,8 @@ namespace SharedMemory
             UIntPtr dwNumberOfBytesToMap);
         internal static SafeMemoryMappedViewHandle MapViewOfFile(SafeMemoryMappedFileHandle hFileMappingObject, FileMapAccess dwDesiredAccess, ulong ddFileOffset, UIntPtr dwNumberofBytesToMap)
         {
-            uint hi = (UInt32)(ddFileOffset / UInt32.MaxValue);
-            uint lo = (UInt32)(ddFileOffset % UInt32.MaxValue);
+            uint hi = (UInt32)(ddFileOffset >> 32);
+            uint lo = (UInt32)(ddFileOffset & 0xFFFFFFFF);
             return MapViewOfFile(hFileMappingObject, dwDesiredAccess, hi, lo, dwNumberofBytesToMap);
         }
 

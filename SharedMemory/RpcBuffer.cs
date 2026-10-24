@@ -23,6 +23,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace SharedMemory
@@ -213,7 +215,20 @@ namespace SharedMemory
     /// </summary>
     public class RpcRequest
     {
-        internal RpcRequest() { }
+        internal RpcRequest() : this(true) { }
+
+        internal RpcRequest(bool continuesOnThreadPool)
+        {
+            ContinuesOnThreadPool = continuesOnThreadPool;
+#if NET46_OR_GREATER || NETSTANDARD
+            ResponseReady = continuesOnThreadPool
+                ? new TaskCompletionSource<RpcResponse>(TaskCreationOptions.RunContinuationsAsynchronously)
+                : new TaskCompletionSource<RpcResponse>();
+#else
+            ResponseReady = new TaskCompletionSource<RpcResponse>();
+#endif
+        }
+
         /// <summary>
         /// The message Id
         /// </summary>
@@ -229,7 +244,7 @@ namespace SharedMemory
         /// <summary>
         /// A wait event that is signaled when a response is ready
         /// </summary>
-        public TaskCompletionSource<RpcResponse> ResponseReady { get; } = new TaskCompletionSource<RpcResponse>();
+        public TaskCompletionSource<RpcResponse> ResponseReady { get; }
         /// <summary>
         /// Was the request successful
         /// </summary>
@@ -237,7 +252,16 @@ namespace SharedMemory
         /// <summary>
         /// When the request was created
         /// </summary>
-        public DateTime Created { get; } = DateTime.Now;
+        public DateTime Created { get { return created.ToLocalTime(); } }
+        readonly DateTime created = DateTime.UtcNow; // turned into local time when read, rather than for every request
+        /// <summary>
+        /// The packets of the message received so far
+        /// </summary>
+        internal int PacketsReceived { get; set; }
+        /// <summary>
+        /// Whether code awaiting the response must run on the thread pool, rather than on the read thread that completes it
+        /// </summary>
+        internal bool ContinuesOnThreadPool { get; }
     }
 
     /// <summary>
@@ -280,11 +304,11 @@ namespace SharedMemory
         /// <summary>
         /// Bytes read from channel (excluding protocol overhead)
         /// </summary>
-        public ulong BytesRead { get; private set; }
+        public ulong BytesRead { get { return (ulong)Interlocked.Read(ref bytesRead); } }
         /// <summary>
         /// Number of packets read from channel
         /// </summary>
-        public ulong PacketsRead { get; private set; }
+        public ulong PacketsRead { get { return (ulong)Interlocked.Read(ref packetsRead); } }
         /// <summary>
         /// The largest packet read from channel (excluding protocol overhead)
         /// </summary>
@@ -306,26 +330,26 @@ namespace SharedMemory
         /// <summary>
         /// The number of request messages received
         /// </summary>
-        public ulong RequestsReceived { get; private set; }
+        public ulong RequestsReceived { get { return (ulong)Interlocked.Read(ref requestsReceived); } }
 
         /// <summary>
         /// The number of response messages received
         /// </summary>
-        public ulong ResponsesReceived { get; private set; }
+        public ulong ResponsesReceived { get { return (ulong)Interlocked.Read(ref responsesReceived); } }
 
         /// <summary>
         /// The number of error message received
         /// </summary>
-        public ulong ErrorsReceived { get; private set; }
+        public ulong ErrorsReceived { get { return (ulong)Interlocked.Read(ref errorsReceived); } }
 
         /// <summary>
         /// The number of bytes written to channel (excluding protocol overhead)
         /// </summary>
-        public ulong BytesWritten { get; private set; }
+        public ulong BytesWritten { get { return (ulong)Interlocked.Read(ref bytesWritten); } }
         /// <summary>
         /// The number of packets written to channel
         /// </summary>
-        public ulong PacketsWritten { get; private set; }
+        public ulong PacketsWritten { get { return (ulong)Interlocked.Read(ref packetsWritten); } }
         /// <summary>
         /// The largest packet written to channel (excluding protocol overhead)
         /// </summary>
@@ -344,11 +368,11 @@ namespace SharedMemory
         /// <summary>
         /// Number of response messages received that were discarded (provided a non-existent message Id)
         /// </summary>
-        public ulong DiscardedResponses { get; private set; }
+        public ulong DiscardedResponses { get { return (ulong)Interlocked.Read(ref discardedResponses); } }
         /// <summary>
         /// The response message Id that was last discarded
         /// </summary>
-        public ulong LastDiscardedResponseId { get; private set; }
+        public ulong LastDiscardedResponseId { get { return unchecked((ulong)Interlocked.Read(ref lastDiscardedResponseId)); } }
 
         /// <summary>
         /// The total number of messages sent
@@ -358,56 +382,63 @@ namespace SharedMemory
         /// <summary>
         /// The number of request messages sent
         /// </summary>
-        public ulong RequestsSent { get; private set; }
+        public ulong RequestsSent { get { return (ulong)Interlocked.Read(ref requestsSent); } }
 
         /// <summary>
         /// The number of response messages sent
         /// </summary>
-        public ulong ResponsesSent { get; private set; }
+        public ulong ResponsesSent { get { return (ulong)Interlocked.Read(ref responsesSent); } }
 
         /// <summary>
         /// The number of error messages sent
         /// </summary>
-        public ulong ErrorsSent { get; private set; }
+        public ulong ErrorsSent { get { return (ulong)Interlocked.Read(ref errorsSent); } }
 
         /// <summary>
         /// Number of timeouts
         /// </summary>
-        public ulong Timeouts { get; private set; }
+        public ulong Timeouts { get { return (ulong)Interlocked.Read(ref timeouts); } }
         /// <summary>
         /// DateTime of last timeout
         /// </summary>
-        public DateTime LastTimeout { get; private set; }
+        public DateTime LastTimeout { get { return DateTime.FromBinary(Interlocked.Read(ref lastTimeout)); } }
         DateTime StartWaitWriteTimestamp { get; set; }
         DateTime EndWaitWriteTimestamp { get; set; }
         /// <summary>
         /// Maximum Ticks waited for available write slot
         /// </summary>
-        public long MaxWaitWriteTicks { get; private set; } = -1;
+        public long MaxWaitWriteTicks { get { return Interlocked.Read(ref maxWaitWriteTicks); } }
         DateTime StartWaitReadTimestamp { get; set; }
         DateTime EndWaitReadTimestamp { get; set; }
         /// <summary>
         /// Maximum Ticks waiting for read slot (cannot exceed 1sec)
         /// </summary>
-        public long MaxWaitReadTicks { get; private set; } = -1;
+        public long MaxWaitReadTicks { get { return Interlocked.Read(ref maxWaitReadTicks); } }
 
+        // Messages are sent, and time out, on several threads at once, so the 64-bit values change only through Interlocked
+        long bytesRead, packetsRead, requestsReceived, responsesReceived, errorsReceived;
+        long bytesWritten, packetsWritten, discardedResponses, lastDiscardedResponseId;
+        long requestsSent, responsesSent, errorsSent, timeouts, lastTimeout;
+        long maxWaitWriteTicks = -1, maxWaitReadTicks = -1;
+
+        // The wait timings keep only differences, so they read UtcNow, which skips Now's time zone lookup
         internal void StartWaitRead()
         {
-            StartWaitReadTimestamp = DateTime.Now;
+            StartWaitReadTimestamp = DateTime.UtcNow;
         }
 
         internal void ReadPacket(int bytes)
         {
-            EndWaitReadTimestamp = DateTime.Now;
+            EndWaitReadTimestamp = DateTime.UtcNow;
 
             var ticks = EndWaitReadTimestamp.Ticks - StartWaitReadTimestamp.Ticks;
-            if (ticks > MaxWaitReadTicks)
+            if (ticks > maxWaitReadTicks) // only the read thread sets it
             {
-                MaxWaitReadTicks = ticks;
+                Interlocked.Exchange(ref maxWaitReadTicks, ticks);
             }
 
-            PacketsRead++;
-            BytesRead += (ulong)bytes;
+            Interlocked.Increment(ref packetsRead);
+            Interlocked.Add(ref bytesRead, bytes);
             ReadingLastPacketSize = bytes;
             if (bytes > ReadingMaxPacketSize)
             {
@@ -417,21 +448,21 @@ namespace SharedMemory
 
         internal void StartWaitWrite()
         {
-            StartWaitWriteTimestamp = DateTime.Now;
+            StartWaitWriteTimestamp = DateTime.UtcNow;
         }
 
         internal void WritePacket(int bytes)
         {
-            EndWaitWriteTimestamp = DateTime.Now;
+            EndWaitWriteTimestamp = DateTime.UtcNow;
 
             var ticks = EndWaitWriteTimestamp.Ticks - StartWaitWriteTimestamp.Ticks;
-            if (ticks > MaxWaitWriteTicks)
+            if (ticks > maxWaitWriteTicks) // set only under the send lock
             {
-                MaxWaitWriteTicks = ticks;
+                Interlocked.Exchange(ref maxWaitWriteTicks, ticks);
             }
 
-            PacketsWritten++;
-            BytesWritten += (ulong)bytes;
+            Interlocked.Increment(ref packetsWritten);
+            Interlocked.Add(ref bytesWritten, bytes);
             WritingLastPacketSize = bytes;
             if (bytes > WritingMaxPacketSize)
             {
@@ -445,13 +476,13 @@ namespace SharedMemory
             switch (msgType)
             {
                 case MessageType.RpcRequest:
-                    RequestsReceived++;
+                    Interlocked.Increment(ref requestsReceived);
                     break;
                 case MessageType.RpcResponse:
-                    ResponsesReceived++;
+                    Interlocked.Increment(ref responsesReceived);
                     break;
                 case MessageType.ErrorInRpc:
-                    ErrorsReceived++;
+                    Interlocked.Increment(ref errorsReceived);
                     break;
             }
         }
@@ -462,27 +493,27 @@ namespace SharedMemory
             switch (msgType)
             {
                 case MessageType.RpcRequest:
-                    RequestsSent++;
+                    Interlocked.Increment(ref requestsSent);
                     break;
                 case MessageType.RpcResponse:
-                    ResponsesSent++;
+                    Interlocked.Increment(ref responsesSent);
                     break;
                 case MessageType.ErrorInRpc:
-                    ErrorsSent++;
+                    Interlocked.Increment(ref errorsSent);
                     break;
             }
         }
 
         internal void Timeout()
         {
-            Timeouts++;
-            LastTimeout = DateTime.Now;
+            Interlocked.Increment(ref timeouts);
+            Interlocked.Exchange(ref lastTimeout, DateTime.Now.ToBinary());
         }
 
         internal void DiscardResponse(ulong msgId)
         {
-            DiscardedResponses++;
-            LastDiscardedResponseId = msgId;
+            Interlocked.Increment(ref discardedResponses);
+            Interlocked.Exchange(ref lastDiscardedResponseId, unchecked((long)msgId));
         }
 
         /// <summary>
@@ -490,28 +521,28 @@ namespace SharedMemory
         /// </summary>
         public void Reset()
         {
-            Timeouts = 0;
-            LastTimeout = DateTime.MinValue;
-            PacketsRead = 0;
-            BytesRead = 0;
-            MaxWaitReadTicks = -1;
+            Interlocked.Exchange(ref timeouts, 0);
+            Interlocked.Exchange(ref lastTimeout, DateTime.MinValue.ToBinary());
+            Interlocked.Exchange(ref packetsRead, 0);
+            Interlocked.Exchange(ref bytesRead, 0);
+            Interlocked.Exchange(ref maxWaitReadTicks, -1);
             ReadingMaxPacketSize = 0;
             ReadingLastMessageSize = -1;
             ReadingLastPacketSize = -1;
-            RequestsReceived = 0;
-            ResponsesReceived = 0;
-            ErrorsReceived = 0;
-            PacketsWritten = 0;
-            BytesWritten = 0;
-            MaxWaitWriteTicks = -1;
+            Interlocked.Exchange(ref requestsReceived, 0);
+            Interlocked.Exchange(ref responsesReceived, 0);
+            Interlocked.Exchange(ref errorsReceived, 0);
+            Interlocked.Exchange(ref packetsWritten, 0);
+            Interlocked.Exchange(ref bytesWritten, 0);
+            Interlocked.Exchange(ref maxWaitWriteTicks, -1);
             WritingMaxPacketSize = 0;
             WritingLastMessageSize = -1;
             WritingLastPacketSize = -1;
-            RequestsSent = 0;
-            ResponsesSent = 0;
-            ErrorsSent = 0;
-            DiscardedResponses = 0;
-            LastDiscardedResponseId = 0;
+            Interlocked.Exchange(ref requestsSent, 0);
+            Interlocked.Exchange(ref responsesSent, 0);
+            Interlocked.Exchange(ref errorsSent, 0);
+            Interlocked.Exchange(ref discardedResponses, 0);
+            Interlocked.Exchange(ref lastDiscardedResponseId, 0);
         }
     }
 
@@ -535,7 +566,9 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Dispose has completed
+        /// Whether <see cref="Dispose()"/> has closed the buffers. It usually has by the time it returns. If the thread that reads the
+        /// buffer, or a send under way, has not let go of them within about 1 s, they close in the background once they are free,
+        /// and this turns true then.
         /// </summary>
         public bool DisposeFinished
         {
@@ -551,6 +584,7 @@ namespace SharedMemory
         private readonly int bufferCapacity;
         private readonly int bufferNodeCount;
         private readonly int msgBufferLength; // The amount of room left in the node after protocol header
+        private readonly bool sendMessageOverridden;
 
         /// <summary>
         /// The buffer used to send messages to remote channel endpoint
@@ -567,7 +601,12 @@ namespace SharedMemory
         public RpcStatistics Statistics { get; private set; }
 
         const int defaultTimeoutMs = 30000;
+        const int disposeWaitMs = 1000; // how long Dispose waits for the read thread and for a send under way
+        const int readWaitMs = 100; // the read thread looks for Dispose this often
+        const int roomWaitSliceMs = 50; // a send waiting for room looks for Dispose this often
         object lock_sendQ = new object();
+        readonly ManualResetEventSlim readStopped = new ManualResetEventSlim();
+        int buffersInUse; // calls in ThrowIfDisposedOrShutdown, which look at the buffers outside the send lock
 
         /// <summary>
         /// Outgoing requests waiting for responses
@@ -588,9 +627,18 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
         /// <param name="remoteCallHandler">Action to handle requests with no response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
+        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
+        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
+        /// fails if its master has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// after about 1 s.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
+        /// open by an earlier slave.</exception>
         public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -602,9 +650,18 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
         /// <param name="asyncRemoteCallHandler">Asynchronous action to handle requests with no response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
+        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
+        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
+        /// fails if its master has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// after about 1 s.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
+        /// open by an earlier slave.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], Task> asyncRemoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -616,9 +673,18 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
         /// <param name="remoteCallHandlerWithResult">Function to handle requests with a response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
+        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
+        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
+        /// fails if its master has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// after about 1 s.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
+        /// open by an earlier slave.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], byte[]> remoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -630,9 +696,18 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
         /// <param name="asyncRemoteCallHandlerWithResult">Function to asynchronously handle requests with a response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
+        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
+        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
+        /// fails if its master has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// after about 1 s.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
+        /// open by an earlier slave.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], Task<byte[]>> asyncRemoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -643,9 +718,18 @@ namespace SharedMemory
         /// Construct a new RpcBuffer
         /// </summary>
         /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 64-bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">ProtocolVersion.V1 = 64-byte header for each packet</param>
+        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
         /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
+        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
+        /// fails if its master has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// after about 1 s.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
+        /// open by an earlier slave.</exception>
         public RpcBuffer(string name, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10)
         {
             if (bufferCapacity < 256) // min 256 bytes
@@ -659,6 +743,12 @@ namespace SharedMemory
             }
 
             Statistics = new RpcStatistics();
+
+            // A subclass's SendMessage may run code after awaiting the base one, so its blocking requests take the
+            // thread pool hop as well
+            sendMessageOverridden = GetType().GetMethod(nameof(SendMessage), BindingFlags.Instance | BindingFlags.NonPublic, null,
+                new[] { typeof(MessageType), typeof(RpcRequest), typeof(byte[]), typeof(ulong), typeof(int), typeof(CancellationToken) }, null)
+                .DeclaringType != typeof(RpcBuffer);
 
             masterMutex = new Mutex(true, name + "SharedMemory_MasterMutex", out bool createdNew);
 
@@ -688,17 +778,28 @@ namespace SharedMemory
 
             this.bufferCapacity = bufferCapacity;
             this.bufferNodeCount = bufferNodeCount;
-            if (instanceType == InstanceType.Master)
+            try
             {
-                WriteBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
-                ReadBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
+                if (instanceType == InstanceType.Master)
+                {
+                    WriteBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
+                    ReadBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
+                }
+                else
+                {
+                    ReadBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF");
+                    WriteBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF");
+                    this.bufferCapacity = ReadBuffer.NodeBufferSize;
+                    this.bufferNodeCount = ReadBuffer.NodeCount;
+                }
             }
-            else
+            catch
             {
-                ReadBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF");
-                WriteBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF");
-                this.bufferCapacity = ReadBuffer.NodeBufferSize;
-                this.bufferNodeCount = ReadBuffer.NodeCount;
+                // Free the names now, rather than when the garbage collector finalises what was made
+                WriteBuffer?.Dispose();
+                ReadBuffer?.Dispose();
+                masterMutex?.Close();
+                throw;
             }
 
             this.msgBufferLength = Convert.ToInt32(this.bufferCapacity) - protocolLength;
@@ -711,6 +812,10 @@ namespace SharedMemory
                     case RpcProtocol.V1:
                         ReadThreadV1();
                         break;
+                    default:
+                        // No reader for a protocol it does not know, so Dispose has none to wait for
+                        readStopped.Set();
+                        break;
                 }
             }, TaskCreationOptions.LongRunning);
 
@@ -718,7 +823,24 @@ namespace SharedMemory
         }
 
         object mutex = new object();
-        ulong messageId = 1;
+        // A restarted peer does not reuse the ids of the instance before it, so a late reply to that instance matches no request
+        ulong messageId = RandomMessageId();
+
+        static ulong RandomMessageId()
+        {
+            var bytes = new byte[8];
+            using (var random = RandomNumberGenerator.Create())
+            {
+                ulong id;
+                do
+                {
+                    random.GetBytes(bytes);
+                    id = BitConverter.ToUInt64(bytes, 0);
+                }
+                while (id == 0);
+                return id;
+            }
+        }
 
         /// <summary>
         /// Constructs a new request message, giving it a new unique MsgId
@@ -726,7 +848,12 @@ namespace SharedMemory
         /// <returns></returns>
         protected RpcRequest CreateMessageRequest()
         {
-            RpcRequest request = new RpcRequest();
+            return CreateMessageRequest(true);
+        }
+
+        RpcRequest CreateMessageRequest(bool continuesOnThreadPool)
+        {
+            RpcRequest request = new RpcRequest(continuesOnThreadPool);
             lock (mutex)
             {
                 request.MsgId = messageId++;
@@ -739,16 +866,23 @@ namespace SharedMemory
         /// Send a remote request on the channel, blocking until a result is returned
         /// </summary>
         /// <param name="args">Arguments (if any) as a byte array to be sent to the remote endpoint</param>
-        /// <param name="timeoutMs">Timeout in milliseconds (defaults to 30sec)</param>
+        /// <param name="timeoutMs">How long the whole call may take, in milliseconds (defaults to 30 s): the waits to send the request,
+        /// for room in the buffer, and for the response share it. <see cref="Timeout.Infinite"/> waits without limit. 0 sends the
+        /// request and returns without its response, with <see cref="RpcResponse.Success"/> false; that send waits for the send lock
+        /// without limit, and up to about 1 s a packet for room.</param>
         /// <param name="cancellationToken">A cancellation token</param>
-        /// <returns>The returned response</returns>
+        /// <returns>The response. Its <see cref="RpcResponse.Success"/> is false if the request could not be sent, no response came
+        /// within <paramref name="timeoutMs"/>, the call was cancelled, the remote handler threw, the response arrived damaged, or
+        /// this instance was disposed while the request waited.</returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
         public RpcResponse RemoteRequest(byte[] args = null, int timeoutMs = defaultTimeoutMs, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposedOrShutdown();
 
-            var request = CreateMessageRequest();
+            // The caller blocks for the response and has no code to run where it completes, so the read thread
+            // completes it without a hop through the thread pool, unless a subclass's SendMessage has code to run
+            var request = CreateMessageRequest(sendMessageOverridden);
             Task<RpcResponse> sendMessage = SendMessage(request, args, timeoutMs, cancellationToken);
             return sendMessage.Result;
         }
@@ -757,9 +891,16 @@ namespace SharedMemory
         /// Send a remote request on the channel (awaitable)
         /// </summary>
         /// <param name="args">Arguments (if any) as a byte array to be sent to the remote endpoint</param>
-        /// <param name="timeoutMs">Timeout in milliseconds (defaults to 30sec)</param>
+        /// <param name="timeoutMs">How long the whole call may take, in milliseconds (defaults to 30 s): the waits to send the request,
+        /// for room in the buffer, and for the response share it. <see cref="Timeout.Infinite"/> waits without limit. 0 sends the
+        /// request and returns without its response, with <see cref="RpcResponse.Success"/> false; that send waits for the send lock
+        /// without limit, and up to about 1 s a packet for room.</param>
         /// <param name="cancellationToken">A cancellation token</param>
-        /// <returns></returns>
+        /// <returns>A task for the response. Its <see cref="RpcResponse.Success"/> is false if the request could not be sent, no response came
+        /// within <paramref name="timeoutMs"/>, the call was cancelled, the remote handler threw, the response arrived damaged, or
+        /// this instance was disposed while the request waited.
+        /// The request is sent, waits for the send lock and for room included, before the task is returned. Code after an await
+        /// of the task does not run on the thread that reads the buffer.</returns>
         /// <exception cref="ObjectDisposedException">Thrown if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
         public Task<RpcResponse> RemoteRequestAsync(byte[] args = null, int timeoutMs = defaultTimeoutMs, CancellationToken cancellationToken = default)
@@ -792,6 +933,7 @@ namespace SharedMemory
             ThrowIfDisposedOrShutdown();
 
             var msgId = request.MsgId;
+            var sending = Stopwatch.GetTimestamp();
 
             if (msgType == MessageType.RpcRequest)
             {
@@ -799,14 +941,25 @@ namespace SharedMemory
             }
 
             var success = false;
-            switch (this.protocolVersion)
+            try
             {
-                case RpcProtocol.V1:
-                    success = WriteProtocolV1(msgType, msgId, payload, responseMsgId, timeout);
-                    break;
-                default:
-                    // Invalid protocol
-                    return Task.FromResult(new RpcResponse(false, null));
+                switch (this.protocolVersion)
+                {
+                    case RpcProtocol.V1:
+                        success = WriteProtocolV1(msgType, msgId, payload, responseMsgId, timeout, sending);
+                        break;
+                    default:
+                        // Invalid protocol
+                        return Task.FromResult(new RpcResponse(false, null));
+                }
+            }
+            finally
+            {
+                if (!success && msgType == MessageType.RpcRequest)
+                {
+                    // A request that was not sent gets no response
+                    Requests.TryRemove(msgId, out RpcRequest unsent);
+                }
             }
 
             if (success)
@@ -818,7 +971,7 @@ namespace SharedMemory
             {
                 if (request != null)
                 {
-                    return request.ResponseReady.Task.TimeoutOrCancel(timeout, cancellationToken);
+                    return WaitForResponse(request, RemainingTimeout(timeout, sending), timeout != 0, cancellationToken);
                 }
                 else
                 {
@@ -833,27 +986,115 @@ namespace SharedMemory
                 if (request != null)
                 {
                     request.IsSuccess = success;
-                    request.ResponseReady.SetResult(rpcResponse);
+                    request.ResponseReady.TrySetResult(rpcResponse); // Dispose may have failed it already
                 }
                 return Task.FromResult(rpcResponse);
             }
         }
 
-        bool WriteProtocolV1(MessageType msgType, ulong msgId, byte[] msg, ulong responseMsgId, int timeout)
+        // Completes a request whose response did not come; only WaitForResponse uses it
+        static readonly RpcResponse NoResponse = new RpcResponse(false, null);
+
+        // Waits for the response, up to the request's remaining time or until the caller cancels. The timer and the
+        // cancellation complete the request with NoResponse, so the caller waits on one task
+        async Task<RpcResponse> WaitForResponse(RpcRequest request, int timeout, bool waitsForResponse, CancellationToken cancellationToken)
         {
-            if (Disposed)
+            var ready = request.ResponseReady.Task;
+            RpcResponse response;
+            try
+            {
+                if (!ready.IsCompleted)
+                {
+                    Action stop = () => request.ResponseReady.TrySetResult(NoResponse);
+                    if (timeout == 0 || (cancellationToken.IsCancellationRequested && timeout >= Timeout.Infinite))
+                    {
+                        stop();
+                    }
+                    else
+                    {
+                        Timer timer = null;
+                        var cancellation = default(CancellationTokenRegistration);
+                        try
+                        {
+                            if (timeout != Timeout.Infinite)
+                            {
+                                timer = new Timer(state => ((Action)state)(), stop, timeout, Timeout.Infinite);
+                            }
+                            cancellation = cancellationToken.Register(stop);
+                            await ready.ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            timer?.Dispose();
+                            cancellation.Dispose();
+                        }
+                    }
+                }
+
+                response = await ready.ConfigureAwait(false);
+            }
+            catch
+            {
+                Requests.TryRemove(request.MsgId, out RpcRequest failed);
+                throw;
+            }
+
+            // NoResponse means that no response came: the request timed out, unless it was cancelled or did not wait
+            // for its response (a timeout of 0). Removing it discards a late response. A response that won has
+            // removed its request already. This runs before the caller resumes, so the caller sees both
+            if (ReferenceEquals(response, NoResponse))
+            {
+                Requests.TryRemove(request.MsgId, out RpcRequest unanswered);
+                if (waitsForResponse && !cancellationToken.IsCancellationRequested)
+                {
+                    Statistics.Timeout();
+                }
+            }
+
+            return response;
+        }
+
+        bool WriteProtocolV1(MessageType msgType, ulong msgId, byte[] msg, ulong responseMsgId, int timeout, long sending)
+        {
+            // Dispose sets the property to null, and closes the buffer only under the send lock
+            var writeBuffer = WriteBuffer;
+            if (Disposed || writeBuffer == null)
             {
                 return false;
             }
 
-            if (WriteBuffer.ShuttingDown)
-            {
-                return false;
-            }
+            // A request waits for the send lock and for room up to the caller's timeout. A reply, or a request
+            // that does not wait for its response (a timeout of 0), waits for room up to 1 s a packet
+            var waitsForCaller = msgType == MessageType.RpcRequest && (timeout > 0 || timeout == Timeout.Infinite);
 
             // Send the request packets
-            lock (lock_sendQ)
+            var locked = false;
+            try
             {
+                if (waitsForCaller)
+                {
+                    locked = Monitor.TryEnter(lock_sendQ) || Monitor.TryEnter(lock_sendQ, RemainingTimeout(timeout, sending));
+                }
+                else
+                {
+                    Monitor.Enter(lock_sendQ, ref locked);
+                }
+
+                if (!locked)
+                {
+                    if (!Disposed)
+                    {
+                        Statistics.Timeout();
+                    }
+                    return false;
+                }
+
+                // Nothing more is sent once Dispose has begun
+                if (Disposed)
+                {
+                    return false;
+                }
+
                 // Split message into correct packet size
                 int i = 0;
                 int left = msg?.Length ?? 0;
@@ -865,7 +1106,7 @@ namespace SharedMemory
 
                 while (true)
                 {
-                    if (WriteBuffer.ShuttingDown)
+                    if (writeBuffer.ShuttingDown || Disposed)
                     {
                         return false;
                     }
@@ -905,11 +1146,36 @@ namespace SharedMemory
                     }
 
                     Statistics.StartWaitWrite();
-                    var bytes = WriteBuffer.Write((ptr) =>
+                    Func<IntPtr, int> writePacket = (ptr) =>
                     {
                         FastStructure.WriteBytes(ptr, pMsg, 0, pMsg.Length);
                         return pMsg.Length;
-                    }, 1000);
+                    };
+
+                    // Write at once if there is room; otherwise wait for it in slices, so that a Dispose, or the channel's
+                    // owner closing it, ends the wait
+                    var bytes = writeBuffer.Write(writePacket, 0);
+                    var waiting = bytes == 0 ? Stopwatch.GetTimestamp() : 0;
+                    while (bytes == 0 && !Disposed && !writeBuffer.ShuttingDown)
+                    {
+                        var wait = waitsForCaller ? RemainingTimeout(timeout, sending) : RemainingTimeout(1000, waiting);
+                        var lastSlice = wait >= 0 && wait <= roomWaitSliceMs;
+                        bytes = writeBuffer.Write(writePacket, lastSlice ? wait : roomWaitSliceMs);
+                        if (lastSlice)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (bytes == 0)
+                    {
+                        // No room in time: fail the message rather than send the rest of it with a packet missing
+                        if (!Disposed && !writeBuffer.ShuttingDown)
+                        {
+                            Statistics.Timeout();
+                        }
+                        return false;
+                    }
 
                     Statistics.WritePacket(bytes - protocolLength);
 
@@ -920,12 +1186,49 @@ namespace SharedMemory
                     currentPacket++;
                 }
             }
+            finally
+            {
+                if (locked)
+                {
+                    Monitor.Exit(lock_sendQ);
+                }
+            }
 
             return true;
         }
 
-        private bool m_ReadThreadIsReading = false;
-        private object m_ReadThreadIsReadingLock = new object();
+        static int RemainingTimeout(int timeout, long started)
+        {
+            return timeout < 0 ? timeout : (int)Math.Max(0, timeout - (Stopwatch.GetTimestamp() - started) * 1000 / Stopwatch.Frequency);
+        }
+
+        // Completes a request, from the read thread or Dispose, unless its timeout or cancellation came first. Code
+        // awaiting the response runs on the thread pool: ResponseReady runs its continuations asynchronously, and on
+        // .NET Framework 4.5, which cannot, the completion itself moves to the pool. A request from a blocking
+        // RemoteRequest completes where it is, as its caller has no code to run there
+        void CompleteRequest(RpcRequest request, RpcResponse response, bool countIfLate)
+        {
+            request.IsSuccess = response.Success;
+#if !(NET46_OR_GREATER || NETSTANDARD)
+            if (request.ContinuesOnThreadPool)
+            {
+                Task.Run(() => TryCompleteRequest(request, response, countIfLate));
+                return;
+            }
+#endif
+            TryCompleteRequest(request, response, countIfLate);
+        }
+
+        void TryCompleteRequest(RpcRequest request, RpcResponse response, bool countIfLate)
+        {
+            if (!request.ResponseReady.TrySetResult(response) && countIfLate)
+            {
+                // Its request timed out or was cancelled meanwhile
+                Statistics.DiscardResponse(request.MsgId);
+            }
+        }
+
+        private RpcRequest partialRequest; // the incoming request still missing packets, used by the read thread only
 
         void ReadThreadV1()
         {
@@ -933,35 +1236,31 @@ namespace SharedMemory
             {
                 // Work with Local Variable to prevent NPE after dispose  
                 CircularBuffer l_TempReadBuffer = ReadBuffer;
+                var header = new RpcProtocolHeaderV1(); // the packet being read, whose message is dropped if handling it fails
+                var handling = false; // whether a fault came from handling a packet, rather than from the ring itself
 
-                while (true && !l_TempReadBuffer.ShuttingDown)
+                while (!Disposed && !l_TempReadBuffer.ShuttingDown)
                 {
-                    if (Interlocked.Read(ref _disposed) == 1)
-                        return;
-
-                    // Check If Reading must be stopped
-                    if (_needDisposeManagedResources)
-                    {
-                        DisposeManagedResources();
-                        return;
-                    }
-
-                    // Set Marker for Reading in Progress
-                    lock (m_ReadThreadIsReadingLock)
-                    {
-                        m_ReadThreadIsReading = true;
-                    }
-
                     try
                     {
+                        handling = false;
                         Statistics.StartWaitRead();
 
-                        l_TempReadBuffer.Read((ptr) =>
+                        Func<IntPtr, int> readPacket = (ptr) =>
                         {
                             int readLength = 0;
-                            var header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
+                            header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
+                            handling = true;
                             ptr = ptr + protocolLength;
                             readLength += protocolLength;
+
+                            // The peer sends one message at a time, so the first packet of a message means
+                            // that the request still missing packets will not get them
+                            if (header.CurrentPacket == 1 && partialRequest != null)
+                            {
+                                IncomingRequests.TryRemove(partialRequest.MsgId, out RpcRequest abandoned);
+                                partialRequest = null;
+                            }
 
                             RpcRequest request = null;
                             if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
@@ -973,16 +1272,21 @@ namespace SharedMemory
                                     return protocolLength;
                                 }
                             }
-                            else
+                            else if (header.CurrentPacket == 1)
                             {
                                 request = IncomingRequests.GetOrAdd(header.MsgId, new RpcRequest
                                 {
                                     MsgId = header.MsgId
                                 });
                             }
+                            else if (!IncomingRequests.TryGetValue(header.MsgId, out request))
+                            {
+                                // The start of this message was lost or discarded
+                                return protocolLength;
+                            }
 
                             int packetSize = header.PayloadSize < msgBufferLength ? header.PayloadSize :
-                                (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize % msgBufferLength);
+                                (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize - (header.TotalPackets - 1) * msgBufferLength);
 
                             if (header.PayloadSize > 0)
                             {
@@ -996,6 +1300,12 @@ namespace SharedMemory
                                 readLength += packetSize;
                             }
 
+                            request.PacketsReceived++;
+                            if (header.MsgType != MessageType.RpcResponse && header.MsgType != MessageType.ErrorInRpc)
+                            {
+                                partialRequest = header.CurrentPacket < header.TotalPackets ? request : null;
+                            }
+
                             if (header.CurrentPacket == header.TotalPackets)
                             {
                                 if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
@@ -1007,19 +1317,29 @@ namespace SharedMemory
                                     IncomingRequests.TryRemove(request.MsgId, out RpcRequest removed);
                                 }
 
+                                if (request.PacketsReceived != header.TotalPackets)
+                                {
+                                    // A packet of this message was lost: drop the message, and fail the request it answers
+                                    if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
+                                    {
+                                        CompleteRequest(request, new RpcResponse(false, null), false);
+                                    }
+
+                                    Statistics.ReadPacket(packetSize);
+                                    return protocolLength + packetSize;
+                                }
+
                                 // Full message is ready
 
                                 Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
 
                                 if (header.MsgType == MessageType.RpcResponse)
                                 {
-                                    request.IsSuccess = true;
-                                    request.ResponseReady.SetResult(new RpcResponse(request.IsSuccess, request.Data));
+                                    CompleteRequest(request, new RpcResponse(true, request.Data), true);
                                 }
                                 else if (header.MsgType == MessageType.ErrorInRpc)
                                 {
-                                    request.IsSuccess = false;
-                                    request.ResponseReady.SetResult(new RpcResponse(request.IsSuccess, request.Data));
+                                    CompleteRequest(request, new RpcResponse(false, request.Data), true);
                                 }
                                 else if (header.MsgType == MessageType.RpcRequest)
                                 {
@@ -1047,38 +1367,61 @@ namespace SharedMemory
                             Statistics.ReadPacket(packetSize);
 
                             return protocolLength + packetSize;
-                        }, 500);
-                    }
-                    finally
-                    {
-                        lock (m_ReadThreadIsReadingLock)
+                        };
+
+                        l_TempReadBuffer.Read((ptr) =>
                         {
-                            m_ReadThreadIsReading = false;
-                        }
+                            try
+                            {
+                                return readPacket(ptr);
+                            }
+                            finally
+                            {
+                                // A fault after this, in giving the node back, is the ring's
+                                handling = false;
+                            }
+                        }, readWaitMs);
+                    }
+                    catch (Exception) when (handling)
+                    {
+                        // Handling the packet failed, as on a malformed header: drop its message and read on. A fault
+                        // in the ring itself still ends the read thread, which would otherwise meet it again at once
+                        DropMessage(header);
                     }
                 }
             }
             finally
             {
-                // Make sure that Dispose ManageResource has been progressed
-                if (_needDisposeManagedResources)
-                {
-                    DisposeManagedResources();
-                }
+                // Dispose closes the buffers once the read thread has stopped
+                readStopped.Set();
             }
         }
 
-        private int _processCount = 0;
-        private object _processLock = new object();
+        // Drops the message of a packet that could not be handled, and fails the request that a dropped response answers
+        void DropMessage(RpcProtocolHeaderV1 header)
+        {
+            if (partialRequest != null)
+            {
+                IncomingRequests.TryRemove(partialRequest.MsgId, out RpcRequest abandoned);
+                partialRequest = null;
+            }
+
+            RpcRequest dropped;
+            if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
+            {
+                if (Requests.TryRemove(header.ResponseId, out dropped))
+                {
+                    CompleteRequest(dropped, new RpcResponse(false, null), false);
+                }
+            }
+            else
+            {
+                IncomingRequests.TryRemove(header.MsgId, out dropped);
+            }
+        }
 
         async Task ProcessCallHandler(RpcRequest request, CancellationToken cancellationToken = default)
         {
-            // Mark as processing
-            lock (_processLock)
-            {
-                _processCount++;
-            }
-
             try
             {
 
@@ -1113,19 +1456,6 @@ namespace SharedMemory
                 await SendMessage(MessageType.ErrorInRpc, CreateMessageRequest(), null, request.MsgId)
                     .ConfigureAwait(false);
             }
-            finally
-            {
-                lock (_processLock)
-                {
-                    _processCount--;
-                }
-
-                // Make sure that ManagedResources are disposed if needed
-                if (_needDisposeManagedResources)
-                {
-                    DisposeManagedResources();
-                }
-            }
         }
 
         #region IDisposable
@@ -1137,19 +1467,37 @@ namespace SharedMemory
         /// <exception cref="InvalidOperationException">Thrown if the underlying buffers have been closed by the channel owner</exception>
         protected void ThrowIfDisposedOrShutdown()
         {
-            if (Disposed)
+            // Dispose closes the buffers only once no call here is looking at them. The exception is thrown after
+            // that, so that Dispose does not wait for the caller's handlers
+            Exception failure = null;
+            Interlocked.Increment(ref buffersInUse);
+            try
             {
-                throw new ObjectDisposedException("RpcBuffer");
+                if (Disposed)
+                {
+                    failure = new ObjectDisposedException("RpcBuffer");
+                }
+                else if (ReadBuffer.ShuttingDown || WriteBuffer.ShuttingDown)
+                {
+                    failure = new InvalidOperationException("Channel owner has closed buffers");
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref buffersInUse);
             }
 
-            if (ReadBuffer.ShuttingDown || WriteBuffer.ShuttingDown)
+            if (failure != null)
             {
-                throw new InvalidOperationException("Channel owner has closed buffers");
+                throw failure;
             }
         }
 
         /// <summary>
-        /// Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
+        /// Closes the channel. Requests still waiting for a response complete at once, with <see cref="RpcResponse.Success"/> false.
+        /// Waits up to about 1 s in all for the thread that reads the buffer to stop and for a send under way to end, then closes the
+        /// buffers; past that, they close in the background once they are free (see <see cref="DisposeFinished"/>). It does not wait
+        /// for request handlers still running, so their replies may not be sent.
         /// </summary>
         public void Dispose()
         {
@@ -1162,77 +1510,90 @@ namespace SharedMemory
         /// <param name="disposeManagedResources">true to dispose of managed resources as well as unmanaged.</param>
         protected virtual void Dispose(bool disposeManagedResources)
         {
-            if (Disposed)
+            if (!disposeManagedResources)
             {
                 return;
             }
 
-            if (disposeManagedResources)
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
             {
-                DisposeManagedResources();   
+                // Another call is disposing: wait for it, as for this one
+                SpinWait.SpinUntil(() => DisposeFinished, disposeWaitMs);
+                return;
             }
-        }
 
-        private bool _needDisposeManagedResources = false;
-
-        private void DisposeManagedResources()
-        {
-            lock (_processLock)
+            // Requests still waiting for a response get none now
+            foreach (var pending in Requests)
             {
-                lock (m_ReadThreadIsReadingLock)
+                if (Requests.TryRemove(pending.Key, out RpcRequest failed))
                 {
-                    // Check if dispose is possible otherwise
-                    // mark for dispose later
-                    if (_processCount > 0)
-                    {
-                        _needDisposeManagedResources = true;
-                        return;
-                    }
-
-                    if (m_ReadThreadIsReading)
-                    {
-                        _needDisposeManagedResources = true;
-                        return;
-                    }
-
-                    // Disconnect handle to prevent processing
-                    RemoteCallHandler = null;
-                    AsyncRemoteCallHandler = null;
-                    RemoteCallHandlerWithResult = null;
-                    AsyncRemoteCallHandlerWithResult = null;
-                    _needDisposeManagedResources = false;
+                    CompleteRequest(failed, new RpcResponse(false, null), false);
                 }
             }
 
-            // Mark as Disposed first otherwise ReadThread has NullPointerException because
-            // ReadBuffer is already null but Disposed is false
-            long l_OldValue = Interlocked.CompareExchange(ref _disposed, 1, 0);
-            
-            // Make sure that only one Thread is processing the dispose
-            if (l_OldValue != 0)
-                return;
-
-            if (WriteBuffer != null)
+            // The read thread stops at its next wait for a packet, and a send at its next wait for room. Neither runs
+            // user code, so this seldom takes long; if it does, the buffers close once both have let go
+            if (!TryDisposeManagedResources(disposeWaitMs))
             {
-                WriteBuffer.Dispose();
-                WriteBuffer = null;
+                Task.Run(() => TryDisposeManagedResources(Timeout.Infinite));
+            }
+        }
+
+        // Closes the buffers and the master mutex, once the read thread has stopped, no send is under way and no caller
+        // is checking them in ThrowIfDisposedOrShutdown. Disposed is set first, so no new caller looks at them
+        private bool TryDisposeManagedResources(int timeout)
+        {
+            var started = Stopwatch.GetTimestamp();
+            if (!readStopped.Wait(timeout))
+            {
+                return false;
             }
 
-            if (ReadBuffer != null)
+            var locked = false;
+            try
             {
-                ReadBuffer.Dispose();
-                ReadBuffer = null;
-            }
+                Monitor.TryEnter(lock_sendQ, RemainingTimeout(timeout, started), ref locked);
+                if (!locked || !SpinWait.SpinUntil(() => Volatile.Read(ref buffersInUse) == 0, RemainingTimeout(timeout, started)))
+                {
+                    return false;
+                }
 
-            if (masterMutex != null)
+                // Disconnect handle to prevent processing
+                RemoteCallHandler = null;
+                AsyncRemoteCallHandler = null;
+                RemoteCallHandlerWithResult = null;
+                AsyncRemoteCallHandlerWithResult = null;
+
+                if (WriteBuffer != null)
+                {
+                    WriteBuffer.Dispose();
+                    WriteBuffer = null;
+                }
+
+                if (ReadBuffer != null)
+                {
+                    ReadBuffer.Dispose();
+                    ReadBuffer = null;
+                }
+
+                if (masterMutex != null)
+                {
+                    masterMutex.Close();
+                    masterMutex.Dispose();
+                    masterMutex = null;
+                }
+
+                // Mark as DisposeFinished
+                Interlocked.Exchange(ref _disposed, 2);
+                return true;
+            }
+            finally
             {
-                masterMutex.Close();
-                masterMutex.Dispose();
-                masterMutex = null;
+                if (locked)
+                {
+                    Monitor.Exit(lock_sendQ);
+                }
             }
-
-            // Mark as DisposeFinished
-            Interlocked.Exchange(ref _disposed, 2);
         }
 
         #endregion
