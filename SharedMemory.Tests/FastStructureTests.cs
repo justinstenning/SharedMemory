@@ -162,7 +162,7 @@ namespace SharedMemoryTests
 
             // Assert that the reading and writing result in same structure
             ComplexStructure m = FastStructure.PtrToStructure<ComplexStructure>(mem);
-            Assert.AreEqual(n, m);
+            CollectionAssert.AreEqual(FastStructure.ToBytes(ref n), FastStructure.ToBytes(ref m));
             Assert.AreEqual(n.Compatible.Integer1, m.Compatible.Integer1);
             Assert.AreEqual(n.Compatible.Bookend, m.Compatible.Bookend);
             unsafe
@@ -173,7 +173,7 @@ namespace SharedMemoryTests
 
             // Assert that Marshal.PtrToStructure is compatible
             m = (ComplexStructure)Marshal.PtrToStructure(mem, typeof(ComplexStructure));
-            Assert.AreEqual(n, m);
+            CollectionAssert.AreEqual(FastStructure.ToBytes(ref n), FastStructure.ToBytes(ref m));
             Assert.AreEqual(n.Compatible.Integer1, m.Compatible.Integer1);
             Assert.AreEqual(n.Compatible.Bookend, m.Compatible.Bookend);
             unsafe

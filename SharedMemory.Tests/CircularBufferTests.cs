@@ -588,7 +588,8 @@ namespace SharedMemoryTests
                 Action writer = () =>
                 {
                     int writeTimeouts = 0;
-                    long totalBytesWritten = WriteMultiple(producer, data, out writeTimeouts, 1);
+                    // 20 ms outlasts the reader's 1 ms timeout plus a 15.6 ms Windows timer tick, so the reader times out on every OS
+                    long totalBytesWritten = WriteMultiple(producer, data, out writeTimeouts, 20);
                 };
 
                 Action reader = () =>

@@ -84,15 +84,17 @@ namespace SharedMemory
                 return new RpcResponse(false, null);
             }
 
+            // WaitAsync is called as a static method, not as task.WaitAsync: in a build for .NET 6 or later, task.WaitAsync
+            // binds to Task<T>.WaitAsync, which throws TaskCanceledException where this one returns an unsuccessful response.
             if (millisecondsTimeout == Timeout.Infinite)
             {
-                return await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return await WaitAsync(task, cancellationToken).ConfigureAwait(false);
             }
 
             using (var cts = new CancellationTokenSource(millisecondsTimeout))
             {
                 var timeoutToken = cts.Token;
-                return await task.WaitAsync(cancellationToken).WaitAsync(timeoutToken).ConfigureAwait(false);
+                return await WaitAsync(WaitAsync(task, cancellationToken), timeoutToken).ConfigureAwait(false);
             }
         }
 
@@ -220,7 +222,7 @@ namespace SharedMemory
         internal RpcRequest(bool continuesOnThreadPool)
         {
             ContinuesOnThreadPool = continuesOnThreadPool;
-#if NET46_OR_GREATER || NETSTANDARD
+#if NET46_OR_GREATER || NETSTANDARD || NETCOREAPP
             ResponseReady = continuesOnThreadPool
                 ? new TaskCompletionSource<RpcResponse>(TaskCreationOptions.RunContinuationsAsynchronously)
                 : new TaskCompletionSource<RpcResponse>();
@@ -750,9 +752,23 @@ namespace SharedMemory
                 new[] { typeof(MessageType), typeof(RpcRequest), typeof(byte[]), typeof(ulong), typeof(int), typeof(CancellationToken) }, null)
                 .DeclaringType != typeof(RpcBuffer);
 
+#if NET10_0_OR_GREATER
+            // On Unix a named mutex that a thread holds keeps its name until that thread releases it or ends, even once every handle has
+            // been closed, and Dispose can close the owner's on its read thread. Which instance creates the mutex is all the election
+            // needs, so there the owner creates it without taking it.
+            bool takeMutex = OperatingSystem.IsWindows();
+            bool createdNew;
+            if (takeMutex)
+                masterMutex = new Mutex(true, name + "SharedMemory_MasterMutex", out createdNew);
+            else
+                masterMutex = CreateUnixElectionMutex(name + "SharedMemory_MasterMutex", out createdNew);
+
+            if (createdNew && (!takeMutex || masterMutex.WaitOne(500)))
+#else
             masterMutex = new Mutex(true, name + "SharedMemory_MasterMutex", out bool createdNew);
 
             if (createdNew && masterMutex.WaitOne(500))
+#endif
             {
                 instanceType = InstanceType.Master;
             }
@@ -1209,7 +1225,7 @@ namespace SharedMemory
         void CompleteRequest(RpcRequest request, RpcResponse response, bool countIfLate)
         {
             request.IsSuccess = response.Success;
-#if !(NET46_OR_GREATER || NETSTANDARD)
+#if !(NET46_OR_GREATER || NETSTANDARD || NETCOREAPP)
             if (request.ContinuesOnThreadPool)
             {
                 Task.Run(() => TryCompleteRequest(request, response, countIfLate));
@@ -1597,5 +1613,34 @@ namespace SharedMemory
         }
 
         #endregion
+
+#if NET10_0_OR_GREATER
+        /// <summary>
+        /// Creates or opens the election mutex on Unix, unowned, with the scope of the channel's buffers: one user's processes in every POSIX
+        /// session for a name without a prefix or with <c>Local\</c>, every process on the machine for a <c>Global\</c> name.
+        /// </summary>
+        /// <remarks>
+        /// <para>Without options .NET gives a named mutex on Unix one POSIX session's scope, and every terminal is its own session, so two
+        /// programs started from two terminals would both become owners. <c>Local\</c> is dropped because .NET refuses it beside
+        /// <c>CurrentSessionOnly = false</c>; the buffers' files treat <c>Local\X</c> and <c>X</c> as one name too.</para>
+        /// <para>A <c>Global\</c> name is not given <c>CurrentUserOnly</c>: .NET would then make <c>Global\X</c> the same mutex as <c>X</c>,
+        /// whose buffers are other files, and an RpcBuffer on one would open the other's channel instead of owning its own.</para>
+        /// <para>On macOS the name ends with a hash of itself (<see cref="UnixFiles.ElectionMutexName"/>): .NET's mutex files there are on a volume that
+        /// folds case, where <c>TEST</c> and <c>test</c> would share one election, while their buffers are separate.</para>
+        /// </remarks>
+        static Mutex CreateUnixElectionMutex(string mutexName, out bool createdNew)
+        {
+            const string LocalScope = "Local\\";
+            bool global = mutexName.StartsWith("Global\\", StringComparison.Ordinal);
+            // Only Local\X with no other backslash: Local\Global\X would become X's mutex, while its buffers are other files. Kept whole, it is
+            // refused by .NET, as a backslash after the prefix is on Windows.
+            if (mutexName.StartsWith(LocalScope, StringComparison.Ordinal) && mutexName.IndexOf('\\', LocalScope.Length) < 0)
+                mutexName = mutexName.Substring(LocalScope.Length);
+            if (OperatingSystem.IsMacOS())
+                mutexName = UnixFiles.ElectionMutexName(mutexName);
+            var options = new NamedWaitHandleOptions { CurrentUserOnly = !global, CurrentSessionOnly = false };
+            return new Mutex(false, mutexName, options, out createdNew);
+        }
+#endif
     }
 }

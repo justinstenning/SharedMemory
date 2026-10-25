@@ -58,12 +58,17 @@ namespace SharedMemory
         /// <summary>
         /// An event handle used for blocking write operations.
         /// </summary>
+        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. Writes still block there.</remarks>
         protected EventWaitHandle WriteWaitEvent { get; private set; }
         
         /// <summary>
         /// An event handle used for blocking read operations.
         /// </summary>
+        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. Reads still block there.</remarks>
         protected EventWaitHandle ReadWaitEvent { get; private set; }
+
+        private readonly NamedEvent _writeEvent;
+        private readonly NamedEvent _readEvent;
 
         #region Constructors
 
@@ -76,8 +81,10 @@ namespace SharedMemory
         protected BufferWithLocks(string name, long bufferSize, bool ownsSharedMemory)
             : base(name, bufferSize, ownsSharedMemory)
         {
-            WriteWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_write");
-            ReadWaitEvent = new EventWaitHandle(true, EventResetMode.ManualReset, Name + "_evt_read");
+            _writeEvent = NamedEvent.CreateOrOpen(Name + "_evt_write", true, EventResetMode.ManualReset, () => WriteWaitEvent);
+            WriteWaitEvent = _writeEvent.WaitHandle;
+            _readEvent = NamedEvent.CreateOrOpen(Name + "_evt_read", true, EventResetMode.ManualReset, () => ReadWaitEvent);
+            ReadWaitEvent = _readEvent.WaitHandle;
         }
 
         #endregion
@@ -111,9 +118,9 @@ namespace SharedMemory
         /// <remarks>If <paramref name="millisecondsTimeout"/> is <see cref="System.Threading.Timeout.Infinite" /> (-1), then attempting to acquire a read lock after acquiring a write lock on the same thread will result in a deadlock.</remarks>
         public bool AcquireReadLock(int millisecondsTimeout = System.Threading.Timeout.Infinite)
         {
-            if (!ReadWaitEvent.WaitOne(millisecondsTimeout))
+            if (!_readEvent.WaitOne(millisecondsTimeout))
                 return false;
-            WriteWaitEvent.Reset();
+            _writeEvent.Reset();
             return true;
         }
 
@@ -122,7 +129,7 @@ namespace SharedMemory
         /// </summary>
         public void ReleaseReadLock()
         {
-            WriteWaitEvent.Set();
+            _writeEvent.Set();
         }
 
         /// <summary>
@@ -134,9 +141,9 @@ namespace SharedMemory
         /// <remarks>If <paramref name="millisecondsTimeout"/> is <see cref="System.Threading.Timeout.Infinite" /> (-1), then attempting to acquire a write lock after acquiring a read lock on the same thread will result in a deadlock.</remarks>
         public bool AcquireWriteLock(int millisecondsTimeout = System.Threading.Timeout.Infinite)
         {
-            if (!WriteWaitEvent.WaitOne(millisecondsTimeout))
+            if (!_writeEvent.WaitOne(millisecondsTimeout))
                 return false;
-            ReadWaitEvent.Reset();
+            _readEvent.Reset();
             return true;
         }
 
@@ -145,7 +152,7 @@ namespace SharedMemory
         /// </summary>
         public void ReleaseWriteLock()
         {
-            ReadWaitEvent.Set();
+            _readEvent.Set();
         }
 
         #endregion
@@ -157,7 +164,7 @@ namespace SharedMemory
         /// </summary>
         private void WriteWait()
         {
-            if (!WriteWaitEvent.WaitOne(ReadWriteTimeout))
+            if (!_writeEvent.WaitOne(ReadWriteTimeout))
                 throw new TimeoutException("The write operation timed out waiting for the write lock WaitEvent. Check your usage of AcquireWriteLock/ReleaseWriteLock and AcquireReadLock/ReleaseReadLock.");
         }
 
@@ -217,7 +224,7 @@ namespace SharedMemory
         /// </summary>
         private void ReadWait()
         {
-            if (!ReadWaitEvent.WaitOne(ReadWriteTimeout))
+            if (!_readEvent.WaitOne(ReadWriteTimeout))
                 throw new TimeoutException("The read operation timed out waiting for the read lock WaitEvent. Check your usage of AcquireWriteLock/ReleaseWriteLock and AcquireReadLock/ReleaseReadLock.");
         }
 
@@ -280,8 +287,13 @@ namespace SharedMemory
         {
             if (disposeManagedResources)
             {
-                (WriteWaitEvent as IDisposable).Dispose();
-                (ReadWaitEvent as IDisposable).Dispose();
+                // Null on Linux and macOS
+                if (WriteWaitEvent != null)
+                    (WriteWaitEvent as IDisposable).Dispose();
+                if (ReadWaitEvent != null)
+                    (ReadWaitEvent as IDisposable).Dispose();
+                _writeEvent.Dispose();
+                _readEvent.Dispose();
             }
             base.Dispose(disposeManagedResources);
         }

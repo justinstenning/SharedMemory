@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>SharedMemoryTests.RpcPeer</RootNamespace>
+
+    <IsPackable>false</IsPackable>
+
+    <!-- The tests start the peer from rpcpeer\ in their own output folder. -->
+    <OutputPath>..\SharedMemory.Tests\bin\$(Configuration)\$(TargetFramework)\rpcpeer\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <Import Project="..\SharedMemory.Tests\LibraryTargetFramework.props" />
+
+  <ItemGroup>
+    <Compile Include="..\SharedMemory.Tests\Support\PeerProtocol.cs" Link="Support\PeerProtocol.cs" />
+    <Compile Include="..\SharedMemory.Tests\RpcEndpoint.cs" Link="RpcEndpoint.cs" />
+  </ItemGroup>
+
+</Project>

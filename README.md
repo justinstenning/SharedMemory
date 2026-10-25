@@ -8,19 +8,105 @@ C# shared memory classes for sharing data between processes (Array, Buffer, Circ
 About
 -----
 
-The SharedMemory class library provides a set of C# classes that utilise memory mapped files for fast low-level inter-process communication (IPC). Originally only for sharing data between processes, but now also with a simple RPC implementation.
+SharedMemory is a set of C# classes for fast inter-process communication (IPC) between processes on the same machine: a shared array, a buffer you can read and write, a circular buffer for passing messages, and a simple RPC channel built on the circular buffer. The processes share the memory directly, with no socket or pipe in between.
 
-The library uses the .NET MemoryMappedFile class in .NET 4.0+, and implements its own wrapper class for .NET 3.5.
+On Windows the library uses .NET's named memory-mapped files and named events, with a wrapper of its own for .NET 3.5. .NET doesn't support those on Linux or macOS, so from 2.4.0 the `net10.0` build brings its own there: files in `/dev/shm` on Linux and POSIX shared memory on macOS, with events the library implements itself. [Platforms](#platforms) has the details.
 
 Classes
 -------
 
- * `SharedMemory.SharedBuffer` - an abstract base class that wraps a memory mapped file, exposing the read/write operations and implementing a small header to allow clients to open the shared buffer without knowing the size beforehand.
- * `SharedMemory.BufferWithLocks` - an abstract class that extends SharedMemory.SharedBuffer with a read gate and a write gate, two named EventWaitHandles that `AcquireReadLock`, `AcquireWriteLock` and their `Release` methods close and open. They are gates, not exclusive locks: see [Read and write locks](#read-and-write-locks).
+ * `SharedMemory.SharedBuffer` - an abstract base class that wraps a named block of shared memory, exposing the read/write operations and implementing a small header to allow clients to open the shared buffer without knowing the size beforehand.
+ * `SharedMemory.BufferWithLocks` - an abstract class that extends SharedMemory.SharedBuffer with a read gate and a write gate, two named events that `AcquireReadLock`, `AcquireWriteLock` and their `Release` methods close and open. They are gates, not exclusive locks: see [Read and write locks](#read-and-write-locks).
  * `SharedMemory.SharedArray` - a simple generic array implementation utilising a shared memory buffer. Inherits from SharedMemory.BufferWithLocks, so its reads and writes wait at its gates.
  * `SharedMemory.BufferReadWrite` - provides read/write access to a shared memory buffer, with various overloads to support reading and writing structures, copying to and from IntPtr and so on. Inherits from SharedMemory.BufferWithLocks, so its reads and writes wait at its gates.
- * `SharedMemory.CircularBuffer` - lock-free FIFO circular buffer implementation (aka ring buffer). Supporting 2 or more nodes, this implementation supports multiple readers and writers, which compete for items: see [Circular buffer readers and capacity](#circular-buffer-readers-and-capacity). The lock-free approach is implemented using Interlocked.CompareExchange and EventWaitHandles.
- * `SharedMemory.RpcBuffer` - simple bi-directional RPC channel using `SharedMemory.CircularBuffer`. Supports a master+slave pair per channel. Only available in .NET 4.5+ / .NET Standard 2.0
+ * `SharedMemory.CircularBuffer` - lock-free FIFO circular buffer implementation (aka ring buffer). Supporting 2 or more nodes, this implementation supports multiple readers and writers, which compete for items: see [Circular buffer readers and capacity](#circular-buffer-readers-and-capacity). The lock-free approach is implemented using Interlocked.CompareExchange and named events.
+ * `SharedMemory.RpcBuffer` - simple bi-directional RPC channel using `SharedMemory.CircularBuffer`. Each channel has two ends: the owner, which creates it, and the opener, which joins it. Every build has it except the .NET Framework 3.5 and 4.0 ones.
+
+Platforms
+---------
+
+Version 2.4.0 adds Linux and macOS through a new `net10.0` build, so to use the library there your app needs to target .NET 10 or later. An app on an older .NET picks up the `netstandard2.0` or `netstandard2.1` build instead, and on Linux and macOS those throw `PlatformNotSupportedException`.
+
+| Platform | What you get |
+| -------- | ------------ |
+| Windows | Every build, as before |
+| Linux x64 and arm64 | The `net10.0` build, tested |
+| macOS 14.4 or later on Apple silicon | The `net10.0` build, tested |
+| macOS 14.4 or later on Intel | The `net10.0` build, but not tested |
+| Anything else | `PlatformNotSupportedException` |
+
+The Linux tests have run on glibc-based distributions such as Ubuntu. Alpine and other musl-based distributions haven't been tested yet.
+
+macOS versions before 14.4 don't have the system calls the library waits with (`os_sync_wait_on_address` and the calls that go with it). There, every class that waits throws `PlatformNotSupportedException` naming the missing calls, and that's every class in the library except your own subclasses of `SharedBuffer`.
+
+On any other platform, such as 32-bit Linux, FreeBSD, iOS or Android, the exception tells you the OS, its version and the process architecture.
+
+### Names on Linux and macOS
+
+On Linux and macOS, a name with no prefix, or with `Local\`, belongs to your user account. Each user has their own set of these names, so if two users each create a buffer called `TEST`, they get two separate buffers. Any of your own processes can open your names, whichever terminal, SSH login or session it was started from. On Windows these names belong to a session instead, but the terminals you open on your desktop all share one, so on every platform two programs started from two terminals find each other.
+
+A `Global\` name is one name for the whole machine, as on Windows, but for now only the user who created a buffer can read or write it. Processes running as different users can't share memory through it, so on Linux and macOS a `Global\` name works like an unprefixed one, except that while you hold it, another user who tries to use the name gets an exception. It's there so that code written for Windows runs unchanged.
+
+### Where the memory lives
+
+On Linux, each buffer is a file in `/dev/shm`, so `ls /dev/shm` shows you what's in use. A name becomes `SharedMemory.u{uid}.{name}`, or `SharedMemory.global.{name}` for a `Global\` name, and only you can read or write the file (mode 0600). The events a buffer uses are small 64-byte files next to it, named as Windows names them: `{name}_evt_write`, `{name}_evt_read`, `{name}_evt_dataexists` and `{name}_evt_nodeavail`. The library escapes names to make valid file names (`a/b%c` becomes `a%2Fb%25c`), and shortens a very long name, adding a hash.
+
+The library reserves a buffer's full size when it creates it, so if `/dev/shm` doesn't have room you get an `IOException` straight away, rather than a crash part-way through a write later on.
+
+On macOS, each buffer and event is a POSIX shared memory object (`shm_open`). macOS has no way to list those, so the library keeps a small lock file for each one, in `/var/tmp/.SharedMemory-uid{uid}/` for your own names and in `/var/tmp/.SharedMemory-global/` for `Global\` names. A lock file is named after its buffer, followed by `~` and a hash. The hash is there because the macOS file system ignores case. Without it, `TEST` and `test` would collide, though on Windows and Linux they're two different buffers.
+
+### When a process ends
+
+What a process leaves behind depends on how it ends:
+
+ * When the last process using a buffer closes or disposes it, the library removes the buffer's files, just as Windows frees the memory when the last handle closes.
+ * When a process returns from `Main` or calls `Environment.Exit`, the library cleans up every buffer the process still has open, whether you disposed it or not.
+ * When a process is killed, crashes with an unhandled exception, or is stopped by a signal such as SIGTERM or Ctrl+C, nothing gets cleaned up. Its files stay until some process next creates or opens the same name. That removes them, so a create succeeds and an open throws `FileNotFoundException`. Until then, the files still take up memory. On Linux they last until the user logs out or the machine restarts. On macOS the shared memory objects last until logout or a restart, and the lock files in `/var/tmp` survive restarts.
+
+If your app can be stopped with SIGTERM or Ctrl+C, catch those signals and return from `Main`, so that the cleanup runs. The .NET Generic Host already does this, so if your app runs through `Host.Run` or `RunAsync` there's nothing more to do. Otherwise, something like this works:
+
+    using System.Runtime.InteropServices;
+
+    var stopping = new CancellationTokenSource();
+    void Stop(PosixSignalContext context)
+    {
+        context.Cancel = true;   // don't end the process here: return from Main instead
+        stopping.Cancel();
+    }
+    using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, Stop);
+    using var sigint = PosixSignalRegistration.Create(PosixSignal.SIGINT, Stop);
+
+    using var buffer = new SharedMemory.CircularBuffer("MyBuffer", nodeCount: 4, nodeBufferSize: 1024);
+    while (!stopping.IsCancellationRequested)
+    {
+        // work with the buffer
+    }
+
+### When users log out
+
+On Linux, systemd removes every file a user owns in `/dev/shm` when that user's last session ends, including buffers that are still in use. This is the `RemoveIPC=yes` setting, and it's on by default. It matters for anything that keeps running after you log out, such as a service running under an ordinary user account. The process can still use the buffers it has, but nothing else can open them, and creating the same name again makes a new, separate buffer. Any one of these avoids it:
+
+ * run `loginctl enable-linger {user}`, so that systemd doesn't treat the user as logged out;
+ * run the processes as a system user (uid 999 or below by default), which systemd leaves alone;
+ * set `RemoveIPC=no` in `/etc/systemd/logind.conf`.
+
+macOS 12 and later do something similar. There, launchd removes a user's shared memory objects when the user logs out - although this hasn't been tested here. After it happens, opening the name throws `FileNotFoundException`. If your processes need to keep sharing memory after a logout, run them under an account of their own, such as a launch daemon's.
+
+### Another user's lock folder on macOS
+
+The first time you create a buffer with an unprefixed or `Local\` name, the library creates the folder `/var/tmp/.SharedMemory-uid{uid}`, which only you can read. Anyone can write to `/var/tmp`, so another local user could create that folder before you do. The library won't use a folder that belongs to someone else, so from then on every unprefixed or `Local\` name you use throws `UnauthorizedAccessException`, until an administrator deletes the folder.
+
+### Speed
+
+A round trip between two processes passing a message back and forth through two `CircularBuffer`s takes:
+
+ * about 3 µs on Linux x64 (AMD Ryzen 7 9800X3D);
+ * about 6 µs on macOS on an M1 Pro when macOS runs both processes on the performance cores, and about 36 µs when it runs them on the efficiency cores, which it sometimes does;
+ * the same on Windows as with 2.3.4.
+
+### Members that are null on Linux and macOS
+
+This only matters if you subclass the library's classes. The protected `BufferWithLocks.WriteWaitEvent` and `ReadWaitEvent`, and `CircularBuffer.DataExists` and `NodeAvailable`, are `EventWaitHandle`s on Windows only. On Linux and macOS they're null, because the library waits on events of its own there. `SharedBuffer.Mmf` and `View` are null on macOS, where there's no `MemoryMappedFile` behind a buffer. A subclass that uses any of them only works on Windows.
 
 Behaviour to know
 -----------------
@@ -28,6 +114,8 @@ Behaviour to know
 ### Circular buffer readers and capacity
 
 Readers of one `CircularBuffer` compete for items: each item goes to the one reader that claims its node first, not to every reader. For every reader to see every item, give each reader a buffer of its own.
+
+Broadcasting, where every reader sees every item, is on the roadmap as a mode of a new buffer type. You can follow it on [#8](https://github.com/justinstenning/SharedMemory/issues/8).
 
 A `CircularBuffer` created with `nodeCount` nodes holds at most `nodeCount - 1` unread items, because one node always stays free. A writer that finds no free node waits for a reader, up to its timeout, and then returns 0.
 
@@ -147,15 +235,16 @@ The output of the following examples is:
     Console.WriteLine("SharedMemory.RpcBuffer:");
     // Ensure a unique channel name
     var rpcName = "RpcTest" + Guid.NewGuid().ToString();
-    using (var rpcMaster = new RpcBuffer(rpcName))
-    using (var rpcSlave = new RpcBuffer(rpcName, (msgId, payload) =>
+    // The first instance on a channel is its owner; the second opens the owner's channel
+    using (var rpcOwner = new RpcBuffer(rpcName))
+    using (var rpcOpener = new RpcBuffer(rpcName, (msgId, payload) =>
     {
         // Add the two bytes together
         return BitConverter.GetBytes((payload[0] + payload[1]));
     }))
     {
         // Call the remote handler to add 123 and 10
-        var result = rpcMaster.RemoteRequest(new byte[] { 123, 10 });
+        var result = rpcOwner.RemoteRequest(new byte[] { 123, 10 });
         // Success is false if no response came within the timeout (30 s by default)
         if (result.Success)
             Console.WriteLine(BitConverter.ToInt32(result.Data, 0)); // outputs 133

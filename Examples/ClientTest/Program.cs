@@ -82,7 +82,7 @@ namespace ClientTest
                     bool finalLine = false;
                     for (; ; )
                     {
-                        int amount = theClient.Read(writeData, 100);
+                        int amount = theClient.Read(writeData, timeout: 100);
                         //int amount = theClient.Read<byte>(writeData, 100);
 
                         if (amount == 0)
