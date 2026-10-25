@@ -93,6 +93,13 @@ jobs:
           - { framework: net48, library: net47 }
           - { framework: net48, library: net4 }
           - { framework: net48, library: net35 }
+        # Linux and macOS test the net10.0 build, the only one that supports them. They come in through include, since
+        # another value on the os axis would also schedule the net48 entries there, and branch protection requires the
+        # Windows checks by the names this matrix gives them.
+        include:
+          - { os: ubuntu-latest, combination: { framework: net10.0, library: net10.0 } }
+          - { os: ubuntu-24.04-arm, combination: { framework: net10.0, library: net10.0 } }
+          - { os: macos-latest, combination: { framework: net10.0, library: net10.0 } }
     steps:
       - uses: actions/checkout@v7
 
@@ -101,9 +108,10 @@ jobs:
           global-json-file: global.json
 
       # The Load tests run against a time limit that .NET Framework misses about
-      # half the time, so CI leaves them out.
+      # half the time, so CI leaves them out. It also leaves out the Stress test, which
+      # runs for 60 s on Linux and macOS.
       - name: Test
-        run: dotnet test SharedMemory.Tests/SharedMemory.Tests.csproj -c Release -f ${{ matrix.combination.framework }} -p:LibraryTargetFramework=${{ matrix.combination.library }} --filter TestCategory!=Load --logger trx --results-directory TestResults
+        run: dotnet test SharedMemory.Tests/SharedMemory.Tests.csproj -c Release -f ${{ matrix.combination.framework }} -p:LibraryTargetFramework=${{ matrix.combination.library }} --filter "TestCategory!=Load&TestCategory!=Stress" --logger trx --results-directory TestResults
 
       - uses: actions/upload-artifact@v7
         if: always()
