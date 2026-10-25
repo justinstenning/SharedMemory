@@ -269,6 +269,9 @@ namespace SharedMemory
             /// Sleeps while the 4-byte word at <paramref name="address"/> holds <paramref name="value"/>, until a wake, a signal, or
             /// <paramref name="nanoseconds"/> pass; 0 nanoseconds waits without a timeout.
             /// </summary>
+            /// <param name="address">The word, in memory shared with the other processes.</param>
+            /// <param name="value">The value the word holds while the caller should sleep.</param>
+            /// <param name="nanoseconds">The timeout, relative; 0 for none.</param>
             /// <param name="error">errno when the call returns -1, else 0.</param>
             /// <returns>0 or more once woken or if the word already differs; -1 on a timeout (<see cref="ETIMEDOUT"/>), a signal (<see cref="EINTR"/>), or a failure.</returns>
             internal static int Wait(int* address, int value, ulong nanoseconds, out int error)
@@ -285,6 +288,8 @@ namespace SharedMemory
             /// <summary>
             /// Wakes one waiter on the word at <paramref name="address"/>, or all of them.
             /// </summary>
+            /// <param name="address">The word, in memory shared with the other processes.</param>
+            /// <param name="all">Whether to wake every waiter rather than one.</param>
             /// <param name="error">errno when the call returns -1, else 0.</param>
             /// <returns>0 or more; -1 with <see cref="ENOENT"/> if nobody waited there, or on a failure.</returns>
             internal static int Wake(int* address, bool all, out int error)

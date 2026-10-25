@@ -578,6 +578,9 @@ namespace SharedMemory
         /// Opens and maps the whole of the object <paramref name="objectName"/>, which the lock file <paramref name="path"/> names. Its size is a whole
         /// number of pages; <see cref="SharedBuffer"/> reads the buffer's own size from its header.
         /// </summary>
+        /// <param name="objectName">The object's name, as the lock file holds it.</param>
+        /// <param name="name">The buffer's or event's name, for the exceptions' messages.</param>
+        /// <param name="path">The lock file's path, for the <see cref="FileNotFoundException"/>.</param>
         /// <param name="emptyAllowed">Whether an object of 0 bytes, which cannot be mapped, gives an empty mapping rather than an <see cref="IOException"/>.</param>
         /// <exception cref="FileNotFoundException">The object is gone, though its lock file is held: launchd removes a user's objects when the user logs out.</exception>
         static Mapping OpenObject(string objectName, string name, string path, bool emptyAllowed)

@@ -2,6 +2,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.Versioning;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SharedMemory;
 
@@ -167,6 +168,8 @@ namespace SharedMemoryTests
         /// </summary>
         [TestMethod]
         [OSCondition(OperatingSystems.Linux | OperatingSystems.OSX)]
+        [SupportedOSPlatform("linux")]
+        [SupportedOSPlatform("macos")]
         [DataRow("dispose, then exit")]
         [DataRow("exit")]
         public void ProcessHoldingAChannelEnds_LeavesNoFiles(string ending)
