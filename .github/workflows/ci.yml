@@ -24,6 +24,7 @@ permissions:
 jobs:
   pack:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -80,6 +81,7 @@ jobs:
   test:
     name: test (${{ matrix.os }}, ${{ matrix.combination.framework }}, ${{ matrix.combination.library }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

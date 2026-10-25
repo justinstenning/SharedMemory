@@ -34,6 +34,15 @@ namespace SharedMemory
     /// <summary>
     /// A generic fixed-length shared memory array of structures with support for simple inter-process read/write synchronisation.
     /// </summary>
+    /// <remarks>
+    /// Shared memory holds each element in one layout in every process: the layout 64-bit .NET 10 gives it. So processes on
+    /// .NET Framework, .NET Core and .NET 5 or later can share structures holding a <see cref="DateTime"/> or a <see cref="decimal"/>.
+    /// Where the running runtime lays a structure out that way, it is copied as a block of memory; where it does not, as .NET
+    /// Framework does for those structures, it is copied field by field, which is slower. Structures holding an
+    /// <see cref="IntPtr"/>, a <see cref="UIntPtr"/>, a pointer, a generic structure, or a .NET structure other than
+    /// <see cref="DateTime"/>, <see cref="TimeSpan"/>, <see cref="decimal"/> and <see cref="Guid"/> keep the runtime's own
+    /// layout, which is not portable across bitness or runtimes.
+    /// </remarks>
     /// <typeparam name="T">The structure type that will be stored in the elements of this fixed array buffer.</typeparam>
 #if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
@@ -76,13 +85,23 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The name of the shared memory array to be created.</param>
         /// <param name="length">The number of elements to make room for within the shared memory array.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> elements of <typeparamref name="T"/> take more than <see cref="Int32.MaxValue"/> bytes -or- <paramref name="length"/> is less than 1.</exception>
         public SharedArray(string name, int length)
-            : base(name, Marshal.SizeOf(typeof(T)) * length, true)
+            : base(name, BufferSizeFor(length), true)
         {
             Length = length;
-            _elementSize = Marshal.SizeOf(typeof(T));
+            _elementSize = FastStructure.SizeOf<T>();
 
             Open();
+        }
+
+        private static long BufferSizeFor(int length)
+        {
+            // Sizes beyond Int32.MaxValue bytes used to wrap around
+            long size = (long)FastStructure.SizeOf<T>() * length;
+            if (size > int.MaxValue)
+                throw new ArgumentOutOfRangeException("length", length, "The shared memory array would take more than Int32.MaxValue bytes.");
+            return size;
         }
 
         /// <summary>
@@ -93,7 +112,7 @@ namespace SharedMemory
         public SharedArray(string name)
             : base(name, 0, false)
         {
-            _elementSize = Marshal.SizeOf(typeof(T));
+            _elementSize = FastStructure.SizeOf<T>();
 
             Open();
         }
@@ -110,6 +129,8 @@ namespace SharedMemory
             {
                 if (BufferSize % _elementSize != 0)
                     throw new ArgumentOutOfRangeException("name", "BufferSize is not evenly divisible by the size of " + typeof(T).Name);
+                if (BufferSize / _elementSize > int.MaxValue)
+                    throw new ArgumentOutOfRangeException("name", "BufferSize holds more than Int32.MaxValue elements of " + typeof(T).Name);
 
                 Length = (int)(BufferSize / _elementSize);
             }
@@ -128,7 +149,7 @@ namespace SharedMemory
             if (index > Length - 1 || index < 0)
                 throw new ArgumentOutOfRangeException("index");
 
-            base.Write(ref data, index * _elementSize);
+            base.Write(ref data, (long)index * _elementSize);
         }
 
         /// <summary>
@@ -138,14 +159,15 @@ namespace SharedMemory
         /// <param name="startIndex">The zero-based index of the shared memory array element to begin writing to.</param>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is less than 0 -or- length of <paramref name="buffer"/> + <paramref name="startIndex"/> is greater than <see cref="Length"/>.</exception>
         /// <exception cref="ArgumentNullException"><paramref name="buffer"/> must not be null</exception>
+        /// <exception cref="TimeoutException">A read lock held through <see cref="BufferWithLocks.AcquireReadLock"/> kept the write waiting for longer than <see cref="BufferWithLocks.ReadWriteTimeout"/>.</exception>
         public void Write(T[] buffer, int startIndex = 0)
         {
             if (buffer == null)
                 throw new ArgumentNullException("buffer");
-            if (buffer.Length + startIndex > Length || startIndex < 0)
+            if (startIndex < 0 || startIndex > Length - buffer.Length)
                 throw new ArgumentOutOfRangeException("startIndex");
 
-            base.Write(buffer, startIndex * _elementSize);
+            base.Write(buffer, (long)startIndex * _elementSize);
         }
 
         #endregion
@@ -164,7 +186,7 @@ namespace SharedMemory
             if (index > Length - 1 || index < 0)
                 throw new ArgumentOutOfRangeException("index");
 
-            base.Read(out data, index * _elementSize);
+            base.Read(out data, (long)index * _elementSize);
         }
 
         /// <summary>
@@ -174,14 +196,33 @@ namespace SharedMemory
         /// <param name="startIndex">The zero-based index of the shared memory array element to begin reading from.</param>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is less than 0 -or- length of <paramref name="buffer"/> + <paramref name="startIndex"/> is greater than <see cref="Length"/>.</exception>
         /// <exception cref="ArgumentNullException"><paramref name="buffer"/> must not be null</exception>
+        /// <remarks>Called through <see cref="ICollection{T}"/>, <c>CopyTo(array, arrayIndex)</c> follows that interface instead: it copies every element into <c>array</c>, starting at <c>arrayIndex</c> within <c>array</c>.</remarks>
         public void CopyTo(T[] buffer, int startIndex = 0)
         {
             if (buffer == null)
                 throw new ArgumentNullException("buffer");
-            if (buffer.Length + startIndex > Length || startIndex < 0)
+            if (startIndex < 0 || startIndex > Length - buffer.Length)
                 throw new ArgumentOutOfRangeException("startIndex");
 
-            base.Read(buffer, startIndex * _elementSize);
+            base.Read(buffer, (long)startIndex * _elementSize);
+        }
+
+        /// <summary>
+        /// Copies every element of the shared memory array into <paramref name="array"/>, starting at <paramref name="arrayIndex"/> within <paramref name="array"/>, as <see cref="ICollection{T}.CopyTo"/> requires.
+        /// </summary>
+        /// <param name="array">The destination array.</param>
+        /// <param name="arrayIndex">The zero-based index within <paramref name="array"/> at which copying begins.</param>
+        void ICollection<T>.CopyTo(T[] array, int arrayIndex)
+        {
+            if (array == null)
+                throw new ArgumentNullException("array");
+            if (arrayIndex < 0)
+                throw new ArgumentOutOfRangeException("arrayIndex");
+            if (array.Length - arrayIndex < Length)
+                throw new ArgumentException("The destination array is too small to hold every element from arrayIndex on.", "array");
+
+            int count = Length;
+            base.Read(source => FastStructure.ReadArray(array, source, arrayIndex, count));
         }
 
         #endregion
@@ -259,7 +300,7 @@ namespace SharedMemory
 
 
         /// <summary>
-        /// The elements are not read-only
+        /// Always true: the array's length is fixed, so <see cref="Add"/>, <see cref="Clear"/>, <see cref="Insert"/>, <see cref="Remove"/> and <see cref="RemoveAt"/> are not supported. The elements themselves can still be written, through the indexer and <see cref="Write(T[], int)"/>.
         /// </summary>
         public bool IsReadOnly
         {

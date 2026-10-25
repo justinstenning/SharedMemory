@@ -33,6 +33,15 @@ namespace SharedMemory
     /// <summary>
     /// Provides fast reading and writing of generic structures to a memory location using IL emitted functions.
     /// </summary>
+    /// <remarks>
+    /// Shared memory holds each structure in one layout in every process: the layout 64-bit .NET 10 gives it. So processes on
+    /// .NET Framework, .NET Core and .NET 5 or later can share structures holding a <see cref="DateTime"/> or a <see cref="decimal"/>.
+    /// Where the running runtime lays a structure out that way, it is copied as a block of memory; where it does not, as .NET
+    /// Framework does for those structures, it is copied field by field, which is slower. Structures holding an
+    /// <see cref="IntPtr"/>, a <see cref="UIntPtr"/>, a pointer, a generic structure, or a .NET structure other than
+    /// <see cref="DateTime"/>, <see cref="TimeSpan"/>, <see cref="decimal"/> and <see cref="Guid"/> keep the runtime's own
+    /// layout, which is not portable across bitness or runtimes.
+    /// </remarks>
     public static class FastStructure
     {
         /// <summary>
@@ -94,6 +103,7 @@ namespace SharedMemory
         /// <param name="buffer"></param>
         /// <param name="startIndex"></param>
         /// <returns></returns>
+        /// <exception cref="ArgumentException">The structure does not fit in <paramref name="buffer"/> from <paramref name="startIndex"/>.</exception>
         public static unsafe void CopyTo<T>(ref T structure, byte[] buffer, int startIndex = 0)
             where T : struct
         {
@@ -101,6 +111,8 @@ namespace SharedMemory
                 throw new ArgumentNullException("buffer");
             if (startIndex > buffer.Length || startIndex < 0)
                 throw new ArgumentOutOfRangeException("startIndex");
+            if (buffer.Length - startIndex < FastStructure<T>.Size)
+                throw new ArgumentException("The structure does not fit in the buffer from startIndex.");
 
             fixed (byte* p = &buffer[startIndex])
             {
@@ -132,6 +144,7 @@ namespace SharedMemory
         /// <param name="buffer"></param>
         /// <param name="startIndex"></param>
         /// <returns></returns>
+        /// <exception cref="ArgumentException"><paramref name="buffer"/> holds less than one structure from <paramref name="startIndex"/>.</exception>
         public static unsafe T FromBytes<T>(byte[] buffer, int startIndex = 0)
             where T : struct
         {
@@ -139,6 +152,8 @@ namespace SharedMemory
                 throw new ArgumentNullException("buffer");
             if (startIndex > buffer.Length || startIndex < 0)
                 throw new ArgumentOutOfRangeException("startIndex");
+            if (buffer.Length - startIndex < FastStructure<T>.Size)
+                throw new ArgumentException("The buffer holds less than one structure from startIndex.");
 
             fixed (byte* p = &buffer[startIndex])
             {
@@ -180,14 +195,10 @@ namespace SharedMemory
                 throw new ArgumentOutOfRangeException("index");
             if (buffer.Length - index < count)
                 throw new ArgumentException("Invalid offset into array specified by index and count");
+            if (count == 0)
+                return;
 
-            void* ptr = source.ToPointer();
-            byte* p = (byte*)FastStructure.GetPtr<T>(ref buffer[0]);
-#if NETCORE
-            Buffer.MemoryCopy(ptr, p + (index * elementSize), elementSize * count, elementSize * count);
-#else
-            UnsafeNativeMethods.CopyMemoryPtr(p + (index * elementSize), ptr, (uint)(elementSize * count));
-#endif
+            FastStructure<T>.CopyFromMemory(buffer, index, source.ToPointer(), elementSize * count);
         }
 
         /// <summary>
@@ -209,6 +220,8 @@ namespace SharedMemory
                 throw new ArgumentOutOfRangeException("index");
             if (buffer.Length - index < count)
                 throw new ArgumentException("Invalid offset into array specified by index and count");
+            if (count == 0)
+                return;
 
             void* ptr = source.ToPointer();
 
@@ -243,14 +256,10 @@ namespace SharedMemory
                 throw new ArgumentOutOfRangeException("index");
             if (buffer.Length - index < count)
                 throw new ArgumentException("Invalid offset into array specified by index and count");
+            if (count == 0)
+                return;
 
-            void* ptr = destination.ToPointer();
-            byte* p = (byte*)FastStructure.GetPtr<T>(ref buffer[0]);
-#if NETCORE
-            Buffer.MemoryCopy(p + (index * elementSize), ptr, elementSize * count, elementSize * count);
-#else
-            UnsafeNativeMethods.CopyMemoryPtr(ptr, p + (index * elementSize), (uint)(elementSize * count));
-#endif
+            FastStructure<T>.CopyToMemory(buffer, index, destination.ToPointer(), elementSize * count);
         }
 
         /// <summary>
@@ -272,6 +281,8 @@ namespace SharedMemory
                 throw new ArgumentOutOfRangeException("index");
             if (buffer.Length - index < count)
                 throw new ArgumentException("Invalid offset into array specified by index and count");
+            if (count == 0)
+                return;
 
             void* ptr = destination.ToPointer();
             fixed (byte* p = &buffer[0])
@@ -293,6 +304,14 @@ namespace SharedMemory
     /// <para>The <see cref="FastStructure{T}.StructureToPtr"/> method performs approx. 8x faster than 
     /// <see cref="System.Runtime.InteropServices.Marshal.StructureToPtr(object, IntPtr, bool)"/> (4ms vs 34ms). </para>
     /// </summary>
+    /// <remarks>
+    /// The copies read and write T in one layout in every process, the layout 64-bit .NET 10 gives it, so that processes on
+    /// different runtimes can share it. Where the running runtime lays T out another way, as .NET Framework does for
+    /// structures holding a <see cref="DateTime"/> or a <see cref="decimal"/>, they copy field by field, which is slower.
+    /// Structures holding an <see cref="IntPtr"/>, a <see cref="UIntPtr"/>, a pointer, a generic structure, or a .NET structure
+    /// other than <see cref="DateTime"/>, <see cref="TimeSpan"/>, <see cref="decimal"/> and <see cref="Guid"/> keep the
+    /// runtime's own layout.
+    /// </remarks>
     /// <typeparam name="T"></typeparam>
     public static class FastStructure<T>
         where T : struct
@@ -319,7 +338,9 @@ namespace SharedMemory
         public delegate void StructureToPtrDelegate(ref T value, IntPtr pointer);
         
         /// <summary>
-        /// The <see cref="GetPtrDelegate"/> delegate for the generated IL to retrieve a pointer to the structure
+        /// The <see cref="GetPtrDelegate"/> delegate for the generated IL to retrieve a pointer to the structure. The pointer is to
+        /// the structure in managed memory, in the running runtime's layout: where T is copied field by field, that layout is not
+        /// the one in shared memory, and its size is not <see cref="Size"/>.
         /// </summary>
         public unsafe readonly static GetPtrDelegate GetPtr = BuildFunction();
 
@@ -334,13 +355,50 @@ namespace SharedMemory
         public readonly static StructureToPtrDelegate StructureToPtr = BuildWriteToPointerFunction();
 
         /// <summary>
-        /// Cached size of T as determined by <see cref="System.Runtime.InteropServices.Marshal.SizeOf(Type)"/>.
+        /// Cached size of T in bytes in shared memory: the size of the layout 64-bit .NET 10 gives T, the same in every process.
+        /// This is the space an element of T takes in shared memory, and the number of bytes per element that copies move.
+        /// Where the running runtime lays T out that way, it is also T's .NET size, as the IL <c>sizeof</c> instruction gives it;
+        /// where it does not, such as on .NET Framework for structures holding a <see cref="DateTime"/> or a <see cref="decimal"/>,
+        /// T is copied field by field and this is not the size of a T in managed memory, so do not copy <see cref="Size"/> bytes
+        /// from <see cref="GetPtr"/>. Up to version 2.3.3 this was <see cref="System.Runtime.InteropServices.Marshal.SizeOf(Type)"/>,
+        /// which agrees for blittable types but differs for types whose marshalled form has another size, such as
+        /// <see cref="bool"/>, <see cref="char"/>, a <see cref="decimal"/> marked as Currency, and structures that hold them.
         /// </summary>
-        public static readonly int Size = System.Runtime.InteropServices.Marshal.SizeOf(typeof(T));
+        public static readonly int Size = BuildSizeOf();
         
+        private delegate int SizeOfDelegate();
+
+        /// <summary>
+        /// Copies <paramref name="byteCount"/> bytes between <paramref name="memory"/> and the elements of <paramref name="array"/>
+        /// from <paramref name="index"/> on, with the array pinned for the whole copy.
+        /// </summary>
+        internal unsafe delegate void PinnedCopyDelegate(T[] array, int index, void* memory, long byteCount);
+
+        /// <summary>
+        /// Copies from memory into an array, which stays pinned for the whole copy.
+        /// </summary>
+        internal static readonly PinnedCopyDelegate CopyFromMemory = BuildPinnedCopy(true);
+
+        /// <summary>
+        /// Copies from an array into memory, with the array pinned for the whole copy.
+        /// </summary>
+        internal static readonly PinnedCopyDelegate CopyToMemory = BuildPinnedCopy(false);
+
         private static DynamicMethod method;
         private static DynamicMethod methodLoad;
         private static DynamicMethod methodWrite;
+
+        /// <summary>
+        /// T's layout in shared memory, the same in every process; null if T has none, such as a structure holding an
+        /// <see cref="IntPtr"/>, which keeps the running runtime's own layout.
+        /// </summary>
+        internal static readonly ElementLayout Layout;
+
+        /// <summary>
+        /// Whether T is copied as a block of memory: true where the running runtime lays T out as <see cref="Layout"/>, or
+        /// T has no <see cref="Layout"/>; false where T is copied field by field.
+        /// </summary>
+        internal static readonly bool UsesNativeCopy = true;
 
         /// <summary>
         /// Performs once of type compatibility check.
@@ -350,6 +408,116 @@ namespace SharedMemory
         {
             // Performs compatibility checks upon T
             CheckTypeCompatibility(typeof(T));
+
+            // Shared memory holds T in one layout in every process. Where this runtime lays T out another way, the copies
+            // built above give way to field-by-field ones. Anything that fails here keeps the copies above.
+            try
+            {
+                ElementLayout layout = ElementLayout.For(typeof(T));
+                if (layout == null)
+                    return;
+                int[] offsets = layout.RuntimeOffsets(typeof(T));
+                if (!layout.Matches(offsets, Size))
+                {
+                    Delegate[] copies = layout.BuildCopies(typeof(T), offsets, Size,
+                        typeof(PtrToStructureDelegate), typeof(StructureToPtrDelegate), typeof(PinnedCopyDelegate));
+                    if (copies == null)
+                        return;
+                    PtrToStructure = (PtrToStructureDelegate)copies[0];
+                    StructureToPtr = (StructureToPtrDelegate)copies[1];
+                    CopyFromMemory = (PinnedCopyDelegate)copies[2];
+                    CopyToMemory = (PinnedCopyDelegate)copies[3];
+                    Size = layout.Size;
+                    UsesNativeCopy = false;
+                }
+                Layout = layout;
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        /// <summary>
+        /// Builds the field-by-field copies for T whether or not the running runtime needs them, for tests: the
+        /// <see cref="PtrToStructureDelegate"/>, the <see cref="StructureToPtrDelegate"/>, and the array copies from and to
+        /// memory. Null if T has no <see cref="Layout"/>.
+        /// </summary>
+        internal static Delegate[] BuildFieldByFieldCopies()
+        {
+            ElementLayout layout = ElementLayout.For(typeof(T));
+            if (layout == null)
+                return null;
+            return layout.BuildCopies(typeof(T), layout.RuntimeOffsets(typeof(T)), BuildSizeOf(),
+                typeof(PtrToStructureDelegate), typeof(StructureToPtrDelegate), typeof(PinnedCopyDelegate));
+        }
+
+        private static int BuildSizeOf()
+        {
+            // Marshal.SizeOf still runs so that the types it refuses, such as generic structures, are refused as before.
+            System.Runtime.InteropServices.Marshal.SizeOf(typeof(T));
+
+            DynamicMethod sizeOf = new DynamicMethod("SizeOf<" + typeof(T).FullName + ">",
+                typeof(int), Type.EmptyTypes, typeof(FastStructure).Module, true);
+
+            ILGenerator generator = sizeOf.GetILGenerator();
+            generator.Emit(OpCodes.Sizeof, typeof(T));
+            generator.Emit(OpCodes.Ret);
+            return ((SizeOfDelegate)sizeOf.CreateDelegate(typeof(SizeOfDelegate)))();
+        }
+
+        /// <summary>
+        /// Emits a copy between memory and an array that holds a reference to the array's first element in a pinned local, so
+        /// that a garbage collection cannot move the array while the copy runs. A pinned <see cref="System.Runtime.InteropServices.GCHandle"/>
+        /// cannot do this for every T: the .NET Framework refuses one for an array of structures with bool or char fields.
+        /// </summary>
+        private static unsafe PinnedCopyDelegate BuildPinnedCopy(bool intoArray)
+        {
+            DynamicMethod copy = new DynamicMethod((intoArray ? "CopyFromMemory<" : "CopyToMemory<") + typeof(T).FullName + ">",
+                null, new Type[4] { typeof(T[]), typeof(int), typeof(void*), typeof(long) }, typeof(FastStructure).Module, true);
+
+            ILGenerator generator = copy.GetILGenerator();
+            generator.DeclareLocal(typeof(T).MakeByRefType(), true);
+            generator.Emit(OpCodes.Ldarg_0);
+            generator.Emit(OpCodes.Ldarg_1);
+            generator.Emit(OpCodes.Ldelema, typeof(T));
+            generator.Emit(OpCodes.Stloc_0);
+#if NETCORE
+            // Buffer.MemoryCopy(source, destination, destinationSizeInBytes, sourceBytesToCopy)
+            if (intoArray)
+            {
+                generator.Emit(OpCodes.Ldarg_2);
+                generator.Emit(OpCodes.Ldloc_0);
+                generator.Emit(OpCodes.Conv_U);
+            }
+            else
+            {
+                generator.Emit(OpCodes.Ldloc_0);
+                generator.Emit(OpCodes.Conv_U);
+                generator.Emit(OpCodes.Ldarg_2);
+            }
+            generator.Emit(OpCodes.Ldarg_3);
+            generator.Emit(OpCodes.Ldarg_3);
+            generator.Emit(OpCodes.Call, typeof(Buffer).GetMethod("MemoryCopy", new Type[4] { typeof(void*), typeof(void*), typeof(long), typeof(long) }));
+#else
+            // UnsafeNativeMethods.CopyMemoryPtr(destination, source, count)
+            if (intoArray)
+            {
+                generator.Emit(OpCodes.Ldloc_0);
+                generator.Emit(OpCodes.Conv_U);
+                generator.Emit(OpCodes.Ldarg_2);
+            }
+            else
+            {
+                generator.Emit(OpCodes.Ldarg_2);
+                generator.Emit(OpCodes.Ldloc_0);
+                generator.Emit(OpCodes.Conv_U);
+            }
+            generator.Emit(OpCodes.Ldarg_3);
+            generator.Emit(OpCodes.Conv_U4);
+            generator.Emit(OpCodes.Call, typeof(UnsafeNativeMethods).GetMethod("CopyMemoryPtr", BindingFlags.Static | BindingFlags.NonPublic));
+#endif
+            generator.Emit(OpCodes.Ret);
+            return (PinnedCopyDelegate)copy.CreateDelegate(typeof(PinnedCopyDelegate));
         }
 
         private unsafe static GetPtrDelegate BuildFunction()

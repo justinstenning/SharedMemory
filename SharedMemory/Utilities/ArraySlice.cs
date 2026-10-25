@@ -255,7 +255,25 @@ namespace SharedMemory.Utilities
 
         void ICollection<T>.CopyTo(T[] array, int arrayIndex)
         {
-            throw new NotSupportedException();
+            if (_list == null)
+                throw new InvalidOperationException("InvalidOperation_NullArray");
+            if (array == null)
+                throw new ArgumentNullException("array");
+            if (arrayIndex < 0)
+                throw new ArgumentOutOfRangeException("arrayIndex", "ArgumentOutOfRange_NeedNonNegNum");
+            if (array.Length - arrayIndex < _count)
+                throw new ArgumentException("Argument_InvalidOffLen", "array");
+
+            // Array.Copy also copies correctly when array is the slice's own array and the ranges overlap
+            var source = _list as T[];
+            if (source != null)
+            {
+                Array.Copy(source, _offset, array, arrayIndex, _count);
+                return;
+            }
+
+            for (var i = 0; i < _count; i++)
+                array[arrayIndex + i] = _list[_offset + i];
         }
 
         bool ICollection<T>.Remove(T item)

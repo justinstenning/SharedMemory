@@ -42,6 +42,12 @@ namespace SharedMemory
     /// <para>By default all read/write operations will not block, it is necessary to first acquire locks 
     /// through calls to <see cref="AcquireReadLock"/> and <see cref="AcquireWriteLock"/> as appropriate, with corresponding 
     /// calls to <see cref="ReleaseReadLock"/> and <see cref="ReleaseWriteLock"/> to release the locks.</para>
+    /// <para>The locks are gates, not exclusive locks. <see cref="AcquireWriteLock"/> closes the gate that reads wait at, and
+    /// <see cref="AcquireReadLock"/> the gate that writes wait at, but neither stops a caller of its own kind: two writers can
+    /// hold the write lock at once, and readers are not counted, so the first <see cref="ReleaseReadLock"/> lets writes in
+    /// while other readers still read. A reader and a writer that acquire at the same moment can both get in. Any process can
+    /// release a lock it does not hold. To exclude other writers, coordinate them outside this class, for example with a
+    /// named <see cref="System.Threading.Mutex"/>.</para>
     /// </summary>
 #if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
