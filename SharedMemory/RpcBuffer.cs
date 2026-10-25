@@ -222,7 +222,7 @@ namespace SharedMemory
         internal RpcRequest(bool continuesOnThreadPool)
         {
             ContinuesOnThreadPool = continuesOnThreadPool;
-#if NET46_OR_GREATER || NETSTANDARD
+#if NET46_OR_GREATER || NETSTANDARD || NETCOREAPP
             ResponseReady = continuesOnThreadPool
                 ? new TaskCompletionSource<RpcResponse>(TaskCreationOptions.RunContinuationsAsynchronously)
                 : new TaskCompletionSource<RpcResponse>();
@@ -1225,7 +1225,7 @@ namespace SharedMemory
         void CompleteRequest(RpcRequest request, RpcResponse response, bool countIfLate)
         {
             request.IsSuccess = response.Success;
-#if !(NET46_OR_GREATER || NETSTANDARD)
+#if !(NET46_OR_GREATER || NETSTANDARD || NETCOREAPP)
             if (request.ContinuesOnThreadPool)
             {
                 Task.Run(() => TryCompleteRequest(request, response, countIfLate));
