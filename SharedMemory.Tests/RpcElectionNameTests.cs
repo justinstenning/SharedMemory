@@ -1,5 +1,6 @@
 #if HAS_RPC_BUFFER
 using System;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SharedMemory;
 
@@ -8,7 +9,8 @@ namespace SharedMemoryTests
     /// <summary>
     /// RpcBuffer channels whose names differ only in case, and channels with long names, each elect one owner of their own,
     /// on every OS. On macOS .NET keeps its named mutexes on a volume that folds case, where the channels TEST and test would
-    /// otherwise share one election while their buffers are separate.
+    /// otherwise share one election while their buffers are separate. An owner disposed on another thread leaves the
+    /// channel to the next RpcBuffer.
     /// </summary>
     [TestClass]
     public class RpcElectionNameTests
@@ -50,6 +52,26 @@ namespace SharedMemoryTests
                 Assert.IsTrue(owner.IsChannelOwner, "The first RpcBuffer on a channel is its owner.");
                 Assert.IsFalse(opener.IsChannelOwner, "A second RpcBuffer on a channel is its opener.");
                 AssertAnsweredBy(opener, 1, "the owner");
+            }
+        }
+
+        /// <summary>
+        /// An owner disposed on a thread other than the one that made it leaves the channel to the next RpcBuffer. On Linux
+        /// and macOS a named mutex its thread holds keeps its name until that thread lets it go, even once another thread has
+        /// closed it, so there the election mutex is made without being taken.
+        /// </summary>
+        [TestMethod]
+        public void OwnerDisposedOnAnotherThread_NextIsOwner()
+        {
+            string name = "rpcthread" + Guid.NewGuid().ToString("N");
+            var first = new RpcEndpoint(name, 1);
+            Assert.IsTrue(first.IsChannelOwner, "The first RpcBuffer on a channel is its owner.");
+            Assert.IsTrue(Task.Run(() => first.Dispose()).Wait(5000), "Dispose on another thread should return.");
+            using (var owner = new RpcEndpoint(name, 2))
+            using (var opener = new RpcEndpoint(name, 3))
+            {
+                Assert.IsTrue(owner.IsChannelOwner, "Once the owner is disposed on another thread, the next RpcBuffer on the channel is its owner.");
+                AssertAnsweredBy(opener, 2, "the new owner");
             }
         }
 
