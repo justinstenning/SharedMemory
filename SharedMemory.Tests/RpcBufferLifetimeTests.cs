@@ -295,7 +295,7 @@ namespace SharedMemoryTests
 
             // A master that holds the role and has created only the first ring a slave opens
             bool createdNew;
-            using (var role = new Mutex(true, name + "SharedMemory_MasterMutex", out createdNew))
+            using (var role = CreateOwnerMutex(name + "SharedMemory_MasterMutex", out createdNew))
             {
                 Assert.IsTrue(createdNew, "the master mutex already existed");
                 using (new CircularBuffer(name + "_Slave_SharedMemory_MMF", 2, Capacity))
@@ -325,6 +325,20 @@ namespace SharedMemoryTests
             {
                 return "threw " + ex.GetType().Name;
             }
+        }
+
+        /// <summary>
+        /// The owner's mutex, taken: on Windows as RpcBuffer takes it, and on Linux and macOS with the name and options of the
+        /// net10.0 build's election mutex there (RpcBuffer.CreateUnixElectionMutex), so that an RpcBuffer finds the role held.
+        /// </summary>
+        static Mutex CreateOwnerMutex(string mutexName, out bool createdNew)
+        {
+#if NET
+            if (!OperatingSystem.IsWindows())
+                return new Mutex(true, OperatingSystem.IsMacOS() ? UnixFiles.ElectionMutexName(mutexName) : mutexName,
+                    new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false }, out createdNew);
+#endif
+            return new Mutex(true, mutexName, out createdNew);
         }
 
         static string Throws(Action action)
