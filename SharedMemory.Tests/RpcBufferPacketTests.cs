@@ -37,7 +37,7 @@ namespace SharedMemoryTests
     /// <summary>
     /// RPC packet sizes (#78), sends that cannot finish, and the request bookkeeping (#52).
     /// Several tests stand in for the peer at the ring level: the owner of channel "x" reads
-    /// "x_Master_SharedMemory_MMF" and writes "x_Slave_SharedMemory_MMF".
+    /// "x_Owner_SharedMemory_MMF" and writes "x_Opener_SharedMemory_MMF".
     /// </summary>
     [TestClass]
     public class RpcBufferPacketTests
@@ -137,7 +137,7 @@ namespace SharedMemoryTests
                 $"the request returned after {watch.ElapsedMilliseconds} ms");
 
             // The peer resumes and finds the first packet, and nothing sent after the one that failed
-            var toPeer = Own(new CircularBuffer(name + "_Slave_SharedMemory_MMF"));
+            var toPeer = Own(new CircularBuffer(name + "_Opener_SharedMemory_MMF"));
             PacketHeader header;
             Assert.IsTrue(TryReadPacket(toPeer, 500, out header), "the first packet is missing");
             Assert.AreEqual("packet 1 of 3", $"packet {header.Packet} of {header.TotalPackets}");
@@ -170,7 +170,7 @@ namespace SharedMemoryTests
         {
             // Two nodes leave room for one packet; the peer reads at its own pace
             var owner = Own(new RpcBufferProbe(name, Capacity, 2));
-            var toPeer = Own(new CircularBuffer(name + "_Slave_SharedMemory_MMF"));
+            var toPeer = Own(new CircularBuffer(name + "_Opener_SharedMemory_MMF"));
 
             // A timeout of 0 sends without waiting for the response
             Assert.IsFalse(owner.RemoteRequest(new byte[] { 1 }, timeoutMs: 0).Success);
@@ -203,7 +203,7 @@ namespace SharedMemoryTests
                 handled.Enqueue(msgId);
                 return new byte[] { 1 };
             }, Capacity, 10));
-            var toOwner = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Owner_SharedMemory_MMF"));
 
             // The peer's send stops after the first of three packets, as a send to a stalled reader does
             WritePacket(toOwner, Packet(MessageType.RpcRequest, 7, 0, Pattern(2 * PacketPayload + 1, 7), 1, 3));
@@ -225,7 +225,7 @@ namespace SharedMemoryTests
                 handled.Enqueue(msgId);
                 return new byte[] { 1 };
             }, Capacity, 10));
-            var toOwner = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Owner_SharedMemory_MMF"));
 
             // An older sender drops a packet that gets no room and goes on with the next one
             var message = Pattern(2 * PacketPayload + 1, 9);
@@ -244,8 +244,8 @@ namespace SharedMemoryTests
         public void RPC_ResponseWithMissingPacket_FailsTheRequest()
         {
             var owner = Own(new RpcBufferProbe(name, Capacity, 10));
-            var toPeer = Own(new CircularBuffer(name + "_Slave_SharedMemory_MMF"));
-            var toOwner = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
+            var toPeer = Own(new CircularBuffer(name + "_Opener_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Owner_SharedMemory_MMF"));
 
             var watch = Stopwatch.StartNew();
             var pending = owner.RemoteRequestAsync(new byte[] { 1 }, timeoutMs: 5000);
@@ -274,7 +274,7 @@ namespace SharedMemoryTests
             {
                 return Pattern(2 * PacketPayload + 1, 5);
             }, Capacity, 2));
-            var toOwner = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Owner_SharedMemory_MMF"));
 
             var watch = Stopwatch.StartNew();
             WritePacket(toOwner, Packet(MessageType.RpcRequest, 5, 0, new byte[] { 1 }, 1, 1));

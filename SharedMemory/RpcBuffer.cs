@@ -553,13 +553,15 @@ namespace SharedMemory
     /// </summary>
     public class RpcBuffer : IDisposable
     {
-        // The names every RpcBuffer since 2020 finds its other end by. Changing any of them stops this version pairing
-        // with the versions before it.
-        const string ElectionMutexSuffix = "SharedMemory_MasterMutex";
-        const string OwnerReadsSuffix = "_Master_SharedMemory_MMF";
-        const string OwnerWritesSuffix = "_Slave_SharedMemory_MMF";
+        // The objects an RpcBuffer finds its other end by. Changing any of them stops this version pairing with the one before it.
+        const string ElectionMutexSuffix = "SharedMemory_OwnerMutex";
+        const string OwnerReadsSuffix = "_Owner_SharedMemory_MMF";
+        const string OwnerWritesSuffix = "_Opener_SharedMemory_MMF";
+        // The name 2.3 and earlier elect with. On Windows the owner holds it, so that an older RpcBuffer fails instead of joining.
+        const string PreviousElectionMutexSuffix = "SharedMemory_MasterMutex";
 
         private Mutex electionMutex;
+        private Mutex previousElectionMutex;
         private long _disposed = 0;
 
         /// <summary>
@@ -657,7 +659,8 @@ namespace SharedMemory
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
         /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
         /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
-        /// after about 1 s.</exception>
+        /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
+        /// cannot share.</exception>
         /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
         /// open by an earlier opener.</exception>
         public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
@@ -680,7 +683,8 @@ namespace SharedMemory
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
         /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
         /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
-        /// after about 1 s.</exception>
+        /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
+        /// cannot share.</exception>
         /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
         /// open by an earlier opener.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], Task> asyncRemoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
@@ -703,7 +707,8 @@ namespace SharedMemory
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
         /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
         /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
-        /// after about 1 s.</exception>
+        /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
+        /// cannot share.</exception>
         /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
         /// open by an earlier opener.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], byte[]> remoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
@@ -726,7 +731,8 @@ namespace SharedMemory
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
         /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
         /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
-        /// after about 1 s.</exception>
+        /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
+        /// cannot share.</exception>
         /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
         /// open by an earlier opener.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], Task<byte[]>> asyncRemoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
@@ -748,7 +754,8 @@ namespace SharedMemory
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
         /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
         /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
-        /// after about 1 s.</exception>
+        /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
+        /// cannot share.</exception>
         /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
         /// open by an earlier opener.</exception>
         public RpcBuffer(string name, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10)
@@ -802,6 +809,27 @@ namespace SharedMemory
                 }
             }
 
+#if NET10_0_OR_GREATER
+            bool onWindows = OperatingSystem.IsWindows();
+#else
+            bool onWindows = Environment.OSVersion.Platform == PlatformID.Win32NT;
+#endif
+            // 2.3 and earlier run RpcBuffer only on Windows, under other names. An older RpcBuffer that arrives after this owner finds
+            // the name it elects with taken, becomes an opener and fails to open its rings. One that is already here holds that name,
+            // and this owner closes its election mutex and stops before creating its rings.
+            if (instanceType == InstanceType.Owner && onWindows)
+            {
+                previousElectionMutex = new Mutex(false, name + PreviousElectionMutexSuffix, out bool createdPrevious);
+                if (!createdPrevious)
+                {
+                    previousElectionMutex.Close();
+                    previousElectionMutex = null;
+                    electionMutex.Close();
+                    electionMutex = null;
+                    throw new InvalidOperationException("Channel \"" + name + "\" is in use by an RpcBuffer from SharedMemory 2.3 or earlier, which cannot share a channel with this version. Upgrade both ends.");
+                }
+            }
+
             switch (protocolVersion)
             {
                 case RpcProtocol.V1:
@@ -833,6 +861,8 @@ namespace SharedMemory
                 // Free the names now, rather than when the garbage collector finalises what was made
                 WriteBuffer?.Dispose();
                 ReadBuffer?.Dispose();
+                // 2.3's name before the election mutex, as in Dispose
+                previousElectionMutex?.Close();
                 electionMutex?.Close();
                 throw;
             }
@@ -1574,7 +1604,7 @@ namespace SharedMemory
             }
         }
 
-        // Closes the buffers and the election mutex, once the read thread has stopped, no send is under way and no caller
+        // Closes the buffers and the election mutexes, once the read thread has stopped, no send is under way and no caller
         // is checking them in ThrowIfDisposedOrShutdown. Disposed is set first, so no new caller looks at them
         private bool TryDisposeManagedResources(int timeout)
         {
@@ -1609,6 +1639,14 @@ namespace SharedMemory
                 {
                     ReadBuffer.Dispose();
                     ReadBuffer = null;
+                }
+
+                // 2.3's name closes first: an instance elected once the election mutex is gone must find it free, or it takes
+                // this channel for one that 2.3 holds
+                if (previousElectionMutex != null)
+                {
+                    previousElectionMutex.Close();
+                    previousElectionMutex = null;
                 }
 
                 if (electionMutex != null)

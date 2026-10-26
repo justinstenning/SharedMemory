@@ -35,7 +35,7 @@ namespace SharedMemoryTests
     /// <summary>
     /// Where the code after an RPC await runs, a read thread that meets a bad packet, a client that restarts (#79),
     /// Dispose (#52), and a constructor that fails part-way. Some tests stand in for the peer at the ring level:
-    /// the owner of channel "x" reads "x_Master_SharedMemory_MMF" and writes "x_Slave_SharedMemory_MMF".
+    /// the owner of channel "x" reads "x_Owner_SharedMemory_MMF" and writes "x_Opener_SharedMemory_MMF".
     /// </summary>
     [TestClass]
     public class RpcBufferLifetimeTests
@@ -128,8 +128,8 @@ namespace SharedMemoryTests
                 handled.Enqueue(msgId);
                 return new byte[] { 1 };
             }, Capacity, 10));
-            var toOwner = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
-            var fromOwner = Own(new CircularBuffer(name + "_Slave_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Owner_SharedMemory_MMF"));
+            var fromOwner = Own(new CircularBuffer(name + "_Opener_SharedMemory_MMF"));
 
             // The second packet of a request claims a larger payload than its first packet did
             var message = Pattern(PacketPayload + 1, 7);
@@ -268,7 +268,7 @@ namespace SharedMemoryTests
         public void RPC_OwnerConstructorThatFails_LeavesTheNameFree()
         {
             var outcomes = new List<string>();
-            foreach (var ring in new[] { "_Slave_SharedMemory_MMF", "_Master_SharedMemory_MMF" })
+            foreach (var ring in new[] { "_Opener_SharedMemory_MMF", "_Owner_SharedMemory_MMF" })
             {
                 var channel = name + ring.Substring(0, 7);
                 string failed;
@@ -284,7 +284,7 @@ namespace SharedMemoryTests
             }
 
             Assert.AreEqual(
-                "_Slave_SharedMemory_MMF: threw IOException, next reply 2; _Master_SharedMemory_MMF: threw IOException, next reply 2",
+                "_Opener_SharedMemory_MMF: threw IOException, next reply 2; _Owner_SharedMemory_MMF: threw IOException, next reply 2",
                 string.Join("; ", outcomes));
         }
 
@@ -295,10 +295,10 @@ namespace SharedMemoryTests
 
             // An owner that holds the role and has created only the first ring an opener opens
             bool createdNew;
-            using (var role = CreateOwnerMutex(name + "SharedMemory_MasterMutex", out createdNew))
+            using (var role = CreateOwnerMutex(name + "SharedMemory_OwnerMutex", out createdNew))
             {
                 Assert.IsTrue(createdNew, "the owner mutex already existed");
-                using (new CircularBuffer(name + "_Slave_SharedMemory_MMF", 2, Capacity))
+                using (new CircularBuffer(name + "_Opener_SharedMemory_MMF", 2, Capacity))
                 {
                     failed = Throws(() => new RpcBuffer(name));
                 }

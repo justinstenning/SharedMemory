@@ -20,7 +20,7 @@ Classes
  * `SharedMemory.SharedArray` - a simple generic array implementation utilising a shared memory buffer. Inherits from SharedMemory.BufferWithLocks, so its reads and writes wait at its gates.
  * `SharedMemory.BufferReadWrite` - provides read/write access to a shared memory buffer, with various overloads to support reading and writing structures, copying to and from IntPtr and so on. Inherits from SharedMemory.BufferWithLocks, so its reads and writes wait at its gates.
  * `SharedMemory.CircularBuffer` - lock-free FIFO circular buffer implementation (aka ring buffer). Supporting 2 or more nodes, this implementation supports multiple readers and writers, which compete for items: see [Circular buffer readers and capacity](#circular-buffer-readers-and-capacity). The lock-free approach is implemented using Interlocked.CompareExchange and named events.
- * `SharedMemory.RpcBuffer` - simple bi-directional RPC channel using `SharedMemory.CircularBuffer`. Each channel has two ends: the owner, which creates it, and the opener, which joins it. Every build has it except the .NET Framework 3.5 and 4.0 ones.
+ * `SharedMemory.RpcBuffer` - simple bi-directional RPC channel using `SharedMemory.CircularBuffer`. Each channel has two ends: the owner, which creates it, and the opener, which joins it. An `RpcBuffer` from 2.4.0 or later cannot share a channel with one from 2.3 or earlier, so upgrade both ends together. Every build has it except the .NET Framework 3.5 and 4.0 ones.
 
 Platforms
 ---------

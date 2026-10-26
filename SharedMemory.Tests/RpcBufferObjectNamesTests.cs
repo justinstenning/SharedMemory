@@ -10,16 +10,16 @@ using SharedMemory;
 namespace SharedMemoryTests
 {
     /// <summary>
-    /// The named objects an RpcBuffer finds its other end by. A process on another package version looks for the same
-    /// names, so these strings are a wire format: changing one stops this version pairing with the versions before it.
+    /// The named objects an RpcBuffer finds its other end by, from 2.4.0. A process on another package version looks for the
+    /// same names, so these strings are a wire format: changing one stops this version pairing with the versions before it.
     /// They are checked through the operating system, character for character, whatever the code calls the two ends.
     /// </summary>
     [TestClass]
     public class RpcBufferObjectNamesTests
     {
-        const string ElectionMutex = "SharedMemory_MasterMutex";
-        const string OwnerReads = "_Master_SharedMemory_MMF";
-        const string OwnerWrites = "_Slave_SharedMemory_MMF";
+        const string ElectionMutex = "SharedMemory_OwnerMutex";
+        const string OwnerReads = "_Owner_SharedMemory_MMF";
+        const string OwnerWrites = "_Opener_SharedMemory_MMF";
 
         sealed class Probe : RpcBuffer
         {
