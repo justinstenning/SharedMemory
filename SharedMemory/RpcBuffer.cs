@@ -37,8 +37,8 @@ namespace SharedMemory
 
     internal enum InstanceType
     {
-        Master,
-        Slave
+        Owner,
+        Opener
     }
 
     /// <summary>
@@ -549,11 +549,17 @@ namespace SharedMemory
     }
 
     /// <summary>
-    /// A simple RPC implementation designed for a single master/slave pair
+    /// A simple RPC channel with two ends: the owner, which creates it, and the opener, which joins it
     /// </summary>
     public class RpcBuffer : IDisposable
     {
-        private Mutex masterMutex;
+        // The names every RpcBuffer since 2020 finds its other end by. Changing any of them stops this version pairing
+        // with the versions before it.
+        const string ElectionMutexSuffix = "SharedMemory_MasterMutex";
+        const string OwnerReadsSuffix = "_Master_SharedMemory_MMF";
+        const string OwnerWritesSuffix = "_Slave_SharedMemory_MMF";
+
+        private Mutex electionMutex;
         private long _disposed = 0;
 
         /// <summary>
@@ -627,20 +633,20 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="remoteCallHandler">Action to handle requests with no response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
         /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
-        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
-        /// fails if its master has not created a buffer yet.</remarks>
+        /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
+        /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
+        /// fails if its owner has not created a buffer yet.</remarks>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
-        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
-        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
         /// after about 1 s.</exception>
-        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
-        /// open by an earlier slave.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
+        /// open by an earlier opener.</exception>
         public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -650,20 +656,20 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="asyncRemoteCallHandler">Asynchronous action to handle requests with no response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
         /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
-        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
-        /// fails if its master has not created a buffer yet.</remarks>
+        /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
+        /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
+        /// fails if its owner has not created a buffer yet.</remarks>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
-        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
-        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
         /// after about 1 s.</exception>
-        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
-        /// open by an earlier slave.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
+        /// open by an earlier opener.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], Task> asyncRemoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -673,20 +679,20 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="remoteCallHandlerWithResult">Function to handle requests with a response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
         /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
-        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
-        /// fails if its master has not created a buffer yet.</remarks>
+        /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
+        /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
+        /// fails if its owner has not created a buffer yet.</remarks>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
-        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
-        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
         /// after about 1 s.</exception>
-        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
-        /// open by an earlier slave.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
+        /// open by an earlier opener.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], byte[]> remoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -696,20 +702,20 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="asyncRemoteCallHandlerWithResult">Function to asynchronously handle requests with a response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
         /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
-        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
-        /// fails if its master has not created a buffer yet.</remarks>
+        /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
+        /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
+        /// fails if its owner has not created a buffer yet.</remarks>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
-        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
-        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
         /// after about 1 s.</exception>
-        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
-        /// open by an earlier slave.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
+        /// open by an earlier opener.</exception>
         public RpcBuffer(string name, Func<ulong, byte[], Task<byte[]>> asyncRemoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
@@ -719,19 +725,19 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
+        /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
+        /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
         /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
-        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
-        /// fails if its master has not created a buffer yet.</remarks>
+        /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
+        /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
+        /// fails if its owner has not created a buffer yet.</remarks>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
-        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
-        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
         /// after about 1 s.</exception>
-        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
-        /// open by an earlier slave.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
+        /// open by an earlier opener.</exception>
         public RpcBuffer(string name, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10)
         {
             if (bufferCapacity < 256) // min 256 bytes
@@ -759,27 +765,27 @@ namespace SharedMemory
             bool takeMutex = OperatingSystem.IsWindows();
             bool createdNew;
             if (takeMutex)
-                masterMutex = new Mutex(true, name + "SharedMemory_MasterMutex", out createdNew);
+                electionMutex = new Mutex(true, name + ElectionMutexSuffix, out createdNew);
             else
-                masterMutex = CreateUnixElectionMutex(name + "SharedMemory_MasterMutex", out createdNew);
+                electionMutex = CreateUnixElectionMutex(name + ElectionMutexSuffix, out createdNew);
 
-            if (createdNew && (!takeMutex || masterMutex.WaitOne(500)))
+            if (createdNew && (!takeMutex || electionMutex.WaitOne(500)))
 #else
-            masterMutex = new Mutex(true, name + "SharedMemory_MasterMutex", out bool createdNew);
+            electionMutex = new Mutex(true, name + ElectionMutexSuffix, out bool createdNew);
 
-            if (createdNew && masterMutex.WaitOne(500))
+            if (createdNew && electionMutex.WaitOne(500))
 #endif
             {
-                instanceType = InstanceType.Master;
+                instanceType = InstanceType.Owner;
             }
             else
             {
-                instanceType = InstanceType.Slave;
-                if (masterMutex != null)
+                instanceType = InstanceType.Opener;
+                if (electionMutex != null)
                 {
-                    masterMutex.Close();
-                    masterMutex.Dispose();
-                    masterMutex = null;
+                    electionMutex.Close();
+                    electionMutex.Dispose();
+                    electionMutex = null;
                 }
             }
 
@@ -796,15 +802,15 @@ namespace SharedMemory
             this.bufferNodeCount = bufferNodeCount;
             try
             {
-                if (instanceType == InstanceType.Master)
+                if (instanceType == InstanceType.Owner)
                 {
-                    WriteBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
-                    ReadBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
+                    WriteBuffer = new CircularBuffer(name + OwnerWritesSuffix, bufferNodeCount, this.bufferCapacity);
+                    ReadBuffer = new CircularBuffer(name + OwnerReadsSuffix, bufferNodeCount, this.bufferCapacity);
                 }
                 else
                 {
-                    ReadBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF");
-                    WriteBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF");
+                    ReadBuffer = new CircularBuffer(name + OwnerWritesSuffix);
+                    WriteBuffer = new CircularBuffer(name + OwnerReadsSuffix);
                     this.bufferCapacity = ReadBuffer.NodeBufferSize;
                     this.bufferNodeCount = ReadBuffer.NodeCount;
                 }
@@ -814,7 +820,7 @@ namespace SharedMemory
                 // Free the names now, rather than when the garbage collector finalises what was made
                 WriteBuffer?.Dispose();
                 ReadBuffer?.Dispose();
-                masterMutex?.Close();
+                electionMutex?.Close();
                 throw;
             }
 
@@ -1555,7 +1561,7 @@ namespace SharedMemory
             }
         }
 
-        // Closes the buffers and the master mutex, once the read thread has stopped, no send is under way and no caller
+        // Closes the buffers and the election mutex, once the read thread has stopped, no send is under way and no caller
         // is checking them in ThrowIfDisposedOrShutdown. Disposed is set first, so no new caller looks at them
         private bool TryDisposeManagedResources(int timeout)
         {
@@ -1592,11 +1598,11 @@ namespace SharedMemory
                     ReadBuffer = null;
                 }
 
-                if (masterMutex != null)
+                if (electionMutex != null)
                 {
-                    masterMutex.Close();
-                    masterMutex.Dispose();
-                    masterMutex = null;
+                    electionMutex.Close();
+                    electionMutex.Dispose();
+                    electionMutex = null;
                 }
 
                 // Mark as DisposeFinished
