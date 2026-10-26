@@ -263,6 +263,8 @@ For example, a message size of 512KB that fits in a single packet (i.e. with a `
 
 A 1KB message can be sent as a single packet approximately 10k times/sec.
 
+A channel has two ends. If you open it with a third `RpcBuffer`, that one joins as a second opener, and the two openers compete for each packet the owner sends: a request from the owner that fits in one packet is answered by one opener or the other, but any other call on the channel can fail.
+
 ### Circular Buffer
 
 The maximum bandwidth achieved was approximately 20GB/s, using 20 nodes of 1MB each with 1 reader and 1 writer. The .NET 3.5 implementation is markedly slower (~14GB/s), probably due to framework level performance improvements.

@@ -551,6 +551,9 @@ namespace SharedMemory
     /// <summary>
     /// A simple RPC channel with two ends: the owner, which creates it, and the opener, which joins it
     /// </summary>
+    /// <remarks>A third instance on a channel joins as a second opener, and the two openers compete for each packet the owner sends:
+    /// a request from the owner that fits in one packet is answered by one opener or the other, but any other call on the channel
+    /// can fail.</remarks>
     public class RpcBuffer : IDisposable
     {
         // The objects an RpcBuffer finds its other end by. Changing any of them stops this version pairing with the one before it.
