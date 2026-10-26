@@ -464,6 +464,21 @@ namespace SharedMemoryTests
         }
 #endif
 
+#if HAS_RPC_BUFFER
+        /// <summary>
+        /// The header at the start of every RpcBuffer packet, which the process at the other end of a channel reads: 32 bytes,
+        /// every byte a field, laid out alike on every runtime and copied as one block.
+        /// </summary>
+        [TestMethod]
+        public void RpcPacketHeader_HasTheProtocolsLayout_AndCopiesNatively()
+        {
+            Assert.AreEqual(
+                "size 32; HeaderLength 0+1; MsgType 1+1; Flags 2+2; PayloadSize 4+4; MsgId 8+8; ResponseId 16+8; PayloadOffset 24+4; PacketLength 28+4; " +
+                    "SizeOf 32; copied as one block True",
+                LayoutOf<RpcPacketHeader>() + "; SizeOf " + FastStructure.SizeOf<RpcPacketHeader>() + "; copied as one block " + UsesNativeCopy<RpcPacketHeader>());
+        }
+#endif
+
         /// <summary>The characterised type table and the library's own structures: copied as blocks of memory.</summary>
         private class NativeCheck : CharacterisedTypes.ICheck
         {
