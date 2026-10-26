@@ -31,6 +31,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SharedMemory;
+using static SharedMemoryTests.RpcPackets;
 
 namespace SharedMemoryTests
 {
@@ -42,10 +43,6 @@ namespace SharedMemoryTests
     [TestClass]
     public class RpcBufferPacketTests
     {
-        const int Capacity = 256;
-        const int HeaderSize = 32;
-        const int PacketPayload = Capacity - HeaderSize;
-
         static readonly int[] BoundarySizes =
         {
             PacketPayload - 1, PacketPayload, PacketPayload + 1, 2 * PacketPayload, 2 * PacketPayload + 1
@@ -409,64 +406,17 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// One packet as RpcProtocolHeaderV1 lays it out: MsgType at byte 0, bytes 1 to 7 zero, MsgId at 8,
-        /// PayloadSize at 16, CurrentPacket at 20, TotalPackets at 22, ResponseId at 24, then the packet's part of the payload.
-        /// </summary>
-        static byte[] Packet(MessageType type, ulong msgId, ulong responseId, byte[] payload, int packet, int totalPackets)
-        {
-            int offset = (packet - 1) * PacketPayload;
-            int length = Math.Min(PacketPayload, payload.Length - offset);
-            var bytes = new byte[HeaderSize + length];
-            bytes[0] = (byte)type;
-            BitConverter.GetBytes(msgId).CopyTo(bytes, 8);
-            BitConverter.GetBytes(payload.Length).CopyTo(bytes, 16);
-            BitConverter.GetBytes((ushort)packet).CopyTo(bytes, 20);
-            BitConverter.GetBytes((ushort)totalPackets).CopyTo(bytes, 22);
-            BitConverter.GetBytes(responseId).CopyTo(bytes, 24);
-            Buffer.BlockCopy(payload, offset, bytes, HeaderSize, length);
-            return bytes;
-        }
-
-        static void WritePacket(CircularBuffer ring, byte[] packet)
-        {
-            Assert.AreEqual(packet.Length, ring.Write(packet, 0, 1000), "the packet did not fit in the ring");
-        }
-
-        struct PacketHeader
-        {
-            public MessageType Type;
-            public ulong MsgId;
-            public int Packet;
-            public int TotalPackets;
-        }
-
-        static bool TryReadPacket(CircularBuffer ring, int timeoutMs, out PacketHeader header)
-        {
-            var bytes = new byte[Capacity];
-            header = new PacketHeader();
-            if (ring.Read(bytes, 0, timeoutMs) < HeaderSize)
-            {
-                return false;
-            }
-            header.Type = (MessageType)bytes[0];
-            header.MsgId = BitConverter.ToUInt64(bytes, 8);
-            header.Packet = BitConverter.ToUInt16(bytes, 20);
-            header.TotalPackets = BitConverter.ToUInt16(bytes, 22);
-            return true;
-        }
-
-        /// <summary>
         /// Shows the tables that RpcBuffer keeps protected: requests waiting for a response, and requests still arriving.
         /// </summary>
         class RpcBufferProbe : RpcBuffer
         {
             public RpcBufferProbe(string name, int bufferCapacity, int bufferNodeCount)
-                : base(name, bufferCapacity, RpcProtocol.V1, bufferNodeCount)
+                : base(name, bufferCapacity, bufferNodeCount: bufferNodeCount)
             {
             }
 
             public RpcBufferProbe(string name, Func<ulong, byte[], byte[]> handler, int bufferCapacity, int bufferNodeCount)
-                : base(name, handler, bufferCapacity, RpcProtocol.V1, bufferNodeCount)
+                : base(name, handler, bufferCapacity, bufferNodeCount: bufferNodeCount)
             {
             }
 
