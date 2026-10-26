@@ -74,7 +74,7 @@ namespace SharedMemoryTests
         public void RPC_RequestOfBoundarySize_ArrivesIntact()
         {
             byte[] received = null;
-            var master = Own(new RpcBuffer(name, bufferCapacity: Capacity));
+            var owner = Own(new RpcBuffer(name, bufferCapacity: Capacity));
             Own(new RpcBuffer(name, (msgId, payload) =>
             {
                 received = payload;
@@ -86,7 +86,7 @@ namespace SharedMemoryTests
             {
                 var request = Pattern(size, size);
                 received = null;
-                var response = master.RemoteRequest(request, 5000);
+                var response = owner.RemoteRequest(request, 5000);
                 Assert.IsTrue(response.Success, "the request of " + size + " bytes failed");
                 if (received == null || !received.SequenceEqual(request))
                 {
@@ -100,7 +100,7 @@ namespace SharedMemoryTests
         [TestMethod]
         public void RPC_ResponseOfBoundarySize_ArrivesIntact()
         {
-            var master = Own(new RpcBuffer(name, bufferCapacity: Capacity));
+            var owner = Own(new RpcBuffer(name, bufferCapacity: Capacity));
             Own(new RpcBuffer(name, (msgId, payload) =>
             {
                 return Pattern(BitConverter.ToInt32(payload, 0), 3);
@@ -109,7 +109,7 @@ namespace SharedMemoryTests
             var corrupted = new List<int>();
             foreach (var size in BoundarySizes)
             {
-                var response = master.RemoteRequest(BitConverter.GetBytes(size), 5000);
+                var response = owner.RemoteRequest(BitConverter.GetBytes(size), 5000);
                 Assert.IsTrue(response.Success, "the request for " + size + " bytes failed");
                 if (response.Data == null || !response.Data.SequenceEqual(Pattern(size, 3)))
                 {
@@ -124,16 +124,16 @@ namespace SharedMemoryTests
         public void RPC_RequestToStalledPeer_FailsWithinItsTimeout()
         {
             // Two nodes leave room for one packet, and no peer reads it, so the second of three packets gets no room
-            var master = Own(new RpcBufferProbe(name, Capacity, 2));
+            var owner = Own(new RpcBufferProbe(name, Capacity, 2));
 
             var watch = Stopwatch.StartNew();
-            var response = master.RemoteRequest(Pattern(2 * PacketPayload + 1, 1), timeoutMs: 2000);
+            var response = owner.RemoteRequest(Pattern(2 * PacketPayload + 1, 1), timeoutMs: 2000);
             watch.Stop();
 
-            var statistics = master.Statistics;
+            var statistics = owner.Statistics;
             Assert.AreEqual(
                 "success False, within 2.5 s True, pending 0, packets written 1, bytes written " + PacketPayload + ", requests sent 0, timeouts 1",
-                $"success {response.Success}, within 2.5 s {watch.ElapsedMilliseconds < 2500}, pending {master.PendingRequests}, packets written {statistics.PacketsWritten}, bytes written {statistics.BytesWritten}, requests sent {statistics.RequestsSent}, timeouts {statistics.Timeouts}",
+                $"success {response.Success}, within 2.5 s {watch.ElapsedMilliseconds < 2500}, pending {owner.PendingRequests}, packets written {statistics.PacketsWritten}, bytes written {statistics.BytesWritten}, requests sent {statistics.RequestsSent}, timeouts {statistics.Timeouts}",
                 $"the request returned after {watch.ElapsedMilliseconds} ms");
 
             // The peer resumes and finds the first packet, and nothing sent after the one that failed
@@ -148,14 +148,14 @@ namespace SharedMemoryTests
         public void RPC_RequestQueuedBehindStalledSend_FailsWithinItsTimeout()
         {
             // Two nodes leave room for one packet, and no peer reads it
-            var master = Own(new RpcBufferProbe(name, Capacity, 2));
+            var owner = Own(new RpcBufferProbe(name, Capacity, 2));
 
             // The first request's second packet waits for room, holding up every other send
-            var first = Task.Run(() => master.RemoteRequest(Pattern(2 * PacketPayload + 1, 1), timeoutMs: 3000));
-            Assert.IsTrue(WaitUntil(() => master.Statistics.PacketsWritten > 0, 2000), "the first request did not start");
+            var first = Task.Run(() => owner.RemoteRequest(Pattern(2 * PacketPayload + 1, 1), timeoutMs: 3000));
+            Assert.IsTrue(WaitUntil(() => owner.Statistics.PacketsWritten > 0, 2000), "the first request did not start");
 
             var watch = Stopwatch.StartNew();
-            var second = master.RemoteRequest(new byte[] { 2 }, timeoutMs: 500);
+            var second = owner.RemoteRequest(new byte[] { 2 }, timeoutMs: 500);
             watch.Stop();
             first.Wait();
 
@@ -169,11 +169,11 @@ namespace SharedMemoryTests
         public void RPC_RequestThatDoesNotWaitForItsResponse_StillWaitsForRoom()
         {
             // Two nodes leave room for one packet; the peer reads at its own pace
-            var master = Own(new RpcBufferProbe(name, Capacity, 2));
+            var owner = Own(new RpcBufferProbe(name, Capacity, 2));
             var toPeer = Own(new CircularBuffer(name + "_Slave_SharedMemory_MMF"));
 
             // A timeout of 0 sends without waiting for the response
-            Assert.IsFalse(master.RemoteRequest(new byte[] { 1 }, timeoutMs: 0).Success);
+            Assert.IsFalse(owner.RemoteRequest(new byte[] { 1 }, timeoutMs: 0).Success);
             var reader = Task.Run(() =>
             {
                 Thread.Sleep(300);
@@ -187,82 +187,82 @@ namespace SharedMemoryTests
             });
 
             // The ring is full until the peer reads, so this one has to wait for room, as a reply does
-            Assert.IsFalse(master.RemoteRequest(new byte[] { 2 }, timeoutMs: 0).Success);
+            Assert.IsFalse(owner.RemoteRequest(new byte[] { 2 }, timeoutMs: 0).Success);
 
             Assert.AreEqual(
                 "requests the peer read 2, requests sent 2, timeouts 0",
-                $"requests the peer read {reader.Result}, requests sent {master.Statistics.RequestsSent}, timeouts {master.Statistics.Timeouts}");
+                $"requests the peer read {reader.Result}, requests sent {owner.Statistics.RequestsSent}, timeouts {owner.Statistics.Timeouts}");
         }
 
         [TestMethod]
         public void RPC_AbandonedRequest_IsDiscardedByTheReceiver()
         {
             var handled = new ConcurrentQueue<ulong>();
-            var master = Own(new RpcBufferProbe(name, (msgId, payload) =>
+            var owner = Own(new RpcBufferProbe(name, (msgId, payload) =>
             {
                 handled.Enqueue(msgId);
                 return new byte[] { 1 };
             }, Capacity, 10));
-            var toMaster = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
 
             // The peer's send stops after the first of three packets, as a send to a stalled reader does
-            WritePacket(toMaster, Packet(MessageType.RpcRequest, 7, 0, Pattern(2 * PacketPayload + 1, 7), 1, 3));
-            Assert.IsTrue(WaitUntil(() => master.HasPartialRequest(7), 2000), "the first packet was not read");
+            WritePacket(toOwner, Packet(MessageType.RpcRequest, 7, 0, Pattern(2 * PacketPayload + 1, 7), 1, 3));
+            Assert.IsTrue(WaitUntil(() => owner.HasPartialRequest(7), 2000), "the first packet was not read");
 
             // Its next message is complete
-            WritePacket(toMaster, Packet(MessageType.RpcRequest, 8, 0, Pattern(10, 8), 1, 1));
+            WritePacket(toOwner, Packet(MessageType.RpcRequest, 8, 0, Pattern(10, 8), 1, 1));
             Assert.IsTrue(WaitUntil(() => handled.Contains(8UL), 2000), "the next message was not handled");
 
-            Assert.AreEqual("partial messages 0, handled 8", $"partial messages {master.PartialRequests}, handled {string.Join(",", handled)}");
+            Assert.AreEqual("partial messages 0, handled 8", $"partial messages {owner.PartialRequests}, handled {string.Join(",", handled)}");
         }
 
         [TestMethod]
         public void RPC_RequestWithMissingPacket_IsDiscarded()
         {
             var handled = new ConcurrentQueue<ulong>();
-            var master = Own(new RpcBufferProbe(name, (msgId, payload) =>
+            var owner = Own(new RpcBufferProbe(name, (msgId, payload) =>
             {
                 handled.Enqueue(msgId);
                 return new byte[] { 1 };
             }, Capacity, 10));
-            var toMaster = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
 
             // An older sender drops a packet that gets no room and goes on with the next one
             var message = Pattern(2 * PacketPayload + 1, 9);
-            WritePacket(toMaster, Packet(MessageType.RpcRequest, 9, 0, message, 1, 3));
-            WritePacket(toMaster, Packet(MessageType.RpcRequest, 9, 0, message, 3, 3));
-            WritePacket(toMaster, Packet(MessageType.RpcRequest, 10, 0, Pattern(10, 10), 1, 1));
-            Assert.IsTrue(WaitUntil(() => master.Statistics.PacketsRead >= 3 && handled.Contains(10UL), 2000), "the next message was not handled");
+            WritePacket(toOwner, Packet(MessageType.RpcRequest, 9, 0, message, 1, 3));
+            WritePacket(toOwner, Packet(MessageType.RpcRequest, 9, 0, message, 3, 3));
+            WritePacket(toOwner, Packet(MessageType.RpcRequest, 10, 0, Pattern(10, 10), 1, 1));
+            Assert.IsTrue(WaitUntil(() => owner.Statistics.PacketsRead >= 3 && handled.Contains(10UL), 2000), "the next message was not handled");
             Thread.Sleep(200); // time for any other handler to run
 
             Assert.AreEqual(
                 "requests received 1, handled 10, partial messages 0",
-                $"requests received {master.Statistics.RequestsReceived}, handled {string.Join(",", handled.OrderBy(id => id))}, partial messages {master.PartialRequests}");
+                $"requests received {owner.Statistics.RequestsReceived}, handled {string.Join(",", handled.OrderBy(id => id))}, partial messages {owner.PartialRequests}");
         }
 
         [TestMethod]
         public void RPC_ResponseWithMissingPacket_FailsTheRequest()
         {
-            var master = Own(new RpcBufferProbe(name, Capacity, 10));
+            var owner = Own(new RpcBufferProbe(name, Capacity, 10));
             var toPeer = Own(new CircularBuffer(name + "_Slave_SharedMemory_MMF"));
-            var toMaster = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
 
             var watch = Stopwatch.StartNew();
-            var pending = master.RemoteRequestAsync(new byte[] { 1 }, timeoutMs: 5000);
+            var pending = owner.RemoteRequestAsync(new byte[] { 1 }, timeoutMs: 5000);
             PacketHeader request;
             Assert.IsTrue(TryReadPacket(toPeer, 1000, out request), "the request did not arrive");
 
             // An older sender drops the middle packet of its response
             var payload = Pattern(2 * PacketPayload + 1, 6);
-            WritePacket(toMaster, Packet(MessageType.RpcResponse, 100, request.MsgId, payload, 1, 3));
-            WritePacket(toMaster, Packet(MessageType.RpcResponse, 100, request.MsgId, payload, 3, 3));
+            WritePacket(toOwner, Packet(MessageType.RpcResponse, 100, request.MsgId, payload, 1, 3));
+            WritePacket(toOwner, Packet(MessageType.RpcResponse, 100, request.MsgId, payload, 3, 3));
 
             var response = pending.Result;
             watch.Stop();
             var intact = response.Data != null && response.Data.SequenceEqual(payload);
             Assert.AreEqual(
                 "success False, before the timeout True, pending 0",
-                $"success {response.Success}, before the timeout {watch.ElapsedMilliseconds < 4000}, pending {master.PendingRequests}",
+                $"success {response.Success}, before the timeout {watch.ElapsedMilliseconds < 4000}, pending {owner.PendingRequests}",
                 $"returned after {watch.ElapsedMilliseconds} ms; data intact {intact}");
         }
 
@@ -270,20 +270,20 @@ namespace SharedMemoryTests
         public void RPC_ReplyWithNoRoom_FailsAfterOneSecond()
         {
             // The reply needs three packets, two nodes leave room for one, and the peer never reads it
-            var master = Own(new RpcBufferProbe(name, (msgId, payload) =>
+            var owner = Own(new RpcBufferProbe(name, (msgId, payload) =>
             {
                 return Pattern(2 * PacketPayload + 1, 5);
             }, Capacity, 2));
-            var toMaster = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Master_SharedMemory_MMF"));
 
             var watch = Stopwatch.StartNew();
-            WritePacket(toMaster, Packet(MessageType.RpcRequest, 5, 0, new byte[] { 1 }, 1, 1));
-            var failed = WaitUntil(() => master.Statistics.Timeouts > 0, 4000);
+            WritePacket(toOwner, Packet(MessageType.RpcRequest, 5, 0, new byte[] { 1 }, 1, 1));
+            var failed = WaitUntil(() => owner.Statistics.Timeouts > 0, 4000);
             var elapsed = watch.ElapsedMilliseconds;
 
             Assert.AreEqual(
                 "failed True, after about 1 s True, responses sent 0, packets written 1",
-                $"failed {failed}, after about 1 s {elapsed >= 900 && elapsed < 2500}, responses sent {master.Statistics.ResponsesSent}, packets written {master.Statistics.PacketsWritten}",
+                $"failed {failed}, after about 1 s {elapsed >= 900 && elapsed < 2500}, responses sent {owner.Statistics.ResponsesSent}, packets written {owner.Statistics.PacketsWritten}",
                 $"checked after {elapsed} ms");
         }
 
@@ -291,7 +291,7 @@ namespace SharedMemoryTests
         public void RPC_TimedOutRequests_LeaveThePendingTableAndAreCounted()
         {
             var gate = new TaskCompletionSource<bool>();
-            var master = Own(new RpcBufferProbe(name, Capacity, 10));
+            var owner = Own(new RpcBufferProbe(name, Capacity, 10));
             Own(new RpcBuffer(name, async (msgId, payload) =>
             {
                 await gate.Task.ConfigureAwait(false);
@@ -302,10 +302,10 @@ namespace SharedMemoryTests
             {
                 for (int i = 0; i < 20; i++)
                 {
-                    Assert.IsFalse(master.RemoteRequest(new byte[] { 1 }, timeoutMs: 50).Success, "request " + i + " did not time out");
+                    Assert.IsFalse(owner.RemoteRequest(new byte[] { 1 }, timeoutMs: 50).Success, "request " + i + " did not time out");
                 }
 
-                Assert.AreEqual("pending 0, timeouts 20", $"pending {master.PendingRequests}, timeouts {master.Statistics.Timeouts}");
+                Assert.AreEqual("pending 0, timeouts 20", $"pending {owner.PendingRequests}, timeouts {owner.Statistics.Timeouts}");
             }
             finally
             {
@@ -317,7 +317,7 @@ namespace SharedMemoryTests
         public void RPC_CancelledRequest_LeavesThePendingTable()
         {
             var gate = new TaskCompletionSource<bool>();
-            var master = Own(new RpcBufferProbe(name, Capacity, 10));
+            var owner = Own(new RpcBufferProbe(name, Capacity, 10));
             Own(new RpcBuffer(name, async (msgId, payload) =>
             {
                 await gate.Task.ConfigureAwait(false);
@@ -328,13 +328,13 @@ namespace SharedMemoryTests
             {
                 using (var cancellation = new CancellationTokenSource())
                 {
-                    var pending = master.RemoteRequestAsync(new byte[] { 1 }, 30000, cancellation.Token);
+                    var pending = owner.RemoteRequestAsync(new byte[] { 1 }, 30000, cancellation.Token);
                     cancellation.Cancel();
                     Assert.IsTrue(pending.Wait(2000), "the cancelled request did not finish");
 
                     Assert.AreEqual(
                         "success False, pending 0, timeouts 0",
-                        $"success {pending.Result.Success}, pending {master.PendingRequests}, timeouts {master.Statistics.Timeouts}");
+                        $"success {pending.Result.Success}, pending {owner.PendingRequests}, timeouts {owner.Statistics.Timeouts}");
                 }
             }
             finally
