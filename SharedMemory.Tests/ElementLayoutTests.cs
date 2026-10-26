@@ -432,7 +432,9 @@ namespace SharedMemoryTests
         {
             var check = new NativeCheck();
             CharacterisedTypes.ForEach(check);
+#pragma warning disable CS0618 // Obsolete, but public until 3.0, so its layout stays pinned
             check.Check<RpcProtocolHeaderV1>("RpcProtocolHeaderV1", 32);
+#pragma warning restore CS0618
             Assert.AreEqual("", string.Join("\n", check.Mismatches));
         }
 #endif

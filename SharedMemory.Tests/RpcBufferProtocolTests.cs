@@ -12,7 +12,8 @@ using static SharedMemoryTests.RpcPackets;
 namespace SharedMemoryTests
 {
     /// <summary>
-    /// The packet header: messages of any length, headers longer than this version's, headers that do not describe a packet.
+    /// The packet header: messages of any length, headers longer than this version's, headers that do not describe a packet;
+    /// and the protocol values a constructor takes.
     /// Some tests stand in for the peer at the ring level: the owner of channel "x" reads "x_Owner_SharedMemory_MMF" and
     /// writes "x_Opener_SharedMemory_MMF".
     /// </summary>
@@ -162,6 +163,55 @@ namespace SharedMemoryTests
             Assert.AreEqual(
                 string.Join("; ", expected) + "; partial messages 0",
                 string.Join("; ", outcomes) + $"; partial messages {owner.PartialRequests}");
+        }
+
+        [TestMethod]
+        public void RPC_UndefinedProtocolValue_Throws()
+        {
+            var outcomes = new List<string>();
+            foreach (var value in new[] { 0, 3 })
+            {
+                var channel = name + "-" + value;
+                string threw;
+                try
+                {
+                    Own(new RpcBuffer(channel, Capacity, (RpcProtocol)value));
+                    threw = "nothing";
+                }
+                catch (ArgumentOutOfRangeException ex)
+                {
+                    threw = ex.GetType().Name + " for " + ex.ParamName;
+                }
+                catch (Exception ex)
+                {
+                    threw = ex.GetType().Name;
+                }
+
+                // Straight away, the name is free for a new owner
+                outcomes.Add($"{value}: threw {threw}, next {RoundTrip(channel)}");
+            }
+
+            Assert.AreEqual(
+                "0: threw ArgumentOutOfRangeException for protocolVersion, next reply 2; 3: threw ArgumentOutOfRangeException for protocolVersion, next reply 2",
+                string.Join("; ", outcomes));
+        }
+
+        /// <summary>
+        /// A new owner and opener on the channel, and one request from the opener.
+        /// </summary>
+        string RoundTrip(string channel)
+        {
+            try
+            {
+                Own(new RpcBuffer(channel, (msgId, payload) => new byte[] { 2 }, bufferCapacity: Capacity));
+                var opener = Own(new RpcBuffer(channel));
+                var response = opener.RemoteRequest(new byte[] { 1 }, 2000);
+                return response.Success && response.Data != null ? "reply " + response.Data[0] : "no reply";
+            }
+            catch (Exception ex)
+            {
+                return "threw " + ex.GetType().Name;
+            }
         }
 
         T Own<T>(T item) where T : IDisposable

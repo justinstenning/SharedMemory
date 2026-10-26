@@ -255,7 +255,7 @@ Performance
 
 ### RPC Buffer
 
-When an `RpcBuffer` is created, a buffer capacity can be specified along with the number of nodes to be created in the underlying `CircularBuffer` instances. A message is sent within one or more packets, where a single packet is made up of a packet header (32 bytes for `RpcProtocol.V1`) and the message payload. Ideally there should be enough room allocated within the underlying buffer to hold at least one message preferably a few (i.e. `(numberOfNodes - 1) * (bufferCapacity - 32) >= maxMessageSize`, since one node always stays free and each packet carries the header).
+When an `RpcBuffer` is created, a buffer capacity can be specified along with the number of nodes to be created in the underlying `CircularBuffer` instances. A message is sent within one or more packets, where a single packet is made up of a 32-byte packet header and the message payload. Ideally there should be enough room allocated within the underlying buffer to hold at least one message preferably a few (i.e. `(numberOfNodes - 1) * (bufferCapacity - 32) >= maxMessageSize`, since one node always stays free and each packet carries the header).
 
 If the message payload exceeds the `bufferCapacity - packetHeaderSize`, then the message is split into multiple packets. Therefore the `RpcBuffer` message throughput depends not only upon the message size, but the relationship between the buffer capacity and the message size (i.e. how many packets are required for a single message).
 

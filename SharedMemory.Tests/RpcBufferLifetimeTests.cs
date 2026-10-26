@@ -247,21 +247,6 @@ namespace SharedMemoryTests
         }
 
         [TestMethod]
-        public void RPC_Dispose_FinishesWhenThereIsNoReadThread()
-        {
-            // A protocol value the constructor does not know starts no read thread
-            var unknown = Own(new RpcBuffer(name, Capacity, (RpcProtocol)2));
-            var watch = Stopwatch.StartNew();
-            unknown.Dispose();
-            var took = watch.ElapsedMilliseconds;
-
-            Assert.AreEqual(
-                "finished True, within 500 ms True, next reply 2",
-                $"finished {unknown.DisposeFinished}, within 500 ms {took < 500}, next {RoundTrip(name)}",
-                $"Dispose took {took} ms");
-        }
-
-        [TestMethod]
         public void RPC_OwnerConstructorThatFails_LeavesTheNameFree()
         {
             var outcomes = new List<string>();

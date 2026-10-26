@@ -22,6 +22,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -48,9 +49,14 @@ namespace SharedMemory
     public enum RpcProtocol
     {
         /// <summary>
-        /// Version 1 - messages are split into packets that fit the buffer capacity and include a protocol header in each packet
+        /// Ignored since SharedMemory 2.4.0, which has one protocol; this value runs it. Code compiled against 2.3 or earlier passes it.
         /// </summary>
-        V1 = 1
+        [Obsolete("Ignored since SharedMemory 2.4.0: RpcBuffer has one protocol. Leave the argument out.")]
+        V1 = 1,
+        /// <summary>
+        /// The protocol from SharedMemory 2.4.0: messages are split into packets that fit the buffer capacity, each with a 32-byte header
+        /// </summary>
+        V2 = 2
     }
 
     /// <summary>
@@ -185,6 +191,8 @@ namespace SharedMemory
     /// <summary>
     /// The V1 protocol header
     /// </summary>
+    [Obsolete("RpcBuffer does not use this header since SharedMemory 2.4.0. It will be removed in 3.0.")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public struct RpcProtocolHeaderV1
     {
         /// <summary>
@@ -625,7 +633,6 @@ namespace SharedMemory
         }
 
         private readonly InstanceType instanceType;
-        private readonly RpcProtocol protocolVersion;
         private readonly int protocolLength;
         private readonly int bufferCapacity;
         private readonly int bufferNodeCount;
@@ -681,19 +688,20 @@ namespace SharedMemory
         /// <param name="name">The channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="remoteCallHandler">Action to handle requests with no response.</param>
         /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
-        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
+        /// <param name="protocolVersion">Ignored: every value of <see cref="RpcProtocol"/> runs the one protocol. Each packet carries a 32-byte header.</param>
         /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
         /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
         /// fails if its owner has not created a buffer yet.</remarks>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB, or
+        /// <paramref name="protocolVersion"/> is not a value of <see cref="RpcProtocol"/>.</exception>
         /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
         /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
         /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
         /// cannot share.</exception>
         /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
         /// open by an earlier opener.</exception>
-        public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
+        public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V2, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
             RemoteCallHandler = remoteCallHandler;
@@ -705,19 +713,20 @@ namespace SharedMemory
         /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="asyncRemoteCallHandler">Asynchronous action to handle requests with no response.</param>
         /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
-        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
+        /// <param name="protocolVersion">Ignored: every value of <see cref="RpcProtocol"/> runs the one protocol. Each packet carries a 32-byte header.</param>
         /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
         /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
         /// fails if its owner has not created a buffer yet.</remarks>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB, or
+        /// <paramref name="protocolVersion"/> is not a value of <see cref="RpcProtocol"/>.</exception>
         /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
         /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
         /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
         /// cannot share.</exception>
         /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
         /// open by an earlier opener.</exception>
-        public RpcBuffer(string name, Func<ulong, byte[], Task> asyncRemoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
+        public RpcBuffer(string name, Func<ulong, byte[], Task> asyncRemoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V2, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
             AsyncRemoteCallHandler = asyncRemoteCallHandler;
@@ -729,19 +738,20 @@ namespace SharedMemory
         /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="remoteCallHandlerWithResult">Function to handle requests with a response.</param>
         /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
-        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
+        /// <param name="protocolVersion">Ignored: every value of <see cref="RpcProtocol"/> runs the one protocol. Each packet carries a 32-byte header.</param>
         /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
         /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
         /// fails if its owner has not created a buffer yet.</remarks>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB, or
+        /// <paramref name="protocolVersion"/> is not a value of <see cref="RpcProtocol"/>.</exception>
         /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
         /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
         /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
         /// cannot share.</exception>
         /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
         /// open by an earlier opener.</exception>
-        public RpcBuffer(string name, Func<ulong, byte[], byte[]> remoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
+        public RpcBuffer(string name, Func<ulong, byte[], byte[]> remoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V2, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
             RemoteCallHandlerWithResult = remoteCallHandlerWithResult;
@@ -753,19 +763,20 @@ namespace SharedMemory
         /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="asyncRemoteCallHandlerWithResult">Function to asynchronously handle requests with a response.</param>
         /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
-        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
+        /// <param name="protocolVersion">Ignored: every value of <see cref="RpcProtocol"/> runs the one protocol. Each packet carries a 32-byte header.</param>
         /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
         /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
         /// fails if its owner has not created a buffer yet.</remarks>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB, or
+        /// <paramref name="protocolVersion"/> is not a value of <see cref="RpcProtocol"/>.</exception>
         /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
         /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
         /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
         /// cannot share.</exception>
         /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
         /// open by an earlier opener.</exception>
-        public RpcBuffer(string name, Func<ulong, byte[], Task<byte[]>> asyncRemoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
+        public RpcBuffer(string name, Func<ulong, byte[], Task<byte[]>> asyncRemoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V2, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
             AsyncRemoteCallHandlerWithResult = asyncRemoteCallHandlerWithResult;
@@ -776,19 +787,20 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
-        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
+        /// <param name="protocolVersion">Ignored: every value of <see cref="RpcProtocol"/> runs the one protocol. Each packet carries a 32-byte header.</param>
         /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
         /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
         /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
         /// fails if its owner has not created a buffer yet.</remarks>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB, or
+        /// <paramref name="protocolVersion"/> is not a value of <see cref="RpcProtocol"/>.</exception>
         /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
         /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
         /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
         /// cannot share.</exception>
         /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
         /// open by an earlier opener.</exception>
-        public RpcBuffer(string name, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10)
+        public RpcBuffer(string name, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V2, int bufferNodeCount = 10)
         {
             if (bufferCapacity < 256) // min 256 bytes
             {
@@ -798,6 +810,13 @@ namespace SharedMemory
             if (bufferCapacity > 1024 * 1024) // max 1MB
             {
                 throw new ArgumentOutOfRangeException(nameof(bufferCapacity), "cannot be larger than 1MB");
+            }
+
+            // 1 is RpcProtocol.V1, which code compiled against 2.3 or earlier passes, and runs the one protocol as V2 does. It is
+            // compared as a number, since naming V1 here would warn that it is obsolete
+            if (protocolVersion != RpcProtocol.V2 && (int)protocolVersion != 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(protocolVersion), protocolVersion, "is not a value of RpcProtocol");
             }
 
             Statistics = new RpcStatistics();
@@ -860,15 +879,9 @@ namespace SharedMemory
                 }
             }
 
-            switch (protocolVersion)
-            {
-                case RpcProtocol.V1:
-                    this.protocolVersion = protocolVersion;
-                    protocolLength = RpcPacketHeader.Size;
-                    Statistics.ProtocolOverheadPerPacket = protocolLength;
-                    writePacket = WritePacket;
-                    break;
-            }
+            protocolLength = RpcPacketHeader.Size;
+            Statistics.ProtocolOverheadPerPacket = protocolLength;
+            writePacket = WritePacket;
 
             this.bufferCapacity = bufferCapacity;
             this.bufferNodeCount = bufferNodeCount;
@@ -901,19 +914,7 @@ namespace SharedMemory
             this.msgBufferLength = Convert.ToInt32(this.bufferCapacity) - protocolLength;
 
 
-            Task readTask = new Task(() =>
-            {
-                switch (protocolVersion)
-                {
-                    case RpcProtocol.V1:
-                        ReadThread();
-                        break;
-                    default:
-                        // No reader for a protocol it does not know, so Dispose has none to wait for
-                        readStopped.Set();
-                        break;
-                }
-            }, TaskCreationOptions.LongRunning);
+            Task readTask = new Task(ReadThread, TaskCreationOptions.LongRunning);
 
             readTask.Start();
         }
@@ -1039,15 +1040,7 @@ namespace SharedMemory
             var success = false;
             try
             {
-                switch (this.protocolVersion)
-                {
-                    case RpcProtocol.V1:
-                        success = WriteMessage(msgType, msgId, payload, responseMsgId, timeout, sending);
-                        break;
-                    default:
-                        // Invalid protocol
-                        return Task.FromResult(new RpcResponse(false, null));
-                }
+                success = WriteMessage(msgType, msgId, payload, responseMsgId, timeout, sending);
             }
             finally
             {
