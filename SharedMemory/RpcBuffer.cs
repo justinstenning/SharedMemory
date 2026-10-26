@@ -586,6 +586,19 @@ namespace SharedMemory
             }
         }
 
+        /// <summary>
+        /// Whether this instance was first on the channel: it created both buffers and set their capacity and node count.
+        /// False when it opened the buffers another instance created, and took their capacity and node count.
+        /// </summary>
+        /// <remarks>Set by the constructor, and still readable after <see cref="Dispose()"/>.</remarks>
+        public bool IsChannelOwner
+        {
+            get
+            {
+                return instanceType == InstanceType.Owner;
+            }
+        }
+
         private readonly InstanceType instanceType;
         private readonly RpcProtocol protocolVersion;
         private readonly int protocolLength;
