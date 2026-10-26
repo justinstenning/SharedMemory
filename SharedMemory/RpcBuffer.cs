@@ -24,6 +24,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -612,6 +613,14 @@ namespace SharedMemory
         private readonly int msgBufferLength; // The amount of room left in the node after protocol header
         private readonly bool sendMessageOverridden;
 
+        // The send loop's packet, which writePacket writes into a node of the write buffer. Only the holder of the send lock
+        // sets or reads them, and writePacket runs only inside the ring's Write, under that lock
+        private readonly Func<IntPtr, int> writePacket;
+        private RpcProtocolHeaderV1 sendHeader;
+        private byte[] sendPayload;
+        private int sendOffset;
+        private int sendLength;
+
         /// <summary>
         /// The buffer used to send messages to remote channel endpoint
         /// </summary>
@@ -839,6 +848,7 @@ namespace SharedMemory
                     this.protocolVersion = protocolVersion;
                     protocolLength = FastStructure.SizeOf<RpcProtocolHeaderV1>();
                     Statistics.ProtocolOverheadPerPacket = protocolLength;
+                    writePacket = WritePacketV1;
                     break;
             }
 
@@ -1137,6 +1147,11 @@ namespace SharedMemory
 
             // Send the request packets
             var locked = false;
+            // The send fields as this send found them. Code that runs while a send waits for room can send again on the same
+            // thread, as a wait on an STA thread runs COM calls, and the outer send gets its packet back when the inner one ends
+            var outerHeader = default(RpcProtocolHeaderV1);
+            byte[] outerPayload = null;
+            int outerOffset = 0, outerLength = 0;
             try
             {
                 if (waitsForCaller)
@@ -1157,6 +1172,11 @@ namespace SharedMemory
                     return false;
                 }
 
+                outerHeader = sendHeader;
+                outerPayload = sendPayload;
+                outerOffset = sendOffset;
+                outerLength = sendLength;
+
                 // Nothing more is sent once Dispose has begun
                 if (Disposed)
                 {
@@ -1167,10 +1187,19 @@ namespace SharedMemory
                 int i = 0;
                 int left = msg?.Length ?? 0;
 
-                byte[] pMsg = null;
-
                 ushort totalPackets = ((msg?.Length ?? 0) == 0) ? (ushort)1 : Convert.ToUInt16(Math.Ceiling((double)msg.Length / (double)msgBufferLength));
                 ushort currentPacket = 1;
+
+                // The packet for writePacket: the header, and where its bytes are in msg
+                sendHeader = new RpcProtocolHeaderV1
+                {
+                    MsgType = msgType,
+                    MsgId = msgId,
+                    TotalPackets = totalPackets,
+                    PayloadSize = msg?.Length ?? 0,
+                    ResponseId = responseMsgId
+                };
+                sendPayload = msg;
 
                 while (true)
                 {
@@ -1179,46 +1208,18 @@ namespace SharedMemory
                         return false;
                     }
 
-                    pMsg = new byte[left > msgBufferLength ? msgBufferLength + protocolLength : left + protocolLength];
-
-                    // Writing protocol header
-                    var header = new RpcProtocolHeaderV1
+                    int packetLength = left > msgBufferLength ? msgBufferLength : left;
+                    if (packetLength < 0)
                     {
-                        MsgType = msgType,
-                        MsgId = msgId,
-                        CurrentPacket = currentPacket,
-                        TotalPackets = totalPackets,
-                        PayloadSize = msg?.Length ?? 0,
-                        ResponseId = responseMsgId
-                    };
-                    FastStructure.CopyTo(ref header, pMsg, 0);
-
-                    if (left > msgBufferLength)
-                    {
-                        // Writing payload
-                        if (msg != null && msg.Length > 0)
-                            Buffer.BlockCopy(msg, i, pMsg, protocolLength, msgBufferLength);
-
-                        left -= msgBufferLength;
-                        i += msgBufferLength;
+                        // A node smaller than the header, in rings an opener found: fail before writing, as copying the
+                        // header into a packet of the node's size did
+                        throw new ArgumentException("The structure does not fit in the buffer from startIndex.");
                     }
-                    else
-                    {
-                        // Writing last packet of payload
-                        if (msg != null && msg.Length > 0)
-                        {
-                            Buffer.BlockCopy(msg, i, pMsg, protocolLength, left);
-                        }
-
-                        left = 0;
-                    }
+                    sendHeader.CurrentPacket = currentPacket;
+                    sendOffset = i;
+                    sendLength = packetLength;
 
                     Statistics.StartWaitWrite();
-                    Func<IntPtr, int> writePacket = (ptr) =>
-                    {
-                        FastStructure.WriteBytes(ptr, pMsg, 0, pMsg.Length);
-                        return pMsg.Length;
-                    };
 
                     // Write at once if there is room; otherwise wait for it in slices, so that a Dispose, or the channel's
                     // owner closing it, ends the wait
@@ -1247,6 +1248,8 @@ namespace SharedMemory
 
                     Statistics.WritePacket(bytes - protocolLength);
 
+                    left -= packetLength;
+                    i += packetLength;
                     if (left <= 0)
                     {
                         break;
@@ -1258,11 +1261,35 @@ namespace SharedMemory
             {
                 if (locked)
                 {
+                    // An outer send on this thread gets its packet back. Otherwise the fields go back to holding no caller's
+                    // array, so that none is kept once its send ends
+                    sendHeader = outerHeader;
+                    sendPayload = outerPayload;
+                    sendOffset = outerOffset;
+                    sendLength = outerLength;
                     Monitor.Exit(lock_sendQ);
                 }
             }
 
             return true;
+        }
+
+        // Writes the send loop's packet into a node of the write buffer: protocol 1's header, then the packet's bytes straight
+        // from the caller's array. Returns the bytes written. The ring calls it only once it has a node, under the send lock
+        int WritePacketV1(IntPtr node)
+        {
+            FastStructure<RpcProtocolHeaderV1>.StructureToPtr(ref sendHeader, node);
+            // Bytes 1 to 7 are the padding after MsgType, which copying the header need not write. Zero them, so that the
+            // node does not carry an earlier packet's bytes
+            Marshal.WriteInt64(node, 0, 0L);
+            Marshal.WriteByte(node, 0, (byte)sendHeader.MsgType);
+
+            if (sendLength > 0)
+            {
+                FastStructure.WriteBytes(node + protocolLength, sendPayload, sendOffset, sendLength);
+            }
+
+            return protocolLength + sendLength;
         }
 
         static int RemainingTimeout(int timeout, long started)
@@ -1307,148 +1334,132 @@ namespace SharedMemory
                 var header = new RpcProtocolHeaderV1(); // the packet being read, whose message is dropped if handling it fails
                 var handling = false; // whether a fault came from handling a packet, rather than from the ring itself
 
+                // Made once: the delegate that handles a packet, and the one the ring calls, which clears handling after it
+                Func<IntPtr, int> readPacket = (ptr) =>
+                {
+                    int readLength = 0;
+                    header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
+                    handling = true;
+                    ptr = ptr + protocolLength;
+                    readLength += protocolLength;
+
+                    // The peer sends one message at a time, so the first packet of a message means
+                    // that the request still missing packets will not get them
+                    if (header.CurrentPacket == 1 && partialRequest != null)
+                    {
+                        IncomingRequests.TryRemove(partialRequest.MsgId, out RpcRequest abandoned);
+                        partialRequest = null;
+                    }
+
+                    RpcRequest request = null;
+                    if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
+                    {
+                        if (!Requests.TryGetValue(header.ResponseId, out request))
+                        {
+                            // The response received does not have a  matching message that was sent
+                            Statistics.DiscardResponse(header.ResponseId);
+                            return protocolLength;
+                        }
+                    }
+                    else if (header.CurrentPacket == 1)
+                    {
+                        request = IncomingRequests.GetOrAdd(header.MsgId, new RpcRequest
+                        {
+                            MsgId = header.MsgId
+                        });
+                    }
+                    else if (!IncomingRequests.TryGetValue(header.MsgId, out request))
+                    {
+                        // The start of this message was lost or discarded
+                        return protocolLength;
+                    }
+
+                    int packetSize = header.PayloadSize < msgBufferLength ? header.PayloadSize :
+                        (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize - (header.TotalPackets - 1) * msgBufferLength);
+
+                    if (header.PayloadSize > 0)
+                    {
+                        if (request.Data == null)
+                        {
+                            request.Data = new byte[header.PayloadSize];
+                        }
+
+                        int index = msgBufferLength * (header.CurrentPacket - 1);
+                        FastStructure.ReadBytes(request.Data, ptr, index, packetSize);
+                        readLength += packetSize;
+                    }
+
+                    request.PacketsReceived++;
+                    if (header.MsgType != MessageType.RpcResponse && header.MsgType != MessageType.ErrorInRpc)
+                    {
+                        partialRequest = header.CurrentPacket < header.TotalPackets ? request : null;
+                    }
+
+                    if (header.CurrentPacket == header.TotalPackets)
+                    {
+                        if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
+                        {
+                            Requests.TryRemove(request.MsgId, out RpcRequest removed);
+                        }
+                        else
+                        {
+                            IncomingRequests.TryRemove(request.MsgId, out RpcRequest removed);
+                        }
+
+                        if (request.PacketsReceived != header.TotalPackets)
+                        {
+                            // A packet of this message was lost: drop the message, and fail the request it answers
+                            if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
+                            {
+                                CompleteRequest(request, new RpcResponse(false, null), false);
+                            }
+
+                            Statistics.ReadPacket(packetSize);
+                            return protocolLength + packetSize;
+                        }
+
+                        // Full message is ready
+
+                        Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
+
+                        if (header.MsgType == MessageType.RpcResponse)
+                        {
+                            CompleteRequest(request, new RpcResponse(true, request.Data), true);
+                        }
+                        else if (header.MsgType == MessageType.ErrorInRpc)
+                        {
+                            CompleteRequest(request, new RpcResponse(false, request.Data), true);
+                        }
+                        else if (header.MsgType == MessageType.RpcRequest)
+                        {
+                            StartHandling(request);
+                        }
+                    }
+
+                    Statistics.ReadPacket(packetSize);
+
+                    return protocolLength + packetSize;
+                };
+                Func<IntPtr, int> readNode = (ptr) =>
+                {
+                    try
+                    {
+                        return readPacket(ptr);
+                    }
+                    finally
+                    {
+                        // A fault after this, in giving the node back, is the ring's
+                        handling = false;
+                    }
+                };
+
                 while (!Disposed && !l_TempReadBuffer.ShuttingDown)
                 {
                     try
                     {
                         handling = false;
                         Statistics.StartWaitRead();
-
-                        Func<IntPtr, int> readPacket = (ptr) =>
-                        {
-                            int readLength = 0;
-                            header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
-                            handling = true;
-                            ptr = ptr + protocolLength;
-                            readLength += protocolLength;
-
-                            // The peer sends one message at a time, so the first packet of a message means
-                            // that the request still missing packets will not get them
-                            if (header.CurrentPacket == 1 && partialRequest != null)
-                            {
-                                IncomingRequests.TryRemove(partialRequest.MsgId, out RpcRequest abandoned);
-                                partialRequest = null;
-                            }
-
-                            RpcRequest request = null;
-                            if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
-                            {
-                                if (!Requests.TryGetValue(header.ResponseId, out request))
-                                {
-                                    // The response received does not have a  matching message that was sent
-                                    Statistics.DiscardResponse(header.ResponseId);
-                                    return protocolLength;
-                                }
-                            }
-                            else if (header.CurrentPacket == 1)
-                            {
-                                request = IncomingRequests.GetOrAdd(header.MsgId, new RpcRequest
-                                {
-                                    MsgId = header.MsgId
-                                });
-                            }
-                            else if (!IncomingRequests.TryGetValue(header.MsgId, out request))
-                            {
-                                // The start of this message was lost or discarded
-                                return protocolLength;
-                            }
-
-                            int packetSize = header.PayloadSize < msgBufferLength ? header.PayloadSize :
-                                (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize - (header.TotalPackets - 1) * msgBufferLength);
-
-                            if (header.PayloadSize > 0)
-                            {
-                                if (request.Data == null)
-                                {
-                                    request.Data = new byte[header.PayloadSize];
-                                }
-
-                                int index = msgBufferLength * (header.CurrentPacket - 1);
-                                FastStructure.ReadBytes(request.Data, ptr, index, packetSize);
-                                readLength += packetSize;
-                            }
-
-                            request.PacketsReceived++;
-                            if (header.MsgType != MessageType.RpcResponse && header.MsgType != MessageType.ErrorInRpc)
-                            {
-                                partialRequest = header.CurrentPacket < header.TotalPackets ? request : null;
-                            }
-
-                            if (header.CurrentPacket == header.TotalPackets)
-                            {
-                                if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
-                                {
-                                    Requests.TryRemove(request.MsgId, out RpcRequest removed);
-                                }
-                                else
-                                {
-                                    IncomingRequests.TryRemove(request.MsgId, out RpcRequest removed);
-                                }
-
-                                if (request.PacketsReceived != header.TotalPackets)
-                                {
-                                    // A packet of this message was lost: drop the message, and fail the request it answers
-                                    if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
-                                    {
-                                        CompleteRequest(request, new RpcResponse(false, null), false);
-                                    }
-
-                                    Statistics.ReadPacket(packetSize);
-                                    return protocolLength + packetSize;
-                                }
-
-                                // Full message is ready
-
-                                Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
-
-                                if (header.MsgType == MessageType.RpcResponse)
-                                {
-                                    CompleteRequest(request, new RpcResponse(true, request.Data), true);
-                                }
-                                else if (header.MsgType == MessageType.ErrorInRpc)
-                                {
-                                    CompleteRequest(request, new RpcResponse(false, request.Data), true);
-                                }
-                                else if (header.MsgType == MessageType.RpcRequest)
-                                {
-                                    // For Handling Request we create an new Task because this can take sometime
-                                    Task.Run(async () =>
-                                    {
-                                        try
-                                        {
-                                            await ProcessCallHandler(request).ConfigureAwait(false);
-                                        }
-                                        catch(Exception ex)
-                                        {
-                                            // Ignore Object Disposed and Invalid Operation Exceptions
-                                            // because the other side of the rpc buffers may 
-                                            // not know if this Buffer is shutting down or disposed
-                                            if (!(ex is ObjectDisposedException || ex is InvalidOperationException))
-                                            {
-                                                throw;
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-
-                            Statistics.ReadPacket(packetSize);
-
-                            return protocolLength + packetSize;
-                        };
-
-                        l_TempReadBuffer.Read((ptr) =>
-                        {
-                            try
-                            {
-                                return readPacket(ptr);
-                            }
-                            finally
-                            {
-                                // A fault after this, in giving the node back, is the ring's
-                                handling = false;
-                            }
-                        }, readWaitMs);
+                        l_TempReadBuffer.Read(readNode, readWaitMs);
                     }
                     catch (Exception) when (handling)
                     {
@@ -1463,6 +1474,29 @@ namespace SharedMemory
                 // Dispose closes the buffers once the read thread has stopped
                 readStopped.Set();
             }
+        }
+
+        // Runs a complete request's handler on the thread pool, since it can take some time. A method of its own, so that
+        // reading a packet makes no closure for it
+        void StartHandling(RpcRequest request)
+        {
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await ProcessCallHandler(request).ConfigureAwait(false);
+                }
+                catch(Exception ex)
+                {
+                    // Ignore Object Disposed and Invalid Operation Exceptions
+                    // because the other side of the rpc buffers may 
+                    // not know if this Buffer is shutting down or disposed
+                    if (!(ex is ObjectDisposedException || ex is InvalidOperationException))
+                    {
+                        throw;
+                    }
+                }
+            });
         }
 
         // Drops the message of a packet that could not be handled, and fails the request that a dropped response answers
