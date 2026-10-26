@@ -75,6 +75,15 @@ namespace SharedMemoryTests
             BitConverter.GetBytes(payloadSize).CopyTo(packet, 4);
         }
 
+        /// <summary>
+        /// Sets the flags in a packet's header, leaving the rest of the packet as it is, and returns the packet.
+        /// </summary>
+        public static byte[] WithFlags(byte[] packet, ushort flags)
+        {
+            BitConverter.GetBytes(flags).CopyTo(packet, 2);
+            return packet;
+        }
+
         public static void WritePacket(CircularBuffer ring, byte[] packet)
         {
             Assert.AreEqual(packet.Length, ring.Write(packet, 0, 1000), "the packet did not fit in the ring");

@@ -13,7 +13,8 @@ namespace SharedMemoryTests
 {
     /// <summary>
     /// The packet header: messages of any length, headers longer than this version's, headers that do not describe a packet;
-    /// and the protocol values a constructor takes.
+    /// the protocol values a constructor takes; and messages a receiver does not understand, which it answers once with an
+    /// error flagged "not understood", and replies, which it never answers.
     /// Some tests stand in for the peer at the ring level: the owner of channel "x" reads "x_Owner_SharedMemory_MMF" and
     /// writes "x_Opener_SharedMemory_MMF".
     /// </summary>
@@ -196,6 +197,175 @@ namespace SharedMemoryTests
                 string.Join("; ", outcomes));
         }
 
+        [TestMethod]
+        public void RPC_UnknownMessageType_GetsOneNotUnderstoodReply()
+        {
+            var handled = new ConcurrentQueue<ulong>();
+            var owner = Own(new RpcBufferProbe(name, (msgId, payload) =>
+            {
+                handled.Enqueue(msgId);
+                return new byte[] { 1 };
+            }, Capacity, 10));
+            var toOwner = Own(new CircularBuffer(name + "_Owner_SharedMemory_MMF"));
+            var fromOwner = Own(new CircularBuffer(name + "_Opener_SharedMemory_MMF"));
+
+            // A message type that this version does not know, as a later version might send: in one packet, in three, and in
+            // three whose first packet was lost. Then a request, whose response comes once the owner has read them all
+            const MessageType unknown = (MessageType)9;
+            var three = Pattern(2 * PacketPayload + 1, 2);
+            WritePacket(toOwner, Packet(unknown, 21, 0, Pattern(10, 1), 1, 1));
+            for (int packet = 1; packet <= 3; packet++)
+            {
+                WritePacket(toOwner, Packet(unknown, 22, 0, three, packet, 3));
+            }
+            for (int packet = 2; packet <= 3; packet++)
+            {
+                WritePacket(toOwner, Packet(unknown, 23, 0, three, packet, 3));
+            }
+            WritePacket(toOwner, Packet(MessageType.RpcRequest, 24, 0, Pattern(10, 3), 1, 1));
+
+            // The owner sends the not-understood replies from the thread pool, so they can follow the response
+            WaitUntil(() => owner.Statistics.ErrorsSent >= 2, 10000);
+            var replies = RepliesUntil(fromOwner, 24);
+            Assert.AreEqual(
+                "handled 24; replies: ErrorInRpc to 21, flags 1, 0 bytes; ErrorInRpc to 22, flags 1, 0 bytes; RpcResponse to 24, flags 0, 1 bytes; " +
+                    "partial messages 0, requests received 1, errors sent 2",
+                $"handled {string.Join(",", handled.OrderBy(id => id))}; replies: {string.Join("; ", replies)}; " +
+                    $"partial messages {owner.PartialRequests}, requests received {owner.Statistics.RequestsReceived}, errors sent {owner.Statistics.ErrorsSent}");
+        }
+
+        [TestMethod]
+        public void RPC_RequestWithUnknownFlag_GetsNotUnderstoodReply()
+        {
+            var handled = new ConcurrentQueue<ulong>();
+            var owner = Own(new RpcBufferProbe(name, (msgId, payload) =>
+            {
+                handled.Enqueue(msgId);
+                return new byte[] { 1 };
+            }, Capacity, 10));
+            var toOwner = Own(new CircularBuffer(name + "_Owner_SharedMemory_MMF"));
+            var fromOwner = Own(new CircularBuffer(name + "_Opener_SharedMemory_MMF"));
+
+            // A request with flag bit 15, which this version does not know, as a later version might send: in one packet and in
+            // three. A request with bit 0, which this version knows only on an error. Then a request without a flag, whose
+            // response comes once the owner has read them all
+            const ushort unknownFlag = 0x8000;
+            var three = Pattern(2 * PacketPayload + 1, 2);
+            WritePacket(toOwner, WithFlags(Packet(MessageType.RpcRequest, 30, 0, Pattern(10, 0), 1, 1), 1));
+            WritePacket(toOwner, WithFlags(Packet(MessageType.RpcRequest, 31, 0, Pattern(10, 1), 1, 1), unknownFlag));
+            for (int packet = 1; packet <= 3; packet++)
+            {
+                WritePacket(toOwner, WithFlags(Packet(MessageType.RpcRequest, 32, 0, three, packet, 3), unknownFlag));
+            }
+            WritePacket(toOwner, Packet(MessageType.RpcRequest, 33, 0, Pattern(10, 3), 1, 1));
+
+            // The owner sends the not-understood replies from the thread pool, so they can follow the response
+            WaitUntil(() => owner.Statistics.ErrorsSent >= 3, 10000);
+            var replies = RepliesUntil(fromOwner, 33);
+            Assert.AreEqual(
+                "handled 33; replies: ErrorInRpc to 30, flags 1, 0 bytes; ErrorInRpc to 31, flags 1, 0 bytes; ErrorInRpc to 32, flags 1, 0 bytes; " +
+                    "RpcResponse to 33, flags 0, 1 bytes; partial messages 0, requests received 1, errors sent 3",
+                $"handled {string.Join(",", handled.OrderBy(id => id))}; replies: {string.Join("; ", replies)}; " +
+                    $"partial messages {owner.PartialRequests}, requests received {owner.Statistics.RequestsReceived}, errors sent {owner.Statistics.ErrorsSent}");
+        }
+
+        [TestMethod]
+        public void RPC_ResponseWithUnknownFlag_FailsTheRequest()
+        {
+            var owner = Own(new RpcBufferProbe(name, Capacity, 10));
+            var fromOwner = Own(new CircularBuffer(name + "_Opener_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Owner_SharedMemory_MMF"));
+
+            var watch = Stopwatch.StartNew();
+            var pending = owner.RemoteRequestAsync(new byte[] { 1 }, timeoutMs: 5000);
+            PacketHeader request;
+            Assert.IsTrue(TryReadPacket(fromOwner, 1000, out request), "the request did not arrive");
+
+            // Its response, with flag bit 15, which this version does not know
+            WritePacket(toOwner, WithFlags(Packet(MessageType.RpcResponse, 41, request.MsgId, Pattern(10, 4), 1, 1), 0x8000));
+
+            var response = pending.Result;
+            watch.Stop();
+            PacketHeader reply;
+            var answered = TryReadPacket(fromOwner, 500, out reply);
+            Assert.AreEqual(
+                "success False, before the timeout True, pending 0, answered False",
+                $"success {response.Success}, before the timeout {watch.ElapsedMilliseconds < 4000}, pending {owner.PendingRequests}, answered {answered}",
+                $"returned after {watch.ElapsedMilliseconds} ms");
+        }
+
+        [TestMethod]
+        public void RPC_ErrorIsNeverAnswered()
+        {
+            var owner = Own(new RpcBufferProbe(name, (msgId, payload) => new byte[] { 1 }, Capacity, 10));
+            var fromOwner = Own(new CircularBuffer(name + "_Opener_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Owner_SharedMemory_MMF"));
+
+            var pending = owner.RemoteRequestAsync(new byte[] { 1 }, timeoutMs: 5000);
+            PacketHeader request;
+            Assert.IsTrue(TryReadPacket(fromOwner, 1000, out request), "the request did not arrive");
+
+            // An error to the owner's request with flag bit 15, which this version does not know: it fails the request without
+            // its payload, where the error would give it as the response's data. Errors to no request, with no flag, with the
+            // not-understood flag and with bit 15. Then a request, whose response comes once the owner has read them
+            WritePacket(toOwner, WithFlags(Packet(MessageType.ErrorInRpc, 51, request.MsgId, Pattern(10, 5), 1, 1), 0x8000));
+            WritePacket(toOwner, Packet(MessageType.ErrorInRpc, 52, 12345, Pattern(10, 5), 1, 1));
+            WritePacket(toOwner, WithFlags(Packet(MessageType.ErrorInRpc, 53, 12346, new byte[0], 1, 1), 1));
+            WritePacket(toOwner, WithFlags(Packet(MessageType.ErrorInRpc, 54, 12347, new byte[0], 1, 1), 0x8000));
+            WritePacket(toOwner, Packet(MessageType.RpcRequest, 55, 0, Pattern(10, 6), 1, 1));
+
+            var replies = RepliesUntil(fromOwner, 55);
+            var response = pending.Result;
+            Assert.AreEqual(
+                "request failed True, data null True; replies: RpcResponse to 55, flags 0, 1 bytes",
+                $"request failed {!response.Success}, data null {response.Data == null}; replies: {string.Join("; ", replies)}");
+        }
+
+        [TestMethod]
+        public void RPC_NotUnderstoodReply_FailsTheCall()
+        {
+            var owner = Own(new RpcBufferProbe(name, Capacity, 10));
+            var fromOwner = Own(new CircularBuffer(name + "_Opener_SharedMemory_MMF"));
+            var toOwner = Own(new CircularBuffer(name + "_Owner_SharedMemory_MMF"));
+
+            var watch = Stopwatch.StartNew();
+            var pending = owner.RemoteRequestAsync(new byte[] { 1 }, timeoutMs: 5000);
+            PacketHeader request;
+            Assert.IsTrue(TryReadPacket(fromOwner, 1000, out request), "the request did not arrive");
+
+            // What a peer that does not understand the request answers: an error with the not-understood flag and no payload
+            WritePacket(toOwner, WithFlags(Packet(MessageType.ErrorInRpc, 61, request.MsgId, new byte[0], 1, 1), 1));
+
+            var response = pending.Result;
+            watch.Stop();
+            Assert.AreEqual(
+                "success False, data null True, before the timeout True, pending 0",
+                $"success {response.Success}, data null {response.Data == null}, before the timeout {watch.ElapsedMilliseconds < 4000}, pending {owner.PendingRequests}",
+                $"returned after {watch.ElapsedMilliseconds} ms");
+        }
+
+        /// <summary>
+        /// The packets the owner sends until its reply to <paramref name="lastId"/>, and any in the 500 ms after it, each as
+        /// "type to the id it answers, flags, payload bytes", in order of that id: the owner sends a handler's reply and the
+        /// not-understood reply from the thread pool, so their order is not fixed.
+        /// </summary>
+        static List<string> RepliesUntil(CircularBuffer fromOwner, ulong lastId)
+        {
+            var replies = new List<PacketHeader>();
+            PacketHeader reply;
+            while (!replies.Any(r => r.ResponseId == lastId) && TryReadPacket(fromOwner, 3000, out reply))
+            {
+                replies.Add(reply);
+            }
+            while (TryReadPacket(fromOwner, 500, out reply))
+            {
+                replies.Add(reply);
+            }
+            return replies.OrderBy(r => r.ResponseId)
+                .Select(r => $"{r.Type} to {r.ResponseId}, flags {r.Flags}, {r.PayloadSize} bytes")
+                .ToList();
+        }
+
         /// <summary>
         /// A new owner and opener on the channel, and one request from the opener.
         /// </summary>
@@ -246,16 +416,24 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// Shows the table of incoming requests still missing packets, which RpcBuffer keeps protected.
+        /// Shows the tables of incoming requests still missing packets and of requests waiting for a response, which RpcBuffer
+        /// keeps protected.
         /// </summary>
         class RpcBufferProbe : RpcBuffer
         {
+            public RpcBufferProbe(string name, int bufferCapacity, int bufferNodeCount)
+                : base(name, bufferCapacity, bufferNodeCount: bufferNodeCount)
+            {
+            }
+
             public RpcBufferProbe(string name, Func<ulong, byte[], byte[]> handler, int bufferCapacity, int bufferNodeCount)
                 : base(name, handler, bufferCapacity, bufferNodeCount: bufferNodeCount)
             {
             }
 
             public int PartialRequests { get { return IncomingRequests.Count; } }
+
+            public int PendingRequests { get { return Requests.Count; } }
         }
     }
 }

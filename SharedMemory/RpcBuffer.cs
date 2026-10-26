@@ -230,9 +230,14 @@ namespace SharedMemory
     {
         internal const int Size = 32; // and the HeaderLength this version writes
 
+        // The one flag this version knows, and only on an error: the end that sent the error did not understand the message it
+        // answers, of a type that end does not know or a request with a flag. Any other bit, or this one on a request or a
+        // response, is not understood
+        internal const ushort NotUnderstood = 1;
+
         [FieldOffset(0)] public byte HeaderLength; // bytes from the start of the packet to its payload
         [FieldOffset(1)] public MessageType MsgType;
-        [FieldOffset(2)] public ushort Flags; // bits a reader must understand; this version sends none
+        [FieldOffset(2)] public ushort Flags; // bits a reader must understand
         [FieldOffset(4)] public int PayloadSize; // the whole message's payload, the same in each of its packets
         [FieldOffset(8)] public ulong MsgId;
         [FieldOffset(16)] public ulong ResponseId; // on a response or an error, the MsgId of the request it answers
@@ -951,12 +956,16 @@ namespace SharedMemory
         RpcRequest CreateMessageRequest(bool continuesOnThreadPool)
         {
             RpcRequest request = new RpcRequest(continuesOnThreadPool);
+            request.MsgId = NextMessageId();
+            return request;
+        }
+
+        ulong NextMessageId()
+        {
             lock (mutex)
             {
-                request.MsgId = messageId++;
+                return messageId++;
             }
-
-            return request;
         }
 
         /// <summary>
@@ -1040,7 +1049,7 @@ namespace SharedMemory
             var success = false;
             try
             {
-                success = WriteMessage(msgType, msgId, payload, responseMsgId, timeout, sending);
+                success = WriteMessage(msgType, 0, msgId, payload, responseMsgId, timeout, sending);
             }
             finally
             {
@@ -1143,7 +1152,7 @@ namespace SharedMemory
             return response;
         }
 
-        bool WriteMessage(MessageType msgType, ulong msgId, byte[] msg, ulong responseMsgId, int timeout, long sending)
+        bool WriteMessage(MessageType msgType, ushort flags, ulong msgId, byte[] msg, ulong responseMsgId, int timeout, long sending)
         {
             // Dispose sets the property to null, and closes the buffer only under the send lock
             var writeBuffer = WriteBuffer;
@@ -1198,6 +1207,7 @@ namespace SharedMemory
                 {
                     HeaderLength = RpcPacketHeader.Size,
                     MsgType = msgType,
+                    Flags = flags,
                     PayloadSize = payloadSize,
                     MsgId = msgId,
                     ResponseId = responseMsgId
@@ -1356,7 +1366,20 @@ namespace SharedMemory
                         partialRequest = null;
                     }
 
+                    // A message this version does not understand, of a type it does not know or a request with a flag, runs no
+                    // handler. Its first packet gets the not-understood reply; its other packets are skipped, as are all of one
+                    // whose first packet was lost
                     var isReply = header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc;
+                    if (!isReply && (header.MsgType != MessageType.RpcRequest || header.Flags != 0))
+                    {
+                        if (header.PayloadOffset == 0)
+                        {
+                            StartNotUnderstoodReply(header.MsgId);
+                        }
+                        Statistics.ReadPacket(header.PacketLength);
+                        return header.HeaderLength + header.PacketLength;
+                    }
+
                     RpcRequest request = null;
                     if (isReply)
                     {
@@ -1365,6 +1388,16 @@ namespace SharedMemory
                             // The response received does not have a  matching message that was sent
                             Statistics.DiscardResponse(header.ResponseId);
                             return protocolLength;
+                        }
+
+                        // A reply with a flag this version does not know fails its request. Like every reply, it is not
+                        // answered, so that two ends never answer each other's replies
+                        int knownFlags = header.MsgType == MessageType.ErrorInRpc ? RpcPacketHeader.NotUnderstood : 0;
+                        if ((header.Flags & ~knownFlags) != 0)
+                        {
+                            DropMessage(header);
+                            Statistics.ReadPacket(header.PacketLength);
+                            return header.HeaderLength + header.PacketLength;
                         }
                     }
                     else if (header.PayloadOffset == 0)
@@ -1495,6 +1528,21 @@ namespace SharedMemory
                     {
                         throw;
                     }
+                }
+            });
+        }
+
+        // Answers a message this version does not understand: an error flagged NotUnderstood, with no payload. It goes from the
+        // thread pool, as a handler's reply does, since a read thread that waited for room in the other ring, while the peer's
+        // read thread waited for room in this one, would stall both. A subclass's SendMessage, which cannot carry the flag, does
+        // not see it
+        void StartNotUnderstoodReply(ulong msgId)
+        {
+            Task.Run(() =>
+            {
+                if (WriteMessage(MessageType.ErrorInRpc, RpcPacketHeader.NotUnderstood, NextMessageId(), null, msgId, defaultTimeoutMs, Stopwatch.GetTimestamp()))
+                {
+                    Statistics.MessageSent(MessageType.ErrorInRpc, 0);
                 }
             });
         }
