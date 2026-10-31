@@ -22,8 +22,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -37,8 +39,8 @@ namespace SharedMemory
 
     internal enum InstanceType
     {
-        Master,
-        Slave
+        Owner,
+        Opener
     }
 
     /// <summary>
@@ -47,9 +49,14 @@ namespace SharedMemory
     public enum RpcProtocol
     {
         /// <summary>
-        /// Version 1 - messages are split into packets that fit the buffer capacity and include a protocol header in each packet
+        /// Ignored since SharedMemory 2.4.0, which has one protocol; this value runs it. Code compiled against 2.3 or earlier passes it.
         /// </summary>
-        V1 = 1
+        [Obsolete("Ignored since SharedMemory 2.4.0: RpcBuffer has one protocol. Leave the argument out.")]
+        V1 = 1,
+        /// <summary>
+        /// The protocol from SharedMemory 2.4.0: messages are split into packets that fit the buffer capacity, each with a 32-byte header
+        /// </summary>
+        V2 = 2
     }
 
     /// <summary>
@@ -184,6 +191,8 @@ namespace SharedMemory
     /// <summary>
     /// The V1 protocol header
     /// </summary>
+    [Obsolete("RpcBuffer does not use this header since SharedMemory 2.4.0. It will be removed in 3.0.")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public struct RpcProtocolHeaderV1
     {
         /// <summary>
@@ -210,6 +219,30 @@ namespace SharedMemory
         /// If a response, the Id of the remote message this is a response to
         /// </summary>
         public ulong ResponseId;
+    }
+
+    // The header at the start of every RpcBuffer packet, followed by PacketLength bytes of the message's payload from byte
+    // HeaderLength. Every byte belongs to a field, so none is left undefined. A field added later goes after byte 32, with
+    // HeaderLength raised to cover it, and a reader that does not know it skips it; a meaning that a reader must not miss is a
+    // flag, or a message type of its own.
+    [StructLayout(LayoutKind.Explicit, Size = Size)]
+    internal struct RpcPacketHeader
+    {
+        internal const int Size = 32; // and the HeaderLength this version writes
+
+        // The one flag this version knows, and only on an error: the end that sent the error did not understand the message it
+        // answers, of a type that end does not know or a request with a flag. Any other bit, or this one on a request or a
+        // response, is not understood
+        internal const ushort NotUnderstood = 1;
+
+        [FieldOffset(0)] public byte HeaderLength; // bytes from the start of the packet to its payload
+        [FieldOffset(1)] public MessageType MsgType;
+        [FieldOffset(2)] public ushort Flags; // bits a reader must understand
+        [FieldOffset(4)] public int PayloadSize; // the whole message's payload, the same in each of its packets
+        [FieldOffset(8)] public ulong MsgId;
+        [FieldOffset(16)] public ulong ResponseId; // on a response or an error, the MsgId of the request it answers
+        [FieldOffset(24)] public int PayloadOffset; // where this packet's bytes go in the message's payload
+        [FieldOffset(28)] public int PacketLength; // this packet's payload bytes: the ring does not tell its reader how much was written
     }
 
     /// <summary>
@@ -257,9 +290,9 @@ namespace SharedMemory
         public DateTime Created { get { return created.ToLocalTime(); } }
         readonly DateTime created = DateTime.UtcNow; // turned into local time when read, rather than for every request
         /// <summary>
-        /// The packets of the message received so far
+        /// The bytes of the message received so far
         /// </summary>
-        internal int PacketsReceived { get; set; }
+        internal int BytesReceived { get; set; }
         /// <summary>
         /// Whether code awaiting the response must run on the thread pool, rather than on the read thread that completes it
         /// </summary>
@@ -549,11 +582,22 @@ namespace SharedMemory
     }
 
     /// <summary>
-    /// A simple RPC implementation designed for a single master/slave pair
+    /// A simple RPC channel with two ends: the owner, which creates it, and the opener, which joins it
     /// </summary>
+    /// <remarks>A third instance on a channel joins as a second opener, and the two openers compete for each packet the owner sends:
+    /// a request from the owner that fits in one packet is answered by one opener or the other, but any other call on the channel
+    /// can fail.</remarks>
     public class RpcBuffer : IDisposable
     {
-        private Mutex masterMutex;
+        // The objects an RpcBuffer finds its other end by. Changing any of them stops this version pairing with the one before it.
+        const string ElectionMutexSuffix = "SharedMemory_OwnerMutex";
+        const string OwnerReadsSuffix = "_Owner_SharedMemory_MMF";
+        const string OwnerWritesSuffix = "_Opener_SharedMemory_MMF";
+        // The name 2.3 and earlier elect with. On Windows the owner holds it, so that an older RpcBuffer fails instead of joining.
+        const string PreviousElectionMutexSuffix = "SharedMemory_MasterMutex";
+
+        private Mutex electionMutex;
+        private Mutex previousElectionMutex;
         private long _disposed = 0;
 
         /// <summary>
@@ -580,13 +624,32 @@ namespace SharedMemory
             }
         }
 
+        /// <summary>
+        /// Whether this instance was first on the channel: it created both buffers and set their capacity and node count.
+        /// False when it opened the buffers another instance created, and took their capacity and node count.
+        /// </summary>
+        /// <remarks>Set by the constructor, and still readable after <see cref="Dispose()"/>.</remarks>
+        public bool IsChannelOwner
+        {
+            get
+            {
+                return instanceType == InstanceType.Owner;
+            }
+        }
+
         private readonly InstanceType instanceType;
-        private readonly RpcProtocol protocolVersion;
         private readonly int protocolLength;
         private readonly int bufferCapacity;
         private readonly int bufferNodeCount;
         private readonly int msgBufferLength; // The amount of room left in the node after protocol header
         private readonly bool sendMessageOverridden;
+
+        // The send loop's packet, which writePacket writes into a node of the write buffer: its header, which says where its
+        // bytes are in the message, and the message. Only the holder of the send lock sets or reads them, and writePacket runs
+        // only inside the ring's Write, under that lock
+        private readonly Func<IntPtr, int> writePacket;
+        private RpcPacketHeader sendHeader;
+        private byte[] sendPayload;
 
         /// <summary>
         /// The buffer used to send messages to remote channel endpoint
@@ -627,21 +690,23 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="remoteCallHandler">Action to handle requests with no response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
-        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
-        /// fails if its master has not created a buffer yet.</remarks>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
-        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
-        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
-        /// after about 1 s.</exception>
-        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
-        /// open by an earlier slave.</exception>
-        public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
+        /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
+        /// <param name="protocolVersion">Ignored: every value of <see cref="RpcProtocol"/> runs the one protocol. Each packet carries a 32-byte header.</param>
+        /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
+        /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
+        /// fails if its owner has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB, or
+        /// <paramref name="protocolVersion"/> is not a value of <see cref="RpcProtocol"/>.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
+        /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
+        /// cannot share.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
+        /// open by an earlier opener.</exception>
+        public RpcBuffer(string name, Action<ulong, byte[]> remoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V2, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
             RemoteCallHandler = remoteCallHandler;
@@ -650,21 +715,23 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="asyncRemoteCallHandler">Asynchronous action to handle requests with no response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
-        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
-        /// fails if its master has not created a buffer yet.</remarks>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
-        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
-        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
-        /// after about 1 s.</exception>
-        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
-        /// open by an earlier slave.</exception>
-        public RpcBuffer(string name, Func<ulong, byte[], Task> asyncRemoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
+        /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
+        /// <param name="protocolVersion">Ignored: every value of <see cref="RpcProtocol"/> runs the one protocol. Each packet carries a 32-byte header.</param>
+        /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
+        /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
+        /// fails if its owner has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB, or
+        /// <paramref name="protocolVersion"/> is not a value of <see cref="RpcProtocol"/>.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
+        /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
+        /// cannot share.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
+        /// open by an earlier opener.</exception>
+        public RpcBuffer(string name, Func<ulong, byte[], Task> asyncRemoteCallHandler, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V2, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
             AsyncRemoteCallHandler = asyncRemoteCallHandler;
@@ -673,21 +740,23 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="remoteCallHandlerWithResult">Function to handle requests with a response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
-        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
-        /// fails if its master has not created a buffer yet.</remarks>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
-        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
-        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
-        /// after about 1 s.</exception>
-        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
-        /// open by an earlier slave.</exception>
-        public RpcBuffer(string name, Func<ulong, byte[], byte[]> remoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
+        /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
+        /// <param name="protocolVersion">Ignored: every value of <see cref="RpcProtocol"/> runs the one protocol. Each packet carries a 32-byte header.</param>
+        /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
+        /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
+        /// fails if its owner has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB, or
+        /// <paramref name="protocolVersion"/> is not a value of <see cref="RpcProtocol"/>.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
+        /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
+        /// cannot share.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
+        /// open by an earlier opener.</exception>
+        public RpcBuffer(string name, Func<ulong, byte[], byte[]> remoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V2, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
             RemoteCallHandlerWithResult = remoteCallHandlerWithResult;
@@ -696,21 +765,23 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
+        /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
         /// <param name="asyncRemoteCallHandlerWithResult">Function to asynchronously handle requests with a response.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
-        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
-        /// fails if its master has not created a buffer yet.</remarks>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
-        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
-        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
-        /// after about 1 s.</exception>
-        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
-        /// open by an earlier slave.</exception>
-        public RpcBuffer(string name, Func<ulong, byte[], Task<byte[]>> asyncRemoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10) :
+        /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
+        /// <param name="protocolVersion">Ignored: every value of <see cref="RpcProtocol"/> runs the one protocol. Each packet carries a 32-byte header.</param>
+        /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
+        /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
+        /// fails if its owner has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB, or
+        /// <paramref name="protocolVersion"/> is not a value of <see cref="RpcProtocol"/>.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
+        /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
+        /// cannot share.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
+        /// open by an earlier opener.</exception>
+        public RpcBuffer(string name, Func<ulong, byte[], Task<byte[]>> asyncRemoteCallHandlerWithResult, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V2, int bufferNodeCount = 10) :
             this(name, bufferCapacity, protocolVersion, bufferNodeCount)
         {
             AsyncRemoteCallHandlerWithResult = asyncRemoteCallHandlerWithResult;
@@ -719,20 +790,22 @@ namespace SharedMemory
         /// <summary>
         /// Construct a new RpcBuffer
         /// </summary>
-        /// <param name="name">The unique channel name. This is the name to be shared between the master/slave pair. Each pair must have a unique value.</param>
-        /// <param name="bufferCapacity">Master only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The slave will use the same size as defined by the master</param>
-        /// <param name="protocolVersion">RpcProtocol.V1: a 32-byte header in each packet</param>
-        /// <param name="bufferNodeCount">Master only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
-        /// <remarks>The first instance on a channel is its master and creates the two circular buffers, one after the other; the second
-        /// is its slave and opens them. A slave waits up to about 1 s for each buffer its master has created but not finished, and
-        /// fails if its master has not created a buffer yet.</remarks>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB.</exception>
-        /// <exception cref="System.IO.FileNotFoundException">This instance is the slave, and its master has not created a buffer yet.</exception>
-        /// <exception cref="InvalidOperationException">This instance is the slave, and its master had not finished creating a buffer
-        /// after about 1 s.</exception>
-        /// <exception cref="System.IO.IOException">This instance is the master, and a buffer of the channel's name still exists, held
-        /// open by an earlier slave.</exception>
-        public RpcBuffer(string name, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V1, int bufferNodeCount = 10)
+        /// <param name="name">The unique channel name. This is the name the owner and the opener share. Each channel must have a unique value.</param>
+        /// <param name="bufferCapacity">Owner only: Maximum buffer capacity. Messages will be split into packets that fit this capacity (including a packet header of 32 bytes). The opener will use the same size as defined by the owner</param>
+        /// <param name="protocolVersion">Ignored: every value of <see cref="RpcProtocol"/> runs the one protocol. Each packet carries a 32-byte header.</param>
+        /// <param name="bufferNodeCount">Owner only: The number of nodes in the underlying circular buffers, each with a size of <paramref name="bufferCapacity"/></param>
+        /// <remarks>The first instance on a channel is its owner and creates the two circular buffers, one after the other; the second
+        /// is its opener and opens them. An opener waits up to about 1 s for each buffer its owner has created but not finished, and
+        /// fails if its owner has not created a buffer yet.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 256 bytes or more than 1 MB, or
+        /// <paramref name="protocolVersion"/> is not a value of <see cref="RpcProtocol"/>.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">This instance is the opener, and its owner has not created a buffer yet.</exception>
+        /// <exception cref="InvalidOperationException">This instance is the opener, and its owner had not finished creating a buffer
+        /// after about 1 s. Or, on Windows, an RpcBuffer from SharedMemory 2.3 or earlier holds the channel, which this version
+        /// cannot share.</exception>
+        /// <exception cref="System.IO.IOException">This instance is the owner, and a buffer of the channel's name still exists, held
+        /// open by an earlier opener.</exception>
+        public RpcBuffer(string name, int bufferCapacity = 50000, RpcProtocol protocolVersion = RpcProtocol.V2, int bufferNodeCount = 10)
         {
             if (bufferCapacity < 256) // min 256 bytes
             {
@@ -742,6 +815,13 @@ namespace SharedMemory
             if (bufferCapacity > 1024 * 1024) // max 1MB
             {
                 throw new ArgumentOutOfRangeException(nameof(bufferCapacity), "cannot be larger than 1MB");
+            }
+
+            // 1 is RpcProtocol.V1, which code compiled against 2.3 or earlier passes, and runs the one protocol as V2 does. It is
+            // compared as a number, since naming V1 here would warn that it is obsolete
+            if (protocolVersion != RpcProtocol.V2 && (int)protocolVersion != 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(protocolVersion), protocolVersion, "is not a value of RpcProtocol");
             }
 
             Statistics = new RpcStatistics();
@@ -759,52 +839,68 @@ namespace SharedMemory
             bool takeMutex = OperatingSystem.IsWindows();
             bool createdNew;
             if (takeMutex)
-                masterMutex = new Mutex(true, name + "SharedMemory_MasterMutex", out createdNew);
+                electionMutex = new Mutex(true, name + ElectionMutexSuffix, out createdNew);
             else
-                masterMutex = CreateUnixElectionMutex(name + "SharedMemory_MasterMutex", out createdNew);
+                electionMutex = CreateUnixElectionMutex(name + ElectionMutexSuffix, out createdNew);
 
-            if (createdNew && (!takeMutex || masterMutex.WaitOne(500)))
+            if (createdNew && (!takeMutex || electionMutex.WaitOne(500)))
 #else
-            masterMutex = new Mutex(true, name + "SharedMemory_MasterMutex", out bool createdNew);
+            electionMutex = new Mutex(true, name + ElectionMutexSuffix, out bool createdNew);
 
-            if (createdNew && masterMutex.WaitOne(500))
+            if (createdNew && electionMutex.WaitOne(500))
 #endif
             {
-                instanceType = InstanceType.Master;
+                instanceType = InstanceType.Owner;
             }
             else
             {
-                instanceType = InstanceType.Slave;
-                if (masterMutex != null)
+                instanceType = InstanceType.Opener;
+                if (electionMutex != null)
                 {
-                    masterMutex.Close();
-                    masterMutex.Dispose();
-                    masterMutex = null;
+                    electionMutex.Close();
+                    electionMutex.Dispose();
+                    electionMutex = null;
                 }
             }
 
-            switch (protocolVersion)
+#if NET10_0_OR_GREATER
+            bool onWindows = OperatingSystem.IsWindows();
+#else
+            bool onWindows = Environment.OSVersion.Platform == PlatformID.Win32NT;
+#endif
+            // 2.3 and earlier run RpcBuffer only on Windows, under other names. An older RpcBuffer that arrives after this owner finds
+            // the name it elects with taken, becomes an opener and fails to open its rings. One that is already here holds that name,
+            // and this owner closes its election mutex and stops before creating its rings.
+            if (instanceType == InstanceType.Owner && onWindows)
             {
-                case RpcProtocol.V1:
-                    this.protocolVersion = protocolVersion;
-                    protocolLength = FastStructure.SizeOf<RpcProtocolHeaderV1>();
-                    Statistics.ProtocolOverheadPerPacket = protocolLength;
-                    break;
+                previousElectionMutex = new Mutex(false, name + PreviousElectionMutexSuffix, out bool createdPrevious);
+                if (!createdPrevious)
+                {
+                    previousElectionMutex.Close();
+                    previousElectionMutex = null;
+                    electionMutex.Close();
+                    electionMutex = null;
+                    throw new InvalidOperationException("Channel \"" + name + "\" is in use by an RpcBuffer from SharedMemory 2.3 or earlier, which cannot share a channel with this version. Upgrade both ends.");
+                }
             }
+
+            protocolLength = RpcPacketHeader.Size;
+            Statistics.ProtocolOverheadPerPacket = protocolLength;
+            writePacket = WritePacket;
 
             this.bufferCapacity = bufferCapacity;
             this.bufferNodeCount = bufferNodeCount;
             try
             {
-                if (instanceType == InstanceType.Master)
+                if (instanceType == InstanceType.Owner)
                 {
-                    WriteBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
-                    ReadBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF", bufferNodeCount, this.bufferCapacity);
+                    WriteBuffer = new CircularBuffer(name + OwnerWritesSuffix, bufferNodeCount, this.bufferCapacity);
+                    ReadBuffer = new CircularBuffer(name + OwnerReadsSuffix, bufferNodeCount, this.bufferCapacity);
                 }
                 else
                 {
-                    ReadBuffer = new CircularBuffer(name + "_Slave_SharedMemory_MMF");
-                    WriteBuffer = new CircularBuffer(name + "_Master_SharedMemory_MMF");
+                    ReadBuffer = new CircularBuffer(name + OwnerWritesSuffix);
+                    WriteBuffer = new CircularBuffer(name + OwnerReadsSuffix);
                     this.bufferCapacity = ReadBuffer.NodeBufferSize;
                     this.bufferNodeCount = ReadBuffer.NodeCount;
                 }
@@ -814,26 +910,16 @@ namespace SharedMemory
                 // Free the names now, rather than when the garbage collector finalises what was made
                 WriteBuffer?.Dispose();
                 ReadBuffer?.Dispose();
-                masterMutex?.Close();
+                // 2.3's name before the election mutex, as in Dispose
+                previousElectionMutex?.Close();
+                electionMutex?.Close();
                 throw;
             }
 
             this.msgBufferLength = Convert.ToInt32(this.bufferCapacity) - protocolLength;
 
 
-            Task readTask = new Task(() =>
-            {
-                switch (protocolVersion)
-                {
-                    case RpcProtocol.V1:
-                        ReadThreadV1();
-                        break;
-                    default:
-                        // No reader for a protocol it does not know, so Dispose has none to wait for
-                        readStopped.Set();
-                        break;
-                }
-            }, TaskCreationOptions.LongRunning);
+            Task readTask = new Task(ReadThread, TaskCreationOptions.LongRunning);
 
             readTask.Start();
         }
@@ -870,12 +956,16 @@ namespace SharedMemory
         RpcRequest CreateMessageRequest(bool continuesOnThreadPool)
         {
             RpcRequest request = new RpcRequest(continuesOnThreadPool);
+            request.MsgId = NextMessageId();
+            return request;
+        }
+
+        ulong NextMessageId()
+        {
             lock (mutex)
             {
-                request.MsgId = messageId++;
+                return messageId++;
             }
-
-            return request;
         }
 
         /// <summary>
@@ -959,15 +1049,7 @@ namespace SharedMemory
             var success = false;
             try
             {
-                switch (this.protocolVersion)
-                {
-                    case RpcProtocol.V1:
-                        success = WriteProtocolV1(msgType, msgId, payload, responseMsgId, timeout, sending);
-                        break;
-                    default:
-                        // Invalid protocol
-                        return Task.FromResult(new RpcResponse(false, null));
-                }
+                success = WriteMessage(msgType, 0, msgId, payload, responseMsgId, timeout, sending);
             }
             finally
             {
@@ -1070,7 +1152,7 @@ namespace SharedMemory
             return response;
         }
 
-        bool WriteProtocolV1(MessageType msgType, ulong msgId, byte[] msg, ulong responseMsgId, int timeout, long sending)
+        bool WriteMessage(MessageType msgType, ushort flags, ulong msgId, byte[] msg, ulong responseMsgId, int timeout, long sending)
         {
             // Dispose sets the property to null, and closes the buffer only under the send lock
             var writeBuffer = WriteBuffer;
@@ -1085,6 +1167,10 @@ namespace SharedMemory
 
             // Send the request packets
             var locked = false;
+            // The send fields as this send found them. Code that runs while a send waits for room can send again on the same
+            // thread, as a wait on an STA thread runs COM calls, and the outer send gets its packet back when the inner one ends
+            var outerHeader = default(RpcPacketHeader);
+            byte[] outerPayload = null;
             try
             {
                 if (waitsForCaller)
@@ -1105,21 +1191,30 @@ namespace SharedMemory
                     return false;
                 }
 
+                outerHeader = sendHeader;
+                outerPayload = sendPayload;
+
                 // Nothing more is sent once Dispose has begun
                 if (Disposed)
                 {
                     return false;
                 }
 
-                // Split message into correct packet size
-                int i = 0;
-                int left = msg?.Length ?? 0;
+                // The packet for writePacket: the header, and msg. The message goes in packets of as many bytes as a node holds
+                // after the header, each full but the last; an empty message is one packet with no bytes
+                int payloadSize = msg?.Length ?? 0;
+                sendHeader = new RpcPacketHeader
+                {
+                    HeaderLength = RpcPacketHeader.Size,
+                    MsgType = msgType,
+                    Flags = flags,
+                    PayloadSize = payloadSize,
+                    MsgId = msgId,
+                    ResponseId = responseMsgId
+                };
+                sendPayload = msg;
 
-                byte[] pMsg = null;
-
-                ushort totalPackets = ((msg?.Length ?? 0) == 0) ? (ushort)1 : Convert.ToUInt16(Math.Ceiling((double)msg.Length / (double)msgBufferLength));
-                ushort currentPacket = 1;
-
+                int offset = 0;
                 while (true)
                 {
                     if (writeBuffer.ShuttingDown || Disposed)
@@ -1127,46 +1222,19 @@ namespace SharedMemory
                         return false;
                     }
 
-                    pMsg = new byte[left > msgBufferLength ? msgBufferLength + protocolLength : left + protocolLength];
-
-                    // Writing protocol header
-                    var header = new RpcProtocolHeaderV1
+                    int left = payloadSize - offset;
+                    int packetLength = left > msgBufferLength ? msgBufferLength : left;
+                    if (packetLength < 0 || (packetLength == 0 && left > 0))
                     {
-                        MsgType = msgType,
-                        MsgId = msgId,
-                        CurrentPacket = currentPacket,
-                        TotalPackets = totalPackets,
-                        PayloadSize = msg?.Length ?? 0,
-                        ResponseId = responseMsgId
-                    };
-                    FastStructure.CopyTo(ref header, pMsg, 0);
-
-                    if (left > msgBufferLength)
-                    {
-                        // Writing payload
-                        if (msg != null && msg.Length > 0)
-                            Buffer.BlockCopy(msg, i, pMsg, protocolLength, msgBufferLength);
-
-                        left -= msgBufferLength;
-                        i += msgBufferLength;
+                        // A node with no room for the message after the header, in rings an opener found that no RpcBuffer
+                        // owner made: fail before writing anything, with the error that copying the header into a node
+                        // smaller than it gave
+                        throw new ArgumentException("The structure does not fit in the buffer from startIndex.");
                     }
-                    else
-                    {
-                        // Writing last packet of payload
-                        if (msg != null && msg.Length > 0)
-                        {
-                            Buffer.BlockCopy(msg, i, pMsg, protocolLength, left);
-                        }
-
-                        left = 0;
-                    }
+                    sendHeader.PayloadOffset = offset;
+                    sendHeader.PacketLength = packetLength;
 
                     Statistics.StartWaitWrite();
-                    Func<IntPtr, int> writePacket = (ptr) =>
-                    {
-                        FastStructure.WriteBytes(ptr, pMsg, 0, pMsg.Length);
-                        return pMsg.Length;
-                    };
 
                     // Write at once if there is room; otherwise wait for it in slices, so that a Dispose, or the channel's
                     // owner closing it, ends the wait
@@ -1195,22 +1263,40 @@ namespace SharedMemory
 
                     Statistics.WritePacket(bytes - protocolLength);
 
-                    if (left <= 0)
+                    offset += packetLength;
+                    if (offset >= payloadSize)
                     {
                         break;
                     }
-                    currentPacket++;
                 }
             }
             finally
             {
                 if (locked)
                 {
+                    // An outer send on this thread gets its packet back. Otherwise the fields go back to holding no caller's
+                    // array, so that none is kept once its send ends
+                    sendHeader = outerHeader;
+                    sendPayload = outerPayload;
                     Monitor.Exit(lock_sendQ);
                 }
             }
 
             return true;
+        }
+
+        // Writes the send loop's packet into a node of the write buffer: the header, then the packet's bytes straight from the
+        // caller's array. Returns the bytes written. The ring calls it only once it has a node, under the send lock
+        int WritePacket(IntPtr node)
+        {
+            FastStructure<RpcPacketHeader>.StructureToPtr(ref sendHeader, node);
+
+            if (sendHeader.PacketLength > 0)
+            {
+                FastStructure.WriteBytes(node + protocolLength, sendPayload, sendHeader.PayloadOffset, sendHeader.PacketLength);
+            }
+
+            return protocolLength + sendHeader.PacketLength;
         }
 
         static int RemainingTimeout(int timeout, long started)
@@ -1246,14 +1332,159 @@ namespace SharedMemory
 
         private RpcRequest partialRequest; // the incoming request still missing packets, used by the read thread only
 
-        void ReadThreadV1()
+        void ReadThread()
         {
             try
             {
                 // Work with Local Variable to prevent NPE after dispose  
                 CircularBuffer l_TempReadBuffer = ReadBuffer;
-                var header = new RpcProtocolHeaderV1(); // the packet being read, whose message is dropped if handling it fails
+                int nodeSize = l_TempReadBuffer.NodeBufferSize; // a packet's header and bytes fit in its node
+                var header = new RpcPacketHeader(); // the packet being read, whose message is dropped if handling it fails
                 var handling = false; // whether a fault came from handling a packet, rather than from the ring itself
+
+                // Made once: the delegate that handles a packet, and the one the ring calls, which clears handling after it
+                Func<IntPtr, int> readPacket = (ptr) =>
+                {
+                    header = FastStructure<RpcPacketHeader>.PtrToStructure(ptr);
+                    handling = true;
+
+                    // A header that does not describe a packet in this node drops its message, with no reply. Each comparison
+                    // is written so that it cannot overflow
+                    if (header.HeaderLength < protocolLength || header.PacketLength < 0 || header.PacketLength > nodeSize - header.HeaderLength ||
+                        header.PayloadSize < 0 || header.PayloadOffset < 0 || header.PacketLength > header.PayloadSize - header.PayloadOffset ||
+                        (header.PacketLength == 0 && header.PayloadSize != 0))
+                    {
+                        DropMessage(header);
+                        return protocolLength;
+                    }
+
+                    // The peer sends one message at a time, so the first packet of a message means
+                    // that the request still missing packets will not get them
+                    if (header.PayloadOffset == 0 && partialRequest != null)
+                    {
+                        IncomingRequests.TryRemove(partialRequest.MsgId, out RpcRequest abandoned);
+                        partialRequest = null;
+                    }
+
+                    // A message this version does not understand, of a type it does not know or a request with a flag, runs no
+                    // handler. Its first packet gets the not-understood reply; its other packets are skipped, as are all of one
+                    // whose first packet was lost
+                    var isReply = header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc;
+                    if (!isReply && (header.MsgType != MessageType.RpcRequest || header.Flags != 0))
+                    {
+                        if (header.PayloadOffset == 0)
+                        {
+                            StartNotUnderstoodReply(header.MsgId);
+                        }
+                        Statistics.ReadPacket(header.PacketLength);
+                        return header.HeaderLength + header.PacketLength;
+                    }
+
+                    RpcRequest request = null;
+                    if (isReply)
+                    {
+                        if (!Requests.TryGetValue(header.ResponseId, out request))
+                        {
+                            // The response received does not have a  matching message that was sent
+                            Statistics.DiscardResponse(header.ResponseId);
+                            return protocolLength;
+                        }
+
+                        // A reply with a flag this version does not know fails its request. Like every reply, it is not
+                        // answered, so that two ends never answer each other's replies
+                        int knownFlags = header.MsgType == MessageType.ErrorInRpc ? RpcPacketHeader.NotUnderstood : 0;
+                        if ((header.Flags & ~knownFlags) != 0)
+                        {
+                            DropMessage(header);
+                            Statistics.ReadPacket(header.PacketLength);
+                            return header.HeaderLength + header.PacketLength;
+                        }
+                    }
+                    else if (header.PayloadOffset == 0)
+                    {
+                        request = IncomingRequests.GetOrAdd(header.MsgId, new RpcRequest
+                        {
+                            MsgId = header.MsgId
+                        });
+                    }
+                    else if (!IncomingRequests.TryGetValue(header.MsgId, out request))
+                    {
+                        // The start of this message was lost or discarded
+                        return protocolLength;
+                    }
+
+                    // Each packet starts where the one before it ended, and gives the size its message's first packet gave.
+                    // Otherwise a packet was lost or the message is damaged: drop the message, and fail the request it answers
+                    if (header.PayloadOffset != request.BytesReceived ||
+                        (header.PayloadOffset > 0 && header.PayloadSize != request.Data.Length))
+                    {
+                        DropMessage(header);
+                        Statistics.ReadPacket(header.PacketLength);
+                        return header.HeaderLength + header.PacketLength;
+                    }
+
+                    if (header.PayloadOffset == 0 && header.PayloadSize > 0)
+                    {
+                        request.Data = new byte[header.PayloadSize];
+                    }
+
+                    if (header.PacketLength > 0)
+                    {
+                        FastStructure.ReadBytes(request.Data, ptr + header.HeaderLength, header.PayloadOffset, header.PacketLength);
+                    }
+
+                    request.BytesReceived += header.PacketLength;
+                    var complete = request.BytesReceived == header.PayloadSize;
+                    if (!isReply)
+                    {
+                        partialRequest = complete ? null : request;
+                    }
+
+                    if (complete)
+                    {
+                        if (isReply)
+                        {
+                            Requests.TryRemove(request.MsgId, out RpcRequest removed);
+                        }
+                        else
+                        {
+                            IncomingRequests.TryRemove(request.MsgId, out RpcRequest removed);
+                        }
+
+                        // Full message is ready
+
+                        Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
+
+                        if (header.MsgType == MessageType.RpcResponse)
+                        {
+                            CompleteRequest(request, new RpcResponse(true, request.Data), true);
+                        }
+                        else if (header.MsgType == MessageType.ErrorInRpc)
+                        {
+                            CompleteRequest(request, new RpcResponse(false, request.Data), true);
+                        }
+                        else if (header.MsgType == MessageType.RpcRequest)
+                        {
+                            StartHandling(request);
+                        }
+                    }
+
+                    Statistics.ReadPacket(header.PacketLength);
+
+                    return header.HeaderLength + header.PacketLength;
+                };
+                Func<IntPtr, int> readNode = (ptr) =>
+                {
+                    try
+                    {
+                        return readPacket(ptr);
+                    }
+                    finally
+                    {
+                        // A fault after this, in giving the node back, is the ring's
+                        handling = false;
+                    }
+                };
 
                 while (!Disposed && !l_TempReadBuffer.ShuttingDown)
                 {
@@ -1261,142 +1492,7 @@ namespace SharedMemory
                     {
                         handling = false;
                         Statistics.StartWaitRead();
-
-                        Func<IntPtr, int> readPacket = (ptr) =>
-                        {
-                            int readLength = 0;
-                            header = FastStructure<RpcProtocolHeaderV1>.PtrToStructure(ptr);
-                            handling = true;
-                            ptr = ptr + protocolLength;
-                            readLength += protocolLength;
-
-                            // The peer sends one message at a time, so the first packet of a message means
-                            // that the request still missing packets will not get them
-                            if (header.CurrentPacket == 1 && partialRequest != null)
-                            {
-                                IncomingRequests.TryRemove(partialRequest.MsgId, out RpcRequest abandoned);
-                                partialRequest = null;
-                            }
-
-                            RpcRequest request = null;
-                            if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
-                            {
-                                if (!Requests.TryGetValue(header.ResponseId, out request))
-                                {
-                                    // The response received does not have a  matching message that was sent
-                                    Statistics.DiscardResponse(header.ResponseId);
-                                    return protocolLength;
-                                }
-                            }
-                            else if (header.CurrentPacket == 1)
-                            {
-                                request = IncomingRequests.GetOrAdd(header.MsgId, new RpcRequest
-                                {
-                                    MsgId = header.MsgId
-                                });
-                            }
-                            else if (!IncomingRequests.TryGetValue(header.MsgId, out request))
-                            {
-                                // The start of this message was lost or discarded
-                                return protocolLength;
-                            }
-
-                            int packetSize = header.PayloadSize < msgBufferLength ? header.PayloadSize :
-                                (header.CurrentPacket < header.TotalPackets ? msgBufferLength : header.PayloadSize - (header.TotalPackets - 1) * msgBufferLength);
-
-                            if (header.PayloadSize > 0)
-                            {
-                                if (request.Data == null)
-                                {
-                                    request.Data = new byte[header.PayloadSize];
-                                }
-
-                                int index = msgBufferLength * (header.CurrentPacket - 1);
-                                FastStructure.ReadBytes(request.Data, ptr, index, packetSize);
-                                readLength += packetSize;
-                            }
-
-                            request.PacketsReceived++;
-                            if (header.MsgType != MessageType.RpcResponse && header.MsgType != MessageType.ErrorInRpc)
-                            {
-                                partialRequest = header.CurrentPacket < header.TotalPackets ? request : null;
-                            }
-
-                            if (header.CurrentPacket == header.TotalPackets)
-                            {
-                                if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
-                                {
-                                    Requests.TryRemove(request.MsgId, out RpcRequest removed);
-                                }
-                                else
-                                {
-                                    IncomingRequests.TryRemove(request.MsgId, out RpcRequest removed);
-                                }
-
-                                if (request.PacketsReceived != header.TotalPackets)
-                                {
-                                    // A packet of this message was lost: drop the message, and fail the request it answers
-                                    if (header.MsgType == MessageType.RpcResponse || header.MsgType == MessageType.ErrorInRpc)
-                                    {
-                                        CompleteRequest(request, new RpcResponse(false, null), false);
-                                    }
-
-                                    Statistics.ReadPacket(packetSize);
-                                    return protocolLength + packetSize;
-                                }
-
-                                // Full message is ready
-
-                                Statistics.MessageReceived(header.MsgType, request.Data?.Length ?? 0);
-
-                                if (header.MsgType == MessageType.RpcResponse)
-                                {
-                                    CompleteRequest(request, new RpcResponse(true, request.Data), true);
-                                }
-                                else if (header.MsgType == MessageType.ErrorInRpc)
-                                {
-                                    CompleteRequest(request, new RpcResponse(false, request.Data), true);
-                                }
-                                else if (header.MsgType == MessageType.RpcRequest)
-                                {
-                                    // For Handling Request we create an new Task because this can take sometime
-                                    Task.Run(async () =>
-                                    {
-                                        try
-                                        {
-                                            await ProcessCallHandler(request).ConfigureAwait(false);
-                                        }
-                                        catch(Exception ex)
-                                        {
-                                            // Ignore Object Disposed and Invalid Operation Exceptions
-                                            // because the other side of the rpc buffers may 
-                                            // not know if this Buffer is shutting down or disposed
-                                            if (!(ex is ObjectDisposedException || ex is InvalidOperationException))
-                                            {
-                                                throw;
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-
-                            Statistics.ReadPacket(packetSize);
-
-                            return protocolLength + packetSize;
-                        };
-
-                        l_TempReadBuffer.Read((ptr) =>
-                        {
-                            try
-                            {
-                                return readPacket(ptr);
-                            }
-                            finally
-                            {
-                                // A fault after this, in giving the node back, is the ring's
-                                handling = false;
-                            }
-                        }, readWaitMs);
+                        l_TempReadBuffer.Read(readNode, readWaitMs);
                     }
                     catch (Exception) when (handling)
                     {
@@ -1413,8 +1509,46 @@ namespace SharedMemory
             }
         }
 
+        // Runs a complete request's handler on the thread pool, since it can take some time. A method of its own, so that
+        // reading a packet makes no closure for it
+        void StartHandling(RpcRequest request)
+        {
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await ProcessCallHandler(request).ConfigureAwait(false);
+                }
+                catch(Exception ex)
+                {
+                    // Ignore Object Disposed and Invalid Operation Exceptions
+                    // because the other side of the rpc buffers may 
+                    // not know if this Buffer is shutting down or disposed
+                    if (!(ex is ObjectDisposedException || ex is InvalidOperationException))
+                    {
+                        throw;
+                    }
+                }
+            });
+        }
+
+        // Answers a message this version does not understand: an error flagged NotUnderstood, with no payload. It goes from the
+        // thread pool, as a handler's reply does, since a read thread that waited for room in the other ring, while the peer's
+        // read thread waited for room in this one, would stall both. A subclass's SendMessage, which cannot carry the flag, does
+        // not see it
+        void StartNotUnderstoodReply(ulong msgId)
+        {
+            Task.Run(() =>
+            {
+                if (WriteMessage(MessageType.ErrorInRpc, RpcPacketHeader.NotUnderstood, NextMessageId(), null, msgId, defaultTimeoutMs, Stopwatch.GetTimestamp()))
+                {
+                    Statistics.MessageSent(MessageType.ErrorInRpc, 0);
+                }
+            });
+        }
+
         // Drops the message of a packet that could not be handled, and fails the request that a dropped response answers
-        void DropMessage(RpcProtocolHeaderV1 header)
+        void DropMessage(RpcPacketHeader header)
         {
             if (partialRequest != null)
             {
@@ -1555,7 +1689,7 @@ namespace SharedMemory
             }
         }
 
-        // Closes the buffers and the master mutex, once the read thread has stopped, no send is under way and no caller
+        // Closes the buffers and the election mutexes, once the read thread has stopped, no send is under way and no caller
         // is checking them in ThrowIfDisposedOrShutdown. Disposed is set first, so no new caller looks at them
         private bool TryDisposeManagedResources(int timeout)
         {
@@ -1592,11 +1726,19 @@ namespace SharedMemory
                     ReadBuffer = null;
                 }
 
-                if (masterMutex != null)
+                // 2.3's name closes first: an instance elected once the election mutex is gone must find it free, or it takes
+                // this channel for one that 2.3 holds
+                if (previousElectionMutex != null)
                 {
-                    masterMutex.Close();
-                    masterMutex.Dispose();
-                    masterMutex = null;
+                    previousElectionMutex.Close();
+                    previousElectionMutex = null;
+                }
+
+                if (electionMutex != null)
+                {
+                    electionMutex.Close();
+                    electionMutex.Dispose();
+                    electionMutex = null;
                 }
 
                 // Mark as DisposeFinished

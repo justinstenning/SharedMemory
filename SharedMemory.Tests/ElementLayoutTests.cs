@@ -432,7 +432,9 @@ namespace SharedMemoryTests
         {
             var check = new NativeCheck();
             CharacterisedTypes.ForEach(check);
+#pragma warning disable CS0618 // Obsolete, but public until 3.0, so its layout stays pinned
             check.Check<RpcProtocolHeaderV1>("RpcProtocolHeaderV1", 32);
+#pragma warning restore CS0618
             Assert.AreEqual("", string.Join("\n", check.Mismatches));
         }
 #endif
@@ -461,6 +463,21 @@ namespace SharedMemoryTests
             CharacterisedTypes.ForEach(check);
             mismatches.AddRange(check.Mismatches);
             Assert.AreEqual("", string.Join("\n", mismatches.ToArray()));
+        }
+#endif
+
+#if HAS_RPC_BUFFER
+        /// <summary>
+        /// The header at the start of every RpcBuffer packet, which the process at the other end of a channel reads: 32 bytes,
+        /// every byte a field, laid out alike on every runtime and copied as one block.
+        /// </summary>
+        [TestMethod]
+        public void RpcPacketHeader_HasTheProtocolsLayout_AndCopiesNatively()
+        {
+            Assert.AreEqual(
+                "size 32; HeaderLength 0+1; MsgType 1+1; Flags 2+2; PayloadSize 4+4; MsgId 8+8; ResponseId 16+8; PayloadOffset 24+4; PacketLength 28+4; " +
+                    "SizeOf 32; copied as one block True",
+                LayoutOf<RpcPacketHeader>() + "; SizeOf " + FastStructure.SizeOf<RpcPacketHeader>() + "; copied as one block " + UsesNativeCopy<RpcPacketHeader>());
         }
 #endif
 

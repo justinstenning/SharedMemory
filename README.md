@@ -20,7 +20,7 @@ Classes
  * `SharedMemory.SharedArray` - a simple generic array implementation utilising a shared memory buffer. Inherits from SharedMemory.BufferWithLocks, so its reads and writes wait at its gates.
  * `SharedMemory.BufferReadWrite` - provides read/write access to a shared memory buffer, with various overloads to support reading and writing structures, copying to and from IntPtr and so on. Inherits from SharedMemory.BufferWithLocks, so its reads and writes wait at its gates.
  * `SharedMemory.CircularBuffer` - lock-free FIFO circular buffer implementation (aka ring buffer). Supporting 2 or more nodes, this implementation supports multiple readers and writers, which compete for items: see [Circular buffer readers and capacity](#circular-buffer-readers-and-capacity). The lock-free approach is implemented using Interlocked.CompareExchange and named events.
- * `SharedMemory.RpcBuffer` - simple bi-directional RPC channel using `SharedMemory.CircularBuffer`. Each channel has two ends: the owner, which creates it, and the opener, which joins it. Every build has it except the .NET Framework 3.5 and 4.0 ones.
+ * `SharedMemory.RpcBuffer` - simple bi-directional RPC channel using `SharedMemory.CircularBuffer`. Each channel has two ends: the owner, which creates it, and the opener, which joins it. An `RpcBuffer` from 2.4.0 or later cannot share a channel with one from 2.3 or earlier, so upgrade both ends together. Every build has it except the .NET Framework 3.5 and 4.0 ones.
 
 Platforms
 ---------
@@ -255,13 +255,15 @@ Performance
 
 ### RPC Buffer
 
-When an `RpcBuffer` is created, a buffer capacity can be specified along with the number of nodes to be created in the underlying `CircularBuffer` instances. A message is sent within one or more packets, where a single packet is made up of a packet header (32 bytes for `RpcProtocol.V1`) and the message payload. Ideally there should be enough room allocated within the underlying buffer to hold at least one message preferably a few (i.e. `(numberOfNodes - 1) * (bufferCapacity - 32) >= maxMessageSize`, since one node always stays free and each packet carries the header).
+When an `RpcBuffer` is created, a buffer capacity can be specified along with the number of nodes to be created in the underlying `CircularBuffer` instances. A message is sent within one or more packets, where a single packet is made up of a 32-byte packet header and the message payload. Ideally there should be enough room allocated within the underlying buffer to hold at least one message preferably a few (i.e. `(numberOfNodes - 1) * (bufferCapacity - 32) >= maxMessageSize`, since one node always stays free and each packet carries the header).
 
 If the message payload exceeds the `bufferCapacity - packetHeaderSize`, then the message is split into multiple packets. Therefore the `RpcBuffer` message throughput depends not only upon the message size, but the relationship between the buffer capacity and the message size (i.e. how many packets are required for a single message).
 
 For example, a message size of 512KB that fits in a single packet (i.e. with a `bufferCapacity >= 1024 * 512 + 32`) might achieve a throughput of around 2k messages/sec whereas with a buffer capacity of only 1KB it will achieve around 500 messages/sec. Larger buffer capacities do not necessarily mean greater message throughput, for example with the 512KB message size example, using a smaller buffer capacity of 256KB actually slightly improves performance.
 
 A 1KB message can be sent as a single packet approximately 10k times/sec.
+
+A channel has two ends. If you open it with a third `RpcBuffer`, that one joins as a second opener, and the two openers compete for each packet the owner sends: a request from the owner that fits in one packet is answered by one opener or the other, but any other call on the channel can fail.
 
 ### Circular Buffer
 
