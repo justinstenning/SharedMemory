@@ -519,7 +519,7 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// Test the write node available event signal by making the writer thread wait for the reader thread. Done by simulating a slightly slower read vs write, with a low write timeout of 1ms.
+        /// Fill the ring and check that a write times out before starting the reader, then check the data while a slow reader frees nodes for the writer.
         /// </summary>
         [TestMethod]
         public void ReadWriteAsync_SlowReaderSmallWriterTimeout_DataMatches()
@@ -540,17 +540,22 @@ namespace SharedMemoryTests
             using (var producer = new CircularBuffer(name, 2, bufSize))
             using (var consumer = new CircularBuffer(name))
             {
+                // A two-node ring holds one item. With no reader running, the next write must time out.
+                Assert.AreEqual(bufSize, producer.Write(data[0]));
+                Assert.AreEqual(0, producer.Write(data[1], timeout: 1), "A write to the full ring should time out");
+
                 Action writer = () =>
                 {
                     int writeTimeouts = 0;
-                    long totalBytesWritten = WriteMultiple(producer, data, out writeTimeouts, 0, 1);
-                    Assert.IsTrue(writeTimeouts > 0);
+                    long totalBytesWritten = WriteMultiple(producer, data.Skip(1).ToArray(), out writeTimeouts, 0, 1);
+                    Assert.AreEqual((iterations - 1) * (long)bufSize, totalBytesWritten, "Failed to write all remaining bytes");
                 };
 
                 Action reader = () =>
                 {
                     int readTimeouts = 0;
                     long totalBytesRead = ReadMultipleWithCheck(consumer, data, out readTimeouts, 1);
+                    Assert.AreEqual(iterations * (long)bufSize, totalBytesRead, "Failed to read all bytes");
                 };
 
                 Task tWriter = Task.Factory.StartNew(writer);
