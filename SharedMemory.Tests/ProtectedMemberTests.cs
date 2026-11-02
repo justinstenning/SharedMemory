@@ -8,7 +8,8 @@ namespace SharedMemoryTests
 {
     /// <summary>
     /// The protected members a subclass can use: the events, set on Windows only, and the map and its
-    /// view, set everywhere but macOS, where the memory is mapped without a MemoryMappedFile.
+    /// view, set everywhere but macOS, where the memory is mapped without a MemoryMappedFile. A buffer
+    /// waits on, signals and disposes its own events, whatever a subclass assigns to the properties.
     /// </summary>
     [TestClass]
     public class ProtectedMemberTests
@@ -59,35 +60,69 @@ namespace SharedMemoryTests
 
         [TestMethod]
         [OSCondition(OperatingSystems.Windows)]
-        public void CircularBuffer_DataExistsReplacedBySubclass_IsSignalledOnWrite()
+#if NET
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")] // EventWaitHandle.OpenExisting
+#endif
+        public void CircularBuffer_DataExistsAssignedBySubclass_IsNotSignalledOnWrite()
         {
             string name = Guid.NewGuid().ToString();
-            using (var replacement = new EventWaitHandle(false, EventResetMode.AutoReset))
+            using (var assigned = new EventWaitHandle(false, EventResetMode.AutoReset))
             using (var buffer = new ExposedCircularBuffer(name, 2, 64))
+            using (var dataExists = EventWaitHandle.OpenExisting(name + "_evt_dataexists"))
             {
-                buffer.ReplaceDataExists(replacement);
+                buffer.AssignDataExists(assigned);
 
                 buffer.Write(new byte[] { 1 });
 
-                Assert.IsTrue(replacement.WaitOne(0));
+                Assert.IsFalse(assigned.WaitOne(0), "The write signalled the assigned handle.");
+                Assert.IsTrue(dataExists.WaitOne(0), "The write did not signal the buffer's own event.");
             }
         }
 
         [TestMethod]
         [OSCondition(OperatingSystems.Windows)]
-        public void CircularBuffer_NodeAvailableReplacedBySubclass_IsSignalledOnRead()
+#if NET
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")] // EventWaitHandle.OpenExisting
+#endif
+        public void CircularBuffer_NodeAvailableAssignedBySubclass_IsNotSignalledOnRead()
         {
             string name = Guid.NewGuid().ToString();
-            using (var replacement = new EventWaitHandle(false, EventResetMode.AutoReset))
+            using (var assigned = new EventWaitHandle(false, EventResetMode.AutoReset))
             using (var buffer = new ExposedCircularBuffer(name, 2, 64))
+            using (var nodeAvailable = EventWaitHandle.OpenExisting(name + "_evt_nodeavail"))
             {
                 // Two nodes hold one node of data, so this write fills the buffer
                 buffer.Write(new byte[] { 1 });
-                buffer.ReplaceNodeAvailable(replacement);
+                buffer.AssignNodeAvailable(assigned);
 
                 buffer.Read(new byte[64]);
 
-                Assert.IsTrue(replacement.WaitOne(0));
+                Assert.IsFalse(assigned.WaitOne(0), "The read signalled the assigned handle.");
+                Assert.IsTrue(nodeAvailable.WaitOne(0), "The read did not signal the buffer's own event.");
+            }
+        }
+
+        [TestMethod]
+        [OSCondition(OperatingSystems.Windows)]
+        public void CircularBuffer_Dispose_ClosesItsOwnEventsNotAssignedOnes()
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var assignedDataExists = new EventWaitHandle(false, EventResetMode.AutoReset))
+            using (var assignedNodeAvailable = new EventWaitHandle(false, EventResetMode.AutoReset))
+            {
+                EventWaitHandle ownDataExists, ownNodeAvailable;
+                using (var buffer = new ExposedCircularBuffer(name, 2, 64))
+                {
+                    ownDataExists = buffer.ExposedDataExists;
+                    ownNodeAvailable = buffer.ExposedNodeAvailable;
+                    buffer.AssignDataExists(assignedDataExists);
+                    buffer.AssignNodeAvailable(assignedNodeAvailable);
+                }
+
+                Assert.ThrowsExactly<ObjectDisposedException>(() => ownDataExists.WaitOne(0), "DataExists's own handle was left open.");
+                Assert.ThrowsExactly<ObjectDisposedException>(() => ownNodeAvailable.WaitOne(0), "NodeAvailable's own handle was left open.");
+                Assert.IsFalse(assignedDataExists.WaitOne(0), "The assigned DataExists handle was closed.");
+                Assert.IsFalse(assignedNodeAvailable.WaitOne(0), "The assigned NodeAvailable handle was closed.");
             }
         }
 
@@ -120,16 +155,14 @@ namespace SharedMemoryTests
             public object ExposedMmf { get { return Mmf; } }
             public object ExposedView { get { return View; } }
 
-            public void ReplaceDataExists(EventWaitHandle replacement)
+            public void AssignDataExists(EventWaitHandle handle)
             {
-                DataExists.Close();
-                DataExists = replacement;
+                DataExists = handle;
             }
 
-            public void ReplaceNodeAvailable(EventWaitHandle replacement)
+            public void AssignNodeAvailable(EventWaitHandle handle)
             {
-                NodeAvailable.Close();
-                NodeAvailable = replacement;
+                NodeAvailable = handle;
             }
         }
     }

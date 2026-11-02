@@ -6,8 +6,7 @@ namespace SharedMemoryTests
 {
     /// <summary>
     /// A named event opened through the library's internal NamedEvent, as BufferWithLocks and CircularBuffer open
-    /// theirs. On Windows it also disposes the EventWaitHandle, which those classes dispose from their protected
-    /// properties. Not in Support: the peer process cannot see the library's internals.
+    /// theirs. Not in Support: the peer process cannot see the library's internals.
     /// </summary>
     sealed class TestEvent : IDisposable
     {
@@ -15,7 +14,7 @@ namespace SharedMemoryTests
 
         TestEvent(string name, bool initialState, EventResetMode mode)
         {
-            namedEvent = NamedEvent.CreateOrOpen(name, initialState, mode, () => namedEvent.WaitHandle);
+            namedEvent = NamedEvent.CreateOrOpen(name, initialState, mode);
         }
 
         public static TestEvent CreateOrOpen(string name, bool initialState, EventResetMode mode)
@@ -40,10 +39,7 @@ namespace SharedMemoryTests
 
         public void Dispose()
         {
-            EventWaitHandle handle = namedEvent.WaitHandle;
             namedEvent.Dispose();
-            if (handle != null)
-                handle.Dispose();
         }
     }
 }

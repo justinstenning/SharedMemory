@@ -59,13 +59,19 @@ namespace SharedMemory
         /// An event handle used for blocking write operations.
         /// </summary>
         /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. Writes still block there.</remarks>
-        protected EventWaitHandle WriteWaitEvent { get; private set; }
+        protected EventWaitHandle WriteWaitEvent
+        {
+            get { return _writeEvent.WaitHandle; }
+        }
         
         /// <summary>
         /// An event handle used for blocking read operations.
         /// </summary>
         /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. Reads still block there.</remarks>
-        protected EventWaitHandle ReadWaitEvent { get; private set; }
+        protected EventWaitHandle ReadWaitEvent
+        {
+            get { return _readEvent.WaitHandle; }
+        }
 
         private readonly NamedEvent _writeEvent;
         private readonly NamedEvent _readEvent;
@@ -81,10 +87,8 @@ namespace SharedMemory
         protected BufferWithLocks(string name, long bufferSize, bool ownsSharedMemory)
             : base(name, bufferSize, ownsSharedMemory)
         {
-            _writeEvent = NamedEvent.CreateOrOpen(Name + "_evt_write", true, EventResetMode.ManualReset, () => WriteWaitEvent);
-            WriteWaitEvent = _writeEvent.WaitHandle;
-            _readEvent = NamedEvent.CreateOrOpen(Name + "_evt_read", true, EventResetMode.ManualReset, () => ReadWaitEvent);
-            ReadWaitEvent = _readEvent.WaitHandle;
+            _writeEvent = NamedEvent.CreateOrOpen(Name + "_evt_write", true, EventResetMode.ManualReset);
+            _readEvent = NamedEvent.CreateOrOpen(Name + "_evt_read", true, EventResetMode.ManualReset);
         }
 
         #endregion
@@ -287,11 +291,6 @@ namespace SharedMemory
         {
             if (disposeManagedResources)
             {
-                // Null on Linux and macOS
-                if (WriteWaitEvent != null)
-                    (WriteWaitEvent as IDisposable).Dispose();
-                if (ReadWaitEvent != null)
-                    (ReadWaitEvent as IDisposable).Dispose();
                 _writeEvent.Dispose();
                 _readEvent.Dispose();
             }
