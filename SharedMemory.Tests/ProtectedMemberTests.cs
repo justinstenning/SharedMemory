@@ -134,6 +134,7 @@ namespace SharedMemoryTests
                 Assert.IsNull(member, memberName + " should be null on this platform.");
         }
 
+#pragma warning disable CS0618 // the wait-handle properties are obsolete
         class ExposedBufferReadWrite : BufferReadWrite
         {
             public ExposedBufferReadWrite(string name, int bufferSize) : base(name, bufferSize) { }
@@ -165,5 +166,6 @@ namespace SharedMemoryTests
                 NodeAvailable = handle;
             }
         }
+#pragma warning restore CS0618
     }
 }

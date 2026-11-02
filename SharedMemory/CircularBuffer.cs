@@ -63,8 +63,9 @@ namespace SharedMemory
         /// <summary>
         /// Event signaled when data has been written if the reading index has caught up to the writing index
         /// </summary>
-        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. The buffer waits on and signals its own event,
-        /// so a handle a subclass assigns here is not used.</remarks>
+        /// <remarks>Obsolete. Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. The buffer waits on and signals its own
+        /// event, so a handle a subclass assigns here is not used. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.</remarks>
+        [Obsolete("Set on Windows only, and null on Linux and macOS. Read and Write wait on and signal the buffer's own event, and a handle assigned here is not used. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.")]
         protected EventWaitHandle DataExists
         {
             get { return _dataExistsHandle; }
@@ -74,8 +75,9 @@ namespace SharedMemory
         /// <summary>
         /// Event signaled when a node becomes available after reading if the writing index has caught up to the reading index
         /// </summary>
-        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. The buffer waits on and signals its own event,
-        /// so a handle a subclass assigns here is not used.</remarks>
+        /// <remarks>Obsolete. Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. The buffer waits on and signals its own
+        /// event, so a handle a subclass assigns here is not used. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.</remarks>
+        [Obsolete("Set on Windows only, and null on Linux and macOS. Read and Write wait on and signal the buffer's own event, and a handle assigned here is not used. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.")]
         protected EventWaitHandle NodeAvailable
         {
             get { return _nodeAvailableHandle; }
