@@ -635,8 +635,11 @@ namespace SharedMemory
         /// <param name="node">An unsafe pointer to the node to return</param>
         protected virtual void PostNode(Node* node)
         {
-            // Set the write flag for this node (the node is reserved so no need for locks)
-            node->DoneWrite = 1;
+            // Set the write flag for this node (the node is reserved so no need for locks). The exchange is a full fence: the node's
+            // data and AmountWritten are visible before the flag, and the flag before the loads of WriteEnd below.
+#pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
+            Interlocked.Exchange(ref node->DoneWrite, 1);
+#pragma warning restore 0420
 
             // Move the write pointer as far forward as we can
             // always starting from WriteEnd to make all contiguous
@@ -956,11 +959,15 @@ namespace SharedMemory
         /// <param name="node">An unsafe pointer to the node to be returned</param>
         protected virtual void ReturnNode(Node* node)
         {
-            // Set the finished reading flag for this node (the node is reserved so no need for locks)
-            node->DoneRead = 1;
-
-            // Keep it clean and reset AmountWritten to prepare it for next Write
+            // Keep it clean and reset AmountWritten to prepare it for next Write, while the node is still this reader's: once the flag
+            // is set, another reader's walk can free it for a writer
             node->AmountWritten = 0;
+
+            // Set the finished reading flag for this node (the node is reserved so no need for locks). The exchange is a full fence:
+            // AmountWritten is visible before the flag, and the flag before the loads of ReadEnd below.
+#pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
+            Interlocked.Exchange(ref node->DoneRead, 1);
+#pragma warning restore 0420
 
             // Move the read pointer forward as far as possible
             // always starting from ReadEnd to make all contiguous
