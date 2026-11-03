@@ -273,9 +273,15 @@ namespace SharedMemory
                     {
                         byte* headerPtr = null;
                         headerView.SafeMemoryMappedViewHandle.AcquirePointer(ref headerPtr);
-                        var header = (SharedHeader*)(headerPtr + HeaderOffset);
-                        BufferSize = header->SharedMemorySize - Marshal.SizeOf(typeof(SharedHeader));
-                        headerView.SafeMemoryMappedViewHandle.ReleasePointer();
+                        try
+                        {
+                            var header = (SharedHeader*)(headerPtr + HeaderOffset);
+                            BufferSize = WaitForSharedMemorySize(header) - Marshal.SizeOf(typeof(SharedHeader));
+                        }
+                        finally
+                        {
+                            headerView.SafeMemoryMappedViewHandle.ReleasePointer();
+                        }
                     }
 
                     // Create a view to the entire region of the shared memory
@@ -310,6 +316,27 @@ namespace SharedMemory
                 Close();
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Reads the total size from the header, waiting up to 1 s while it is 0 because the owner has made the shared memory but not yet
+        /// written its header.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The size was still 0 after 1 s.</exception>
+        private long WaitForSharedMemorySize(SharedHeader* header)
+        {
+            long size = header->SharedMemorySize;
+            if (size != 0)
+                return size;
+
+            var waited = System.Diagnostics.Stopwatch.StartNew();
+            while ((size = header->SharedMemorySize) == 0)
+            {
+                if (waited.ElapsedMilliseconds >= 1000)
+                    throw new InvalidOperationException(String.Format("The shared memory \"{0}\" is not ready: its size was still 0 after waiting 1 s for its owner to write it.", Name));
+                Thread.Sleep(1);
+            }
+            return size;
         }
 
         /// <summary>
@@ -1000,7 +1027,7 @@ namespace SharedMemory
                 // Open an existing shared memory mapping, a whole number of pages, and size the buffer from its header
                 _mapping = NamedMapping.OpenExisting(Name);
                 ViewPtr = _mapping.Pointer;
-                BufferSize = ((SharedHeader*)(ViewPtr + HeaderOffset))->SharedMemorySize - Marshal.SizeOf(typeof(SharedHeader));
+                BufferSize = WaitForSharedMemorySize((SharedHeader*)(ViewPtr + HeaderOffset)) - Marshal.SizeOf(typeof(SharedHeader));
                 BufferStartPtr = ViewPtr + HeaderOffset + Marshal.SizeOf(typeof(SharedHeader));
             }
             _mappedView = new System.IO.UnmanagedMemoryAccessor(_mapping.Memory, 0, SharedMemorySize, System.IO.FileAccess.ReadWrite);
