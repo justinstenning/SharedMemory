@@ -680,7 +680,7 @@ namespace SharedMemory
         /// <summary>
         /// Refuses a negative length for a pointer copy, which the buffer's check would let through to the copy.
         /// </summary>
-        private static void CheckLength(int length)
+        internal static void CheckLength(int length)
         {
             if (length < 0)
                 throw new ArgumentOutOfRangeException("length", length, "The number of bytes to copy cannot be negative.");

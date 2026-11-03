@@ -49,6 +49,8 @@ namespace SharedMemory
     /// writes while there is room, but a read that finds nothing to read, or a write that finds no free node, returns 0 at once rather than wait. A
     /// loop that reads or writes until the owner goes should check <see cref="SharedBuffer.ShuttingDown"/>. A read or write that is waiting when
     /// this instance is closed returns 0; one that starts after <see cref="SharedBuffer.Close"/> throws <see cref="ObjectDisposedException"/>.</para>
+    /// <para>A read or write checks its arguments before it takes a node. One whose copy or callback throws still gives its node back: a write
+    /// posts it empty, and a read returns it for writing, so the ring goes on working for every process.</para>
     /// </remarks>
 #if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
@@ -675,29 +677,30 @@ namespace SharedMemory
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for writing (default 1000ms)</param>
         /// <returns>The number of bytes written</returns>
         /// <remarks>The maximum number of bytes that can be written is the minimum of the length of <paramref name="source"/> and <see cref="NodeBufferSize"/>.</remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="source"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is negative or greater than the length of <paramref name="source"/>.</exception>
         public virtual int Write(byte[] source, int startIndex = 0, int timeout = 1000)
         {
+            CheckArray(source, startIndex, "source");
+
             // Grab a node for writing, and a lease on the mapping until it is posted
             Node* node = ReserveNodeForWriting(timeout);
             if (node == null) return 0;
 
+            int amount = 0;
             try
             {
                 // Copy the data
-                int amount = Math.Min(source.Length - startIndex, NodeBufferSize);
-
-                Marshal.Copy(source, startIndex, new IntPtr(BufferStartPtr + node->Offset), amount);
-                node->AmountWritten = amount;
-
-                // Writing is complete, make readable
-                PostNode(node);
-
-                return amount;
+                int count = Math.Min(source.Length - startIndex, NodeBufferSize);
+                Marshal.Copy(source, startIndex, new IntPtr(BufferStartPtr + node->Offset), count);
+                amount = count;
             }
             finally
             {
-                Exit();
+                // Writing is complete, make readable; a copy that failed posts the node empty
+                PostAndExit(node, amount);
             }
+            return amount;
         }
 
         /// <summary>
@@ -708,29 +711,31 @@ namespace SharedMemory
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for writing (default 1000ms)</param>
         /// <returns>The number of elements written</returns>
         /// <remarks>The maximum number of elements that can be written is the minimum of the length of <paramref name="source"/> subtracted by <paramref name="startIndex"/> and <see cref="NodeBufferSize"/> divided by <code>FastStructure.SizeOf&gt;T&lt;()</code>.</remarks>        
+        /// <exception cref="ArgumentNullException"><paramref name="source"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is negative or greater than the length of <paramref name="source"/>.</exception>
         public virtual int Write<T>(T[] source, int startIndex = 0, int timeout = 1000)
             where T : struct
         {
+            CheckArray(source, startIndex, "source");
+
             // Grab a node for writing, and a lease on the mapping until it is posted
             Node* node = ReserveNodeForWriting(timeout);
             if (node == null) return 0;
 
+            int count = 0;
             try
             {
                 // Write the data using the FastStructure class (much faster than the MemoryMappedViewAccessor WriteArray<T> method)
-                int count = Math.Min(source.Length - startIndex, NodeBufferSize / FastStructure.SizeOf<T>());
-                WriteArrayLeased<T>(source, startIndex, count, node->Offset);
-                node->AmountWritten = count * FastStructure.SizeOf<T>();
-
-                // Writing is complete, make node readable
-                PostNode(node);
-
-                return count;
+                int toWrite = Math.Min(source.Length - startIndex, NodeBufferSize / FastStructure.SizeOf<T>());
+                WriteArrayLeased<T>(source, startIndex, toWrite, node->Offset);
+                count = toWrite;
             }
             finally
             {
-                Exit();
+                // Writing is complete, make node readable; a copy that failed posts the node empty
+                PostAndExit(node, count * FastStructure.SizeOf<T>());
             }
+            return count;
         }
 
         /// <summary>
@@ -752,21 +757,19 @@ namespace SharedMemory
             Node* node = ReserveNodeForWriting(timeout);
             if (node == null) return 0;
 
+            int amount = 0;
             try
             {
                 // Copy the data using the MemoryMappedViewAccessor
                 WriteStructureLeased<T>(ref source, node->Offset);
-                node->AmountWritten = structSize;
-
-                // Return the node for further writing
-                PostNode(node);
-
-                return structSize;
+                amount = structSize;
             }
             finally
             {
-                Exit();
+                // Make the node readable; a copy that failed posts it empty
+                PostAndExit(node, amount);
             }
+            return amount;
         }
 
         /// <summary>
@@ -777,28 +780,29 @@ namespace SharedMemory
         /// <param name="length">The number of bytes to attempt to write</param>
         /// <returns>The number of bytes written</returns>
         /// <remarks>The maximum number of bytes that can be written is the minimum of <paramref name="length"/> and <see cref="NodeBufferSize"/>.</remarks>        
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> is negative.</exception>
         public virtual int Write(IntPtr source, int length, int timeout = 1000)
         {
+            CheckLength(length);
+
             // Grab a node for writing, and a lease on the mapping until it is posted
             Node* node = ReserveNodeForWriting(timeout);
             if (node == null) return 0;
 
+            int amount = 0;
             try
             {
                 // Copy the data
-                int amount = Math.Min(length, NodeBufferSize);
-                WriteLeased(source, amount, node->Offset);
-                node->AmountWritten = amount;
-
-                // Writing is complete, make readable
-                PostNode(node);
-
-                return amount;
+                int count = Math.Min(length, NodeBufferSize);
+                WriteLeased(source, count, node->Offset);
+                amount = count;
             }
             finally
             {
-                Exit();
+                // Writing is complete, make readable; a copy that failed posts the node empty
+                PostAndExit(node, amount);
             }
+            return amount;
         }
 
         /// <summary>
@@ -809,8 +813,12 @@ namespace SharedMemory
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for writing (default 1000ms)</param>
         /// <returns>The number of bytes written</returns>
         /// <remarks>The pointer stays valid until <paramref name="writeFunc"/> returns, even if the buffer is closed meanwhile.</remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="writeFunc"/> is null.</exception>
         public virtual int Write(Func<IntPtr, int> writeFunc, int timeout = 1000)
         {
+            if (writeFunc == null)
+                throw new ArgumentNullException("writeFunc");
+
             // Grab a node for writing, and a lease on the mapping until it is posted
             Node* node = ReserveNodeForWriting(timeout);
             if (node == null) return 0;
@@ -818,24 +826,44 @@ namespace SharedMemory
             int amount = 0;
             try
             {
-                try
-                {
-                    // Pass destination IntPtr to custom write function
-                    amount = writeFunc(new IntPtr(BufferStartPtr + node->Offset));
-                    node->AmountWritten = amount;
-                }
-                finally
-                {
-                    // Writing is complete, make readable
-                    PostNode(node);
-                }
+                // Pass destination IntPtr to custom write function
+                amount = writeFunc(new IntPtr(BufferStartPtr + node->Offset));
+            }
+            finally
+            {
+                // Writing is complete, make readable; a callback that threw posts the node empty
+                PostAndExit(node, amount);
+            }
+            return amount;
+        }
+
+        /// <summary>
+        /// Posts a node an overload reserved, holding <paramref name="amount"/> bytes, 0 for a write that failed, and releases the
+        /// overload's lease on the mapping.
+        /// </summary>
+        private void PostAndExit(Node* node, int amount)
+        {
+            try
+            {
+                node->AmountWritten = amount;
+                PostNode(node);
             }
             finally
             {
                 Exit();
             }
+        }
 
-            return amount;
+        /// <summary>
+        /// The check of an array and a start index in it that each array overload makes before it reserves a node, so that a bad
+        /// argument leaves the ring as it was. A start index equal to the array's length copies nothing.
+        /// </summary>
+        private static void CheckArray(Array array, int startIndex, string paramName)
+        {
+            if (array == null)
+                throw new ArgumentNullException(paramName);
+            if (startIndex < 0 || startIndex > array.Length)
+                throw new ArgumentOutOfRangeException("startIndex", startIndex, "The start index must be from 0 to the array's length, " + array.Length + ".");
         }
 
         #endregion
@@ -1002,28 +1030,29 @@ namespace SharedMemory
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of bytes read</returns>
         /// <remarks>The maximum number of bytes that can be read is the minimum of the length of <paramref name="destination"/> subtracted by <paramref name="startIndex"/> and <see cref="NodeBufferSize"/>.</remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="destination"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is negative or greater than the length of <paramref name="destination"/>.</exception>
         public virtual int Read(byte[] destination, int startIndex = 0, int timeout = 1000)
         {
+            CheckArray(destination, startIndex, "destination");
+
             // A node to read, and a lease on the mapping until it is returned
             Node* node = ReserveNodeForReading(timeout);
             if (node == null) return 0;
 
             try
             {
-                //int amount = Math.Min(buffer.Length, NodeBufferSize);
                 int amount = Math.Min(destination.Length - startIndex, node->AmountWritten);
 
                 // Copy the data
                 Marshal.Copy(new IntPtr(BufferStartPtr + node->Offset), destination, startIndex, amount);
 
-                // Return the node for further writing
-                ReturnNode(node);
-
                 return amount;
             }
             finally
             {
-                Exit();
+                // Return the node for further writing, whether or not the copy succeeded
+                ReturnAndExit(node);
             }
         }
 
@@ -1036,9 +1065,13 @@ namespace SharedMemory
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of elements read into destination</returns>
         /// <remarks>The maximum number of elements that can be read is the minimum of the length of <paramref name="destination"/> subtracted by <paramref name="startIndex"/> and <see cref="Node.AmountWritten"/> divided by <code>FastStructure.SizeOf&gt;T&lt;()</code>.</remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="destination"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is negative or greater than the length of <paramref name="destination"/>.</exception>
         public virtual int Read<T>(T[] destination, int startIndex = 0, int timeout = 1000)
             where T : struct
         {
+            CheckArray(destination, startIndex, "destination");
+
             // A node to read, and a lease on the mapping until it is returned
             Node* node = ReserveNodeForReading(timeout);
             if (node == null) return 0;
@@ -1049,14 +1082,12 @@ namespace SharedMemory
                 int count = Math.Min(destination.Length - startIndex, node->AmountWritten / FastStructure.SizeOf<T>());
                 ReadArrayLeased<T>(destination, startIndex, count, node->Offset);
 
-                // Return the node for further writing
-                ReturnNode(node);
-
                 return count;
             }
             finally
             {
-                Exit();
+                // Return the node for further writing, whether or not the copy succeeded
+                ReturnAndExit(node);
             }
         }
 
@@ -1088,14 +1119,12 @@ namespace SharedMemory
                 // Copy the data using the MemoryMappedViewAccessor
                 ReadStructureLeased<T>(out destination, node->Offset);
 
-                // Return the node for further writing
-                ReturnNode(node);
-
                 return structSize;
             }
             finally
             {
-                Exit();
+                // Return the node for further writing, whether or not the copy succeeded
+                ReturnAndExit(node);
             }
         }
 
@@ -1107,28 +1136,28 @@ namespace SharedMemory
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of bytes read</returns>
         /// <remarks>The maximum number of bytes that can be read is the minimum of the <paramref name="length"/> and <see cref="Node.AmountWritten"/>.</remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> is negative.</exception>
         public virtual int Read(IntPtr destination, int length, int timeout = 1000)
         {
+            CheckLength(length);
+
             // A node to read, and a lease on the mapping until it is returned
             Node* node = ReserveNodeForReading(timeout);
             if (node == null) return 0;
 
             try
             {
-                //int amount = Math.Min(length, NodeBufferSize);
                 int amount = Math.Min(length, node->AmountWritten);
 
                 // Copy the data
                 ReadLeased(destination, amount, node->Offset);
 
-                // Return node for further writing
-                ReturnNode(node);
-
                 return amount;
             }
             finally
             {
-                Exit();
+                // Return the node for further writing, whether or not the copy succeeded
+                ReturnAndExit(node);
             }
         }
 
@@ -1140,31 +1169,41 @@ namespace SharedMemory
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of bytes read</returns>
         /// <remarks>The pointer stays valid until <paramref name="readFunc"/> returns, even if the buffer is closed meanwhile.</remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="readFunc"/> is null.</exception>
         public virtual int Read(Func<IntPtr, int> readFunc, int timeout = 1000)
         {
+            if (readFunc == null)
+                throw new ArgumentNullException("readFunc");
+
             // A node to read, and a lease on the mapping until it is returned
             Node* node = ReserveNodeForReading(timeout);
             if (node == null) return 0;
 
-            int amount = 0;
             try
             {
-                try
-                {
-                    // Pass pointer to buffer directly to custom read function
-                    amount = readFunc(new IntPtr(BufferStartPtr + node->Offset));
-                }
-                finally
-                {
-                    // Return the node for further writing
-                    ReturnNode(node);
-                }
+                // Pass pointer to buffer directly to custom read function
+                return readFunc(new IntPtr(BufferStartPtr + node->Offset));
+            }
+            finally
+            {
+                // Return the node for further writing, whether or not the callback threw
+                ReturnAndExit(node);
+            }
+        }
+
+        /// <summary>
+        /// Returns a node an overload reserved for further writing, and releases the overload's lease on the mapping.
+        /// </summary>
+        private void ReturnAndExit(Node* node)
+        {
+            try
+            {
+                ReturnNode(node);
             }
             finally
             {
                 Exit();
             }
-            return amount;
         }
 
         #endregion
