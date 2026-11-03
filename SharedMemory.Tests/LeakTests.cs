@@ -4,15 +4,16 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SharedMemory;
 
 namespace SharedMemoryTests
 {
     /// <summary>
-    /// What a buffer leaves behind when nobody disposes it. An owner that is dropped and collected releases its memory, as the
-    /// handles behind it are finalised, on every OS; the tests look for its view where each OS shows it, by the address it
-    /// was mapped at.
+    /// What a buffer leaves behind when nobody disposes it, and when its open fails. An owner that is dropped and collected
+    /// releases its memory, as the handles behind it are finalised, on every OS; the tests look for its view where each OS shows
+    /// it, by the address it was mapped at. A constructor whose open fails disposes the events it made.
     /// </summary>
     [TestClass]
     public class LeakTests
@@ -21,6 +22,7 @@ namespace SharedMemoryTests
         const string ArrayKind = "SharedArray";
         const string RingKind = "CircularBuffer";
         const int Size = 64 * 1024;
+        const int FailedOpens = 1000;
 
         /// <summary>
         /// Windows: the owner's view is no longer mapped at its address, and its name no longer opens.
@@ -107,6 +109,28 @@ namespace SharedMemoryTests
         }
 #endif
 
+        /// <summary>
+        /// Opens of a name that does not exist fail with FileNotFoundException, and each disposes the two events its constructor
+        /// made, so 1,000 of them leave none behind with no collection in between: on Windows neither event opens by name; on
+        /// Linux neither has a file in /dev/shm; on macOS neither has a lock file.
+        /// </summary>
+        [TestMethod]
+        [DataRow(BufferKind)]
+        [DataRow(ArrayKind)]
+        public void FailedOpens_LeaveNoEventBehind(string kind)
+        {
+            string name = Guid.NewGuid().ToString();
+
+            for (int i = 0; i < FailedOpens; i++)
+            {
+                Assert.ThrowsExactly<FileNotFoundException>(() => Open(kind, name));
+                if (i == 0)
+                    CollectionAssert.AreEqual(new string[0], EventsLeft(name), "Events left after the first failed open.");
+            }
+
+            CollectionAssert.AreEqual(new string[0], EventsLeft(name), "Events left after " + FailedOpens + " failed opens.");
+        }
+
         static void Collect()
         {
             GC.Collect();
@@ -145,6 +169,43 @@ namespace SharedMemoryTests
             if (kind == RingKind)
                 return new CircularBuffer(name, 4, Size / 4);
             return new BufferReadWrite(name, Size);
+        }
+
+        static SharedBuffer Open(string kind, string name)
+        {
+            if (kind == ArrayKind)
+                return new SharedArray<int>(name);
+            return new BufferReadWrite(name);
+        }
+
+        /// <summary>
+        /// The events of <paramref name="name"/>'s buffer that are still there: on Windows those that open by name, on Linux those
+        /// with a file in /dev/shm, and on macOS those with a lock file.
+        /// </summary>
+        static string[] EventsLeft(string name)
+        {
+            string[] events = { name + "_evt_write", name + "_evt_read" };
+#if NET
+            if (OperatingSystem.IsLinux())
+                return Directory.GetFiles("/dev/shm", "SharedMemory.*").Select(Path.GetFileName)
+                    .Where(file => events.Any(e => file.EndsWith("." + e, StringComparison.Ordinal))).ToArray();
+            if (OperatingSystem.IsMacOS())
+                return Directory.GetFiles(UnixBufferTests.Files.MacFolder + ".SharedMemory-uid" + UnixBufferTests.Files.EffectiveUserId())
+                    .Select(Path.GetFileName).Where(file => events.Any(e => file.StartsWith(e + "~", StringComparison.Ordinal))).ToArray();
+            if (!OperatingSystem.IsWindows())
+                throw new PlatformNotSupportedException();
+#endif
+            var left = new System.Collections.Generic.List<string>();
+            foreach (string eventName in events)
+            {
+                EventWaitHandle handle;
+                if (EventWaitHandle.TryOpenExisting(eventName, out handle))
+                {
+                    handle.Dispose();
+                    left.Add(eventName);
+                }
+            }
+            return left.ToArray();
         }
 
         /// <summary>

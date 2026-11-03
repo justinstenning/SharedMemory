@@ -92,7 +92,16 @@ namespace SharedMemory
             Length = length;
             _elementSize = FastStructure.SizeOf<T>();
 
-            Open();
+            try
+            {
+                Open();
+            }
+            catch
+            {
+                // Nobody can dispose an instance whose constructor threw
+                DisposeEvents();
+                throw;
+            }
         }
 
         private static long BufferSizeFor(int length)
@@ -112,9 +121,17 @@ namespace SharedMemory
         public SharedArray(string name)
             : base(name, 0, false)
         {
-            _elementSize = FastStructure.SizeOf<T>();
-
-            Open();
+            try
+            {
+                _elementSize = FastStructure.SizeOf<T>();
+                Open();
+            }
+            catch
+            {
+                // Nobody can dispose an instance whose constructor threw
+                DisposeEvents();
+                throw;
+            }
         }
 
         #endregion

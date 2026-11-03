@@ -91,7 +91,15 @@ namespace SharedMemory
             : base(name, bufferSize, ownsSharedMemory)
         {
             _writeEvent = NamedEvent.CreateOrOpen(Name + "_evt_write", true, EventResetMode.ManualReset);
-            _readEvent = NamedEvent.CreateOrOpen(Name + "_evt_read", true, EventResetMode.ManualReset);
+            try
+            {
+                _readEvent = NamedEvent.CreateOrOpen(Name + "_evt_read", true, EventResetMode.ManualReset);
+            }
+            catch
+            {
+                _writeEvent.Dispose();
+                throw;
+            }
         }
 
         #endregion
@@ -320,6 +328,16 @@ namespace SharedMemory
                 _readEvent.Dispose();
             }
             base.Dispose(disposeManagedResources);
+        }
+
+        /// <summary>
+        /// Disposes the two events, for a constructor whose <see cref="SharedBuffer.Open"/> threw: nobody can dispose the instance, so
+        /// the events would otherwise stay until they are finalised. <see cref="SharedBuffer.Open"/> has already released the mapping.
+        /// </summary>
+        internal void DisposeEvents()
+        {
+            _writeEvent.Dispose();
+            _readEvent.Dispose();
         }
 
         #endregion

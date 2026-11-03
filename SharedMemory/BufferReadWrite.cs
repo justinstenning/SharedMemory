@@ -51,7 +51,16 @@ namespace SharedMemory
         public BufferReadWrite(string name, int bufferSize)
             : base(name, bufferSize, true)
         {
-            Open();
+            try
+            {
+                Open();
+            }
+            catch
+            {
+                // Nobody can dispose an instance whose constructor threw
+                DisposeEvents();
+                throw;
+            }
         }
 
         /// <summary>
@@ -61,7 +70,16 @@ namespace SharedMemory
         public BufferReadWrite(string name)
             : base(name, 0, false)
         {
-            Open();
+            try
+            {
+                Open();
+            }
+            catch
+            {
+                // Nobody can dispose an instance whose constructor threw
+                DisposeEvents();
+                throw;
+            }
         }
 
         #endregion
