@@ -45,6 +45,10 @@ namespace SharedMemory
     /// <para>A read that finds nothing to read, or a write that finds no free node, waits up to its timeout, which is for the whole call. While it
     /// waits it looks at the buffer again every 10 ms, or every tick of the system timer where that is longer (about 15.6 ms on Windows by default),
     /// and once more at the end of its timeout.</para>
+    /// <para>Once the owner has shut down (<see cref="SharedBuffer.ShuttingDown"/>), a read still takes what is left in the buffer and a write still
+    /// writes while there is room, but a read that finds nothing to read, or a write that finds no free node, returns 0 at once rather than wait. A
+    /// loop that reads or writes until the owner goes should check <see cref="SharedBuffer.ShuttingDown"/>. A read or write that is waiting when
+    /// this instance is closed returns 0; one that starts after <see cref="SharedBuffer.Close"/> throws <see cref="ObjectDisposedException"/>.</para>
     /// </remarks>
 #if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
@@ -462,8 +466,9 @@ namespace SharedMemory
         /// Attempts to reserve a node from the linked-list for writing with the specified timeout.
         /// </summary>
         /// <param name="timeout">The number of milliseconds to wait if a node is not immediately available for writing.</param>
-        /// <returns>An unsafe pointer to the node if successful, otherwise null</returns>
-        /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
+        /// <returns>An unsafe pointer to the node if successful, otherwise null: at the timeout, at once when the owner has shut down and no
+        /// node is free, or when this instance is closed while the call waits.</returns>
+        /// <exception cref="ObjectDisposedException">This instance was closed before the call.</exception>
         /// <remarks>The node is valid until the buffer is closed: a subclass that writes to it itself must post it before Close is called, on
         /// this thread or another.</remarks>
         protected virtual Node* GetNodeForWriting(int timeout)
@@ -477,7 +482,8 @@ namespace SharedMemory
 
         /// <summary>
         /// The overloads' reservation of a node for writing: the node with a lease on the mapping, which the caller releases once it
-        /// has posted the node, or null at the timeout.
+        /// has posted the node; or null at the timeout, at once when the owner has shut down and no node is free, or when this instance
+        /// is closed while the call waits.
         /// </summary>
         private Node* ReserveNodeForWriting(int timeout)
         {
@@ -503,14 +509,16 @@ namespace SharedMemory
         /// Reserves a node for writing, and returns it with a lease on the mapping for the caller to release. Each look at the ring
         /// holds a lease of its own, and a wait holds none, so that a wait never keeps a closed instance's mapping.
         /// </summary>
-        /// <returns>The node, or null at the timeout.</returns>
-        /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
+        /// <returns>The node; or null at the timeout, at once when the owner has shut down and no node is free, or when this instance
+        /// is closed while the call waits.</returns>
+        /// <exception cref="ObjectDisposedException">This instance was closed before the call.</exception>
         private Node* TakeNodeForWriting(int timeout)
         {
             long deadline = Deadline(timeout);
-            for (; ; )
+            for (bool firstLook = true; ; firstLook = false)
             {
-                Enter();
+                if (!EnterForLook(firstLook))
+                    return null;
                 bool leased = false;
                 NamedEvent nodeAvailable;
                 try
@@ -530,6 +538,10 @@ namespace SharedMemory
                         // Another thread has already acquired this node for writing, try again.
                         continue;
                     }
+
+                    // No room, and the owner has shut down (ShuttingDown): return now rather than wait
+                    if (Header->Shutdown == 1)
+                        return null;
                     nodeAvailable = _nodeAvailable;
                 }
                 finally
@@ -550,10 +562,12 @@ namespace SharedMemory
         /// one waiter, so the call looks again after each slice whether or not the event was set. The look after the last slice is
         /// the call's last look, at its deadline.
         /// </summary>
-        /// <param name="namedEvent">The event, which the call took while it held its lease.</param>
+        /// <param name="namedEvent">The event, which the call took while it held its lease. A Close since then may have released it
+        /// with the mapping.</param>
         /// <param name="timeout">The call's timeout in milliseconds.</param>
         /// <param name="deadline">The call's deadline, from <see cref="Deadline"/>.</param>
-        /// <returns>false, without waiting, once the deadline has passed or for a timeout of 0: the look just made was the last.</returns>
+        /// <returns>false, without waiting, once the deadline has passed or for a timeout of 0: the look just made was the last. Also
+        /// false if this instance was closed while the call waited.</returns>
         private bool WaitBeforeNextLook(NamedEvent namedEvent, int timeout, long deadline)
         {
             int wait;
@@ -572,7 +586,15 @@ namespace SharedMemory
                 long leftMs = (left * 1000 + System.Diagnostics.Stopwatch.Frequency - 1) / System.Diagnostics.Stopwatch.Frequency;
                 wait = leftMs < WaitSlice ? (int)leftMs : WaitSlice;
             }
-            WaitOn(namedEvent, wait);
+            try
+            {
+                namedEvent.WaitOne(wait);
+            }
+            catch (ObjectDisposedException)
+            {
+                // This instance was closed while the call waited, which released the event with the mapping
+                return false;
+            }
             return true;
         }
 
@@ -581,20 +603,17 @@ namespace SharedMemory
         private const int WaitSlice = 10;
 
         /// <summary>
-        /// Waits on one of the buffer's events, which a call takes while it holds a lease and waits on after letting go of it. A Close
-        /// in between may release the events with the mapping: the wait then throws <see cref="ObjectDisposedException"/> naming the
-        /// buffer, as any call after Close does.
+        /// Takes a lease on the mapping for a look at the ring. A call's first look throws if this instance is closed, as any call
+        /// after Close does; a later look finds that it was closed while the call waited, and the call then returns as at its timeout.
         /// </summary>
-        private bool WaitOn(NamedEvent namedEvent, int millisecondsTimeout)
+        /// <returns>true with the lease taken; false, for a later look, if this instance is closed.</returns>
+        /// <exception cref="ObjectDisposedException">This instance is closed, at the call's first look.</exception>
+        private bool EnterForLook(bool firstLook)
         {
-            try
-            {
-                return namedEvent.WaitOne(millisecondsTimeout);
-            }
-            catch (ObjectDisposedException)
-            {
-                throw new ObjectDisposedException(Name);
-            }
+            if (!firstLook)
+                return TryEnter();
+            Enter();
+            return true;
         }
 
         /// <summary>
@@ -841,8 +860,9 @@ namespace SharedMemory
         /// Attempts to reserve a node from the linked-list for reading with the specified timeout
         /// </summary>
         /// <param name="timeout">The number of milliseconds to wait if a node is not immediately available for reading.</param>
-        /// <returns>An unsafe pointer to the node if successful, otherwise null</returns>
-        /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
+        /// <returns>An unsafe pointer to the node if successful, otherwise null: at the timeout, at once when the owner has shut down and
+        /// nothing is left to read, or when this instance is closed while the call waits.</returns>
+        /// <exception cref="ObjectDisposedException">This instance was closed before the call.</exception>
         /// <remarks>The node is valid until the buffer is closed: a subclass that reads it itself must return it before Close is called, on
         /// this thread or another.</remarks>
         protected virtual Node* GetNodeForReading(int timeout)
@@ -856,7 +876,8 @@ namespace SharedMemory
 
         /// <summary>
         /// The overloads' reservation of a node for reading: the node with a lease on the mapping, which the caller releases once it
-        /// has returned the node, or null at the timeout.
+        /// has returned the node; or null at the timeout, at once when the owner has shut down and the ring is empty, or when this
+        /// instance is closed while the call waits.
         /// </summary>
         private Node* ReserveNodeForReading(int timeout)
         {
@@ -882,14 +903,16 @@ namespace SharedMemory
         /// Reserves a node for reading, and returns it with a lease on the mapping for the caller to release. Each look at the ring
         /// holds a lease of its own, and a wait holds none, so that a wait never keeps a closed instance's mapping.
         /// </summary>
-        /// <returns>The node, or null at the timeout.</returns>
-        /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
+        /// <returns>The node; or null at the timeout, at once when the owner has shut down and the ring is empty, or when this
+        /// instance is closed while the call waits.</returns>
+        /// <exception cref="ObjectDisposedException">This instance was closed before the call.</exception>
         private Node* TakeNodeForReading(int timeout)
         {
             long deadline = Deadline(timeout);
-            for (; ; )
+            for (bool firstLook = true; ; firstLook = false)
             {
-                Enter();
+                if (!EnterForLook(firstLook))
+                    return null;
                 bool leased = false;
                 NamedEvent dataExists;
                 try
@@ -909,6 +932,10 @@ namespace SharedMemory
                         // Another thread has already acquired this node for reading, try again
                         continue;
                     }
+
+                    // Nothing to read, and the owner has shut down (ShuttingDown): return now rather than wait
+                    if (Header->Shutdown == 1)
+                        return null;
                     dataExists = _dataExists;
                 }
                 finally

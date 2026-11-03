@@ -24,6 +24,10 @@ namespace SharedMemoryTests
         const int WaitTimeout = 1000;
         // A 100 ms call's limit: its timeout, one slice (up to a 15.6 ms timer tick on Windows), and 60 ms for a slow machine's scheduling
         const int TimedCallLimit = 100 + 16 + 60;
+        // How soon a call returns once the owner has shut down or its own instance has closed: one slice (up to a 15.6 ms timer tick
+        // on Windows), and the rest for a slow machine's scheduling. The calls' timeouts are far longer.
+        const int PromptLimit = 250;
+        const int LongTimeout = 5000;
 
         /// <summary>
         /// An owner that makes two items readable, or two nodes free, in one walk of the ring. The walk sets the event once, which
@@ -272,10 +276,139 @@ namespace SharedMemoryTests
             }
         }
 
+        /// <summary>
+        /// The owner shuts down with two items in the ring: an opener still reads both, and then a read returns 0 at once rather
+        /// than wait out its timeout.
+        /// </summary>
+        [TestMethod]
+        public void Read_OwnerShutDownWithTwoItemsLeft_ReadsBothThenReturns0AtOnce()
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new CircularBuffer(name, 4, NodeSize))
+            using (var opener = new CircularBuffer(name))
+            {
+                Assert.AreEqual(NodeSize, owner.Write(Item(1), timeout: 0));
+                Assert.AreEqual(NodeSize, owner.Write(Item(2), timeout: 0));
+                owner.Dispose();
+                Assert.IsTrue(opener.ShuttingDown);
+
+                var buffer = new byte[NodeSize];
+                Assert.AreEqual(NodeSize, opener.Read(buffer));
+                CollectionAssert.AreEqual(Item(1), buffer);
+                Assert.AreEqual(NodeSize, opener.Read(buffer));
+                CollectionAssert.AreEqual(Item(2), buffer);
+
+                var timer = Stopwatch.StartNew();
+                Assert.AreEqual(0, opener.Read(buffer, timeout: LongTimeout));
+                Console.WriteLine("Read of the empty ring returned after {0} ms", timer.ElapsedMilliseconds);
+                Assert.IsTrue(timer.ElapsedMilliseconds < PromptLimit, String.Format("Read(timeout: {0}) of an empty ring after the owner shut down took {1} ms", LongTimeout, timer.ElapsedMilliseconds));
+            }
+        }
+
+        /// <summary>
+        /// After the owner has shut down, an opener still writes while there is room, and then a write returns 0 at once; what it
+        /// wrote can still be read.
+        /// </summary>
+        [TestMethod]
+        public void Write_AfterTheOwnerShutDown_WritesWhileThereIsRoomThenReturns0AtOnce()
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new CircularBuffer(name, 3, NodeSize))
+            using (var opener = new CircularBuffer(name))
+            {
+                owner.Dispose();
+                Assert.IsTrue(opener.ShuttingDown);
+
+                Assert.AreEqual(NodeSize, opener.Write(Item(1)));
+                Assert.AreEqual(NodeSize, opener.Write(Item(2)));
+                var timer = Stopwatch.StartNew();
+                Assert.AreEqual(0, opener.Write(Item(3), timeout: LongTimeout));
+                Console.WriteLine("Write to the full ring returned after {0} ms", timer.ElapsedMilliseconds);
+                Assert.IsTrue(timer.ElapsedMilliseconds < PromptLimit, String.Format("Write(timeout: {0}) to a full ring after the owner shut down took {1} ms", LongTimeout, timer.ElapsedMilliseconds));
+
+                var buffer = new byte[NodeSize];
+                Assert.AreEqual(NodeSize, opener.Read(buffer));
+                CollectionAssert.AreEqual(Item(1), buffer);
+                Assert.AreEqual(NodeSize, opener.Read(buffer));
+                CollectionAssert.AreEqual(Item(2), buffer);
+            }
+        }
+
+        /// <summary>
+        /// A read waiting on an empty ring, or a write waiting on a full one, when the owner shuts down: it returns 0 promptly rather
+        /// than wait out its timeout.
+        /// </summary>
+        [TestMethod]
+        [DataRow("Read")]
+        [DataRow("Write")]
+        public void Call_WaitingWhenTheOwnerShutsDown_Returns0Promptly(string call)
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new CircularBuffer(name, 2, NodeSize))
+            using (var opener = new CircularBuffer(name))
+            {
+                if (call == "Write")
+                    Assert.AreEqual(NodeSize, owner.Write(Item(1), timeout: 0));
+                Task<Outcome<int>> waiter = StartTimed(call == "Read"
+                    ? (Func<int>)(() => opener.Read(new byte[NodeSize], timeout: LongTimeout))
+                    : () => opener.Write(Item(2), timeout: LongTimeout));
+                LetThemWait(new Task[] { waiter });
+
+                long shutDown = Stopwatch.GetTimestamp();
+                owner.Dispose();
+
+                Outcome<int> outcome = Finish(waiter);
+                long afterShutdown = MillisecondsBetween(shutDown, outcome.Returned);
+                Console.WriteLine("{0} returned {1} {2} ms after the owner shut down", call, outcome.Value, afterShutdown);
+                Assert.AreEqual(0, outcome.Value);
+                Assert.IsTrue(afterShutdown < PromptLimit, String.Format("{0}(timeout: {1}) returned {2} ms after the owner shut down", call, LongTimeout, afterShutdown));
+                Assert.IsTrue(opener.ShuttingDown);
+            }
+        }
+
+        /// <summary>
+        /// A read or write waiting when its own instance is closed, on another thread, returns 0; a call after that throws
+        /// ObjectDisposedException. The instance is the opener, or the owner with no timeout.
+        /// </summary>
+        [TestMethod]
+        [DataRow("Read", false, LongTimeout)]
+        [DataRow("Write", false, LongTimeout)]
+        [DataRow("Read", true, Timeout.Infinite)]
+        [DataRow("Write", true, Timeout.Infinite)]
+        public void Call_WaitingWhenItsOwnInstanceCloses_Returns0ThenThrowsObjectDisposedException(string call, bool onTheOwner, int timeout)
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new CircularBuffer(name, 2, NodeSize))
+            using (var opener = new CircularBuffer(name))
+            {
+                CircularBuffer instance = onTheOwner ? owner : opener;
+                if (call == "Write")
+                    Assert.AreEqual(NodeSize, owner.Write(Item(1), timeout: 0));
+                Func<int> waiting = call == "Read"
+                    ? (Func<int>)(() => instance.Read(new byte[NodeSize], timeout: timeout))
+                    : () => instance.Write(Item(2), timeout: timeout);
+                Task<Outcome<int>> waiter = StartTimed(waiting);
+                LetThemWait(new Task[] { waiter });
+
+                long closed = Stopwatch.GetTimestamp();
+                instance.Close();
+
+                Outcome<int> outcome = Finish(waiter);
+                long afterClose = MillisecondsBetween(closed, outcome.Returned);
+                Console.WriteLine("{0} returned {1} {2} ms after its instance closed", call, outcome.Value, afterClose);
+                Assert.AreEqual(0, outcome.Value);
+                Assert.IsTrue(afterClose < PromptLimit, String.Format("{0} returned {1} ms after its instance closed", call, afterClose));
+                var thrown = Assert.ThrowsExactly<ObjectDisposedException>(() => waiting());
+                Assert.AreEqual(name, thrown.ObjectName);
+            }
+        }
+
         struct Outcome<T>
         {
             public T Value;
             public long Milliseconds;
+            // When the call returned, as a Stopwatch timestamp
+            public long Returned;
         }
 
         static byte[] Item(byte value)
@@ -290,7 +423,7 @@ namespace SharedMemoryTests
             {
                 var timer = Stopwatch.StartNew();
                 T value = call();
-                return new Outcome<T> { Value = value, Milliseconds = timer.ElapsedMilliseconds };
+                return new Outcome<T> { Value = value, Milliseconds = timer.ElapsedMilliseconds, Returned = Stopwatch.GetTimestamp() };
             }, TaskCreationOptions.LongRunning);
         }
 
@@ -310,6 +443,11 @@ namespace SharedMemoryTests
         static T[] Finish<T>(Task<T>[] calls)
         {
             return calls.Select(c => Finish(c)).ToArray();
+        }
+
+        static long MillisecondsBetween(long from, long to)
+        {
+            return (to - from) * 1000 / Stopwatch.Frequency;
         }
 
         static void SleepUntil(Stopwatch sinceStart, int milliseconds)

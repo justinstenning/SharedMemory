@@ -119,6 +119,8 @@ Broadcasting, where every reader sees every item, is on the roadmap as a mode of
 
 A `CircularBuffer` created with `nodeCount` nodes holds at most `nodeCount - 1` unread items, because one node always stays free. A writer that finds no free node waits for a reader, up to its timeout, and then returns 0.
 
+When the instance that created a `CircularBuffer`, its owner, closes it, `ShuttingDown` turns true for every other instance that has it open. Your readers still get the items left in the buffer, and your writers can still write while there's room. But once there's nothing to read, or no room, `Read` and `Write` return 0 straight away instead of waiting out their timeout. So a loop that reads or writes until the owner goes should check `ShuttingDown`, or it will spin. A `Read` or `Write` that's waiting when you close the instance it's called on returns 0 too.
+
 ### Read and write locks
 
 The read and write locks of `BufferWithLocks`, and so of `SharedArray<T>` and `BufferReadWrite`, are gates, not exclusive locks:
