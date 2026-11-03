@@ -352,9 +352,9 @@ namespace SharedMemoryTests
         /// <c>Global\</c> included, for three names, the hashes computed apart from the library.
         /// </summary>
         [TestMethod]
-        [DataRow("TESTSharedMemory_MasterMutex", "TESTSharedMemory_MasterMutex~AJBIHJLAWEI3LCI5HYPHG5KDGG")]
-        [DataRow("testSharedMemory_MasterMutex", "testSharedMemory_MasterMutex~X7BXTZHTUMTU5YWIGH2KS6OVUG")]
-        [DataRow("Global\\TESTSharedMemory_MasterMutex", "Global\\TESTSharedMemory_MasterMutex~NRNFSN2CF47SS3W2EL2VBW232A")]
+        [DataRow("TESTSharedMemory_OwnerMutex", "TESTSharedMemory_OwnerMutex~VJ33EFFCK7FMRAC3V7PKAIYOC2")]
+        [DataRow("testSharedMemory_OwnerMutex", "testSharedMemory_OwnerMutex~AK63F5L5DXQPR5E5OSLEIUYK4T")]
+        [DataRow("Global\\TESTSharedMemory_OwnerMutex", "Global\\TESTSharedMemory_OwnerMutex~2VVGWP45DNYMQPQM6Z3O2URB67")]
         public void ElectionMutexName_TheNameThenItsHash(string mutexName, string expected)
         {
             Assert.AreEqual(expected, UnixFiles.ElectionMutexName(mutexName));
@@ -367,29 +367,29 @@ namespace SharedMemoryTests
         [TestMethod]
         public void ElectionMutexName_228Bytes_KeptWhole()
         {
-            string mutexName = new string('k', 204) + "SharedMemory_MasterMutex";
-            Assert.AreEqual(mutexName + "~IVI4Y2T4Q73IDSJFCQLIWESEII", UnixFiles.ElectionMutexName(mutexName));
+            string mutexName = new string('k', 205) + "SharedMemory_OwnerMutex";
+            Assert.AreEqual(mutexName + "~7XOJONQADRBFMAJ4BUSJAE6DQK", UnixFiles.ElectionMutexName(mutexName));
         }
 
         [TestMethod]
         public void ElectionMutexName_229Bytes_KeepsTheFirst200()
         {
-            string mutexName = new string('k', 205) + "SharedMemory_MasterMutex";
-            Assert.AreEqual(new string('k', 200) + "~NYJHFPA54WZVZHLYHQBL7WJTTB", UnixFiles.ElectionMutexName(mutexName));
+            string mutexName = new string('k', 206) + "SharedMemory_OwnerMutex";
+            Assert.AreEqual(new string('k', 200) + "~S4ZZW3JAFTUYFX6SGZMUZOM3SZ", UnixFiles.ElectionMutexName(mutexName));
         }
 
         [TestMethod]
         public void ElectionMutexName_CutThroughACharacter_CutsBackToItsStart()
         {
-            string mutexName = "a" + new string('\u00E9', 120) + "SharedMemory_MasterMutex";
-            Assert.AreEqual("a" + new string('\u00E9', 99) + "~S2XAP6I3UKPL2MINSVNWYOE2DS", UnixFiles.ElectionMutexName(mutexName));
+            string mutexName = "a" + new string('\u00E9', 120) + "SharedMemory_OwnerMutex";
+            Assert.AreEqual("a" + new string('\u00E9', 99) + "~2PWMGRLF55B7KMPKMEYWLSMZ5Z", UnixFiles.ElectionMutexName(mutexName));
         }
 
         [TestMethod]
         public void ElectionMutexName_LongGlobalName_KeepsThePrefixAnd200BytesAfterIt()
         {
-            string mutexName = "Global\\" + new string('g', 230) + "SharedMemory_MasterMutex";
-            Assert.AreEqual("Global\\" + new string('g', 200) + "~MONUTEFS52WNIEKWDYCWJXVHSA", UnixFiles.ElectionMutexName(mutexName));
+            string mutexName = "Global\\" + new string('g', 230) + "SharedMemory_OwnerMutex";
+            Assert.AreEqual("Global\\" + new string('g', 200) + "~VCF5ECESAODNTBRBS4WAQKPIME", UnixFiles.ElectionMutexName(mutexName));
         }
     }
 }
