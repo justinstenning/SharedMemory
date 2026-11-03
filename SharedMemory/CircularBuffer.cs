@@ -42,6 +42,9 @@ namespace SharedMemory
     /// <remarks>
     /// <para>Readers compete for items: each item goes to the one reader that claims its node first, not to every reader.</para>
     /// <para>A buffer of <see cref="NodeCount"/> nodes holds at most <see cref="NodeCount"/> - 1 unread items, because one node always stays free.</para>
+    /// <para>A read that finds nothing to read, or a write that finds no free node, waits up to its timeout, which is for the whole call. While it
+    /// waits it looks at the buffer again every 10 ms, or every tick of the system timer where that is longer (about 15.6 ms on Windows by default),
+    /// and once more at the end of its timeout.</para>
     /// </remarks>
 #if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
@@ -504,7 +507,7 @@ namespace SharedMemory
         /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
         private Node* TakeNodeForWriting(int timeout)
         {
-            long waitStart = 0;
+            long deadline = Deadline(timeout);
             for (; ; )
             {
                 Enter();
@@ -535,18 +538,47 @@ namespace SharedMemory
                         Exit();
                 }
 
-                // No room is available, wait for room to become available. Room can appear without
-                // _nodeAvailable being set, so wait in slices of at most 10 ms and look at the ring again
-                // between them. The last slice ends the wait, as a single wait for the whole timeout did.
-                int remaining = RemainingTimeout(timeout, ref waitStart);
-                int wait = remaining == Timeout.Infinite || remaining > 10 ? 10 : remaining;
-                if (WaitOn(nodeAvailable, wait) || wait != remaining)
-                    continue;
-
-                // Timeout
-                return null;
+                // No room is available: wait for a reader to free a node, then look again
+                if (!WaitBeforeNextLook(nodeAvailable, timeout, deadline))
+                    return null;
             }
         }
+
+        /// <summary>
+        /// Waits on one of the buffer's events before a call's next look at the ring, asking for at most <see cref="WaitSlice"/> ms and
+        /// no later than the call's deadline. A post or a return sets an event only for a waiter at the boundary, and one set wakes
+        /// one waiter, so the call looks again after each slice whether or not the event was set. The look after the last slice is
+        /// the call's last look, at its deadline.
+        /// </summary>
+        /// <param name="namedEvent">The event, which the call took while it held its lease.</param>
+        /// <param name="timeout">The call's timeout in milliseconds.</param>
+        /// <param name="deadline">The call's deadline, from <see cref="Deadline"/>.</param>
+        /// <returns>false, without waiting, once the deadline has passed or for a timeout of 0: the look just made was the last.</returns>
+        private bool WaitBeforeNextLook(NamedEvent namedEvent, int timeout, long deadline)
+        {
+            int wait;
+            if (timeout == Timeout.Infinite)
+                wait = WaitSlice;
+            else if (timeout < 0)
+                wait = timeout; // refused by the wait with ArgumentOutOfRangeException, as before
+            else if (timeout == 0)
+                return false;
+            else
+            {
+                long left = deadline - System.Diagnostics.Stopwatch.GetTimestamp();
+                if (left <= 0)
+                    return false;
+                // Rounded up, so that the last look comes at the deadline, not before it
+                long leftMs = (left * 1000 + System.Diagnostics.Stopwatch.Frequency - 1) / System.Diagnostics.Stopwatch.Frequency;
+                wait = leftMs < WaitSlice ? (int)leftMs : WaitSlice;
+            }
+            WaitOn(namedEvent, wait);
+            return true;
+        }
+
+        // The longest wait a waiting call asks for before it looks at the ring again. Where the system timer is coarser, as on Windows
+        // (about 15.6 ms by default), the wait lasts a tick.
+        private const int WaitSlice = 10;
 
         /// <summary>
         /// Waits on one of the buffer's events, which a call takes while it holds a lease and waits on after letting go of it. A Close
@@ -566,20 +598,16 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// The part of <paramref name="timeout"/> left since the wait started, in milliseconds, or 0 once it has passed.
+        /// When a call with this timeout gives up, as a <see cref="System.Diagnostics.Stopwatch"/> timestamp: the timeout is for the
+        /// whole call, however often it waits.
         /// </summary>
-        /// <param name="timeout">The caller's timeout in milliseconds. 0, <see cref="Timeout.Infinite"/> and other negative values are returned as they are.</param>
-        /// <param name="waitStart">0 on the first call, which sets it to when the wait started.</param>
-        private static int RemainingTimeout(int timeout, ref long waitStart)
+        /// <param name="timeout">The call's timeout in milliseconds.</param>
+        /// <returns>The deadline, or 0 for a timeout of 0, <see cref="Timeout.Infinite"/> or below, which have none.</returns>
+        private static long Deadline(int timeout)
         {
             if (timeout <= 0)
-                return timeout;
-
-            long now = System.Diagnostics.Stopwatch.GetTimestamp();
-            if (waitStart == 0)
-                waitStart = now;
-            long remaining = timeout - (now - waitStart) * 1000 / System.Diagnostics.Stopwatch.Frequency;
-            return remaining <= 0 ? 0 : (int)remaining;
+                return 0;
+            return System.Diagnostics.Stopwatch.GetTimestamp() + timeout * System.Diagnostics.Stopwatch.Frequency / 1000;
         }
 
         /// <summary>
@@ -858,6 +886,7 @@ namespace SharedMemory
         /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
         private Node* TakeNodeForReading(int timeout)
         {
+            long deadline = Deadline(timeout);
             for (; ; )
             {
                 Enter();
@@ -888,12 +917,9 @@ namespace SharedMemory
                         Exit();
                 }
 
-                // No data is available, wait for it
-                if (WaitOn(dataExists, timeout))
-                    continue;
-
-                // Timeout
-                return null;
+                // No data is available: wait for a writer to post a node, then look again
+                if (!WaitBeforeNextLook(dataExists, timeout, deadline))
+                    return null;
             }
         }
 
