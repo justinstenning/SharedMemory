@@ -11,7 +11,8 @@ namespace SharedMemoryTests
     /// Where a read or write may start and end: every array, pointer, delegate and structure overload of
     /// <see cref="BufferReadWrite"/>, and the members of <see cref="SharedArray{T}"/> that reach them, at the start of the
     /// buffer, in its middle, and ending at its last byte. Each copy round-trips between two instances and leaves the rest of
-    /// the buffer as it was.
+    /// the buffer as it was. A copy that starts outside the buffer throws <see cref="ArgumentOutOfRangeException"/>, one that
+    /// starts inside and runs past the end throws <see cref="ArgumentException"/>, and neither copies anything.
     /// </summary>
     [TestClass]
     public class BoundsTests
@@ -146,6 +147,219 @@ namespace SharedMemoryTests
                 Pinned(new byte[1], p => owner.Read(p, 0, position));
 
                 CollectionAssert.AreEqual(new byte[Size], Contents(name));
+            }
+        }
+
+        #endregion
+
+        #region BufferReadWrite out of range
+
+        [TestMethod]
+        [DataRow("bytes")]
+        [DataRow("elements")]
+        [DataRow("pointer")]
+        public void Write_RunningPastTheEnd_ThrowsArgumentExceptionAndWritesNothing(string overload)
+        {
+            string name = Guid.NewGuid().ToString();
+            byte[] before = Pattern(Size, 11);
+            using (var owner = new BufferReadWrite(name, Size))
+            {
+                owner.Write(before);
+
+                var e = Assert.ThrowsExactly<ArgumentException>(() => WriteThrough(owner, overload, Pattern(64, 13), 1000, null));
+
+                Assert.AreEqual("bufferPosition", e.ParamName);
+                CollectionAssert.AreEqual(before, Contents(name), "Bytes 1,000 to 1,023 changed.");
+            }
+        }
+
+        [TestMethod]
+        [DataRow("bytes")]
+        [DataRow("elements")]
+        [DataRow("pointer")]
+        public void Read_RunningPastTheEnd_ThrowsArgumentExceptionAndCopiesNothing(string overload)
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new BufferReadWrite(name, Size))
+            {
+                owner.Write(Pattern(Size, 11));
+                byte[] destination = Filled(64, 0xEE);
+
+                var e = Assert.ThrowsExactly<ArgumentException>(() => ReadThrough(owner, overload, destination, 1000, null));
+
+                Assert.AreEqual("bufferPosition", e.ParamName);
+                CollectionAssert.AreEqual(Filled(64, 0xEE), destination);
+            }
+        }
+
+        [TestMethod]
+        [DataRow("bytes")]
+        [DataRow("elements")]
+        [DataRow("pointer")]
+        [DataRow("delegate")]
+        public void Write_FarPastTheEnd_ThrowsArgumentOutOfRangeException(string overload)
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new BufferReadWrite(name, Size))
+            {
+                bool ran = false;
+
+                var e = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => WriteThrough(owner, overload, Pattern(64, 13), 1L << 30, () => ran = true));
+
+                Assert.AreEqual("bufferPosition", e.ParamName);
+                Assert.IsFalse(ran, "The delegate ran.");
+                CollectionAssert.AreEqual(new byte[Size], Contents(name));
+            }
+        }
+
+        [TestMethod]
+        [DataRow("bytes")]
+        [DataRow("elements")]
+        [DataRow("pointer")]
+        [DataRow("delegate")]
+        public void Read_FarPastTheEnd_ThrowsArgumentOutOfRangeException(string overload)
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new BufferReadWrite(name, Size))
+            {
+                byte[] destination = Filled(64, 0xEE);
+                bool ran = false;
+
+                var e = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => ReadThrough(owner, overload, destination, 1L << 30, () => ran = true));
+
+                Assert.AreEqual("bufferPosition", e.ParamName);
+                Assert.IsFalse(ran, "The delegate ran.");
+                CollectionAssert.AreEqual(Filled(64, 0xEE), destination);
+            }
+        }
+
+        [TestMethod]
+        [DataRow("bytes")]
+        [DataRow("elements")]
+        [DataRow("pointer")]
+        [DataRow("delegate")]
+        public void Read_BeforeTheStart_ThrowsArgumentOutOfRangeExceptionAndCopiesNothing(string overload)
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new BufferReadWrite(name, Size))
+            {
+                byte[] destination = Filled(16, 0xEE);
+                bool ran = false;
+
+                var e = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => ReadThrough(owner, overload, destination, -16, () => ran = true));
+
+                Assert.AreEqual("bufferPosition", e.ParamName);
+                Assert.IsFalse(ran, "The delegate ran.");
+                CollectionAssert.AreEqual(Filled(16, 0xEE), destination, "The header was copied.");
+            }
+        }
+
+        [TestMethod]
+        [DataRow("bytes")]
+        [DataRow("elements")]
+        [DataRow("pointer")]
+        [DataRow("delegate")]
+        public void Write_BeforeTheStart_ThrowsArgumentOutOfRangeExceptionAndLeavesTheHeaderAlone(string overload)
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new BufferReadWrite(name, Size))
+            using (var opener = new BufferReadWrite(name))
+            {
+                bool ran = false;
+
+                // 8 bytes before the buffer is the header's shutdown flag
+                var e = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => WriteThrough(owner, overload, new byte[] { 1, 0, 0, 0 }, -8, () => ran = true));
+
+                Assert.AreEqual("bufferPosition", e.ParamName);
+                Assert.IsFalse(ran, "The delegate ran.");
+                Assert.IsFalse(opener.ShuttingDown, "The write reached the header's shutdown flag.");
+                using (var later = new BufferReadWrite(name))
+                    Assert.AreEqual(Size, later.BufferSize);
+            }
+        }
+
+        [TestMethod]
+        public void Structure_BeforeTheStart_ThrowsArgumentOutOfRangeExceptionAndLeavesTheHeaderAlone()
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new BufferReadWrite(name, Size))
+            using (var opener = new BufferReadWrite(name))
+            {
+                int one = 1;
+                int read;
+
+                var write = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => owner.Write(ref one, -8));
+                var readError = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => owner.Read(out read, -8));
+
+                Assert.AreEqual("position", write.ParamName);
+                Assert.AreEqual("position", readError.ParamName);
+                Assert.IsFalse(opener.ShuttingDown, "The write reached the header's shutdown flag.");
+            }
+        }
+
+        [TestMethod]
+        [DataRow("write bytes")]
+        [DataRow("read bytes")]
+        [DataRow("write elements")]
+        [DataRow("read elements")]
+        [DataRow("write pointer")]
+        [DataRow("read pointer")]
+        [DataRow("write delegate")]
+        [DataRow("read delegate")]
+        public void EmptyCopy_AtTheEnd_ThrowsArgumentOutOfRangeException(string call)
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new BufferReadWrite(name, Size))
+            {
+                bool ran = false;
+
+                var e = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => Call(owner, call, new byte[0], Size, () => ran = true));
+
+                Assert.AreEqual("bufferPosition", e.ParamName);
+                Assert.IsFalse(ran, "The delegate ran.");
+            }
+        }
+
+        [TestMethod]
+        [DataRow("write bytes")]
+        [DataRow("read bytes")]
+        [DataRow("write elements")]
+        [DataRow("read elements")]
+        [DataRow("write pointer")]
+        [DataRow("read pointer")]
+        [DataRow("write delegate")]
+        [DataRow("read delegate")]
+        public void Position_NearLongMaxValue_ThrowsArgumentOutOfRangeExceptionWithoutOverflow(string call)
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new BufferReadWrite(name, Size))
+            {
+                bool ran = false;
+
+                // position + 64 overflows a long
+                var e = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => Call(owner, call, new byte[64], long.MaxValue - 10, () => ran = true));
+
+                Assert.AreEqual("bufferPosition", e.ParamName);
+                Assert.IsFalse(ran, "The delegate ran.");
+                CollectionAssert.AreEqual(new byte[Size], Contents(name));
+            }
+        }
+
+        [TestMethod]
+        [DataRow("write pointer")]
+        [DataRow("read pointer")]
+        public void Pointer_NegativeLength_ThrowsArgumentOutOfRangeException(string call)
+        {
+            string name = Guid.NewGuid().ToString();
+            var bytes = new byte[16];
+            using (var owner = new BufferReadWrite(name, Size))
+            {
+                var e = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+                    Pinned(bytes, p => { if (call == "write pointer") owner.Write(p, -1, 0); else owner.Read(p, -1, 0); }));
+
+                Assert.AreEqual("length", e.ParamName);
+                CollectionAssert.AreEqual(new byte[Size], Contents(name));
+                CollectionAssert.AreEqual(new byte[16], bytes);
             }
         }
 
@@ -306,6 +520,46 @@ namespace SharedMemoryTests
             }
         }
 
+        [TestMethod]
+        [DataRow("WriteArray", -8L, typeof(ArgumentOutOfRangeException))]
+        [DataRow("WriteArray", 1000L, typeof(ArgumentException))]
+        [DataRow("ReadArray", -8L, typeof(ArgumentOutOfRangeException))]
+        [DataRow("ReadArray", 1000L, typeof(ArgumentException))]
+        [DataRow("WriteFrom", -8L, typeof(ArgumentOutOfRangeException))]
+        [DataRow("WriteFrom", 1000L, typeof(ArgumentException))]
+        public void ProtectedArrayCopies_OutOfRange_ThrowAndCopyNothing(string call, long position, Type expected)
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var buffer = new ArrayCopies(name, Size))
+            using (var opener = new ArrayCopies(name))
+            {
+                // Before the buffer, 1 where the header's shutdown flag is; past its end, 64 bytes from 1,000
+                byte[] data = position < 0 ? new byte[] { 1, 0, 0, 0 } : Pattern(64, 17);
+                byte[] destination = Filled(data.Length, 0xEE);
+                Exception thrown = null;
+                try
+                {
+                    if (call == "WriteArray")
+                        buffer.CallWriteArray(data, 0, data.Length, position);
+                    else if (call == "ReadArray")
+                        buffer.CallReadArray(destination, 0, destination.Length, position);
+                    else
+                        buffer.CallWriteFrom(data, 0, position);
+                }
+                catch (Exception e)
+                {
+                    thrown = e;
+                }
+
+                Assert.IsNotNull(thrown, "Nothing was thrown.");
+                Assert.AreEqual(expected, thrown.GetType());
+                Assert.AreEqual("bufferPosition", ((ArgumentException)thrown).ParamName);
+                Assert.IsFalse(opener.ShuttingDown, "The write reached the header's shutdown flag.");
+                CollectionAssert.AreEqual(Filled(data.Length, 0xEE), destination, "The read copied bytes.");
+                CollectionAssert.AreEqual(new byte[Size], opener.ReadBytes(Size), "The buffer changed.");
+            }
+        }
+
         #endregion
 
         #region Helpers
@@ -337,6 +591,90 @@ namespace SharedMemoryTests
             {
                 handle.Free();
             }
+        }
+
+        static byte[] Filled(int count, byte value)
+        {
+            var bytes = new byte[count];
+            for (int i = 0; i < count; i++)
+                bytes[i] = value;
+            return bytes;
+        }
+
+        static int[] ToInts(byte[] bytes)
+        {
+            var values = new int[bytes.Length / sizeof(int)];
+            Buffer.BlockCopy(bytes, 0, values, 0, values.Length * sizeof(int));
+            return values;
+        }
+
+        // Writes bytes at position through one overload of BufferReadWrite: "bytes" Write(byte[]), "elements" Write(int[]) of the
+        // same bytes, "pointer" Write(IntPtr, int), or "delegate" Write(Action<IntPtr>), whose delegate calls ran, then copies.
+        // An unknown overload throws InvalidOperationException, which no test expects.
+        static void WriteThrough(BufferReadWrite buffer, string overload, byte[] bytes, long position, Action ran)
+        {
+            switch (overload)
+            {
+                case "bytes":
+                    buffer.Write(bytes, position);
+                    break;
+                case "elements":
+                    buffer.Write(ToInts(bytes), position);
+                    break;
+                case "pointer":
+                    Pinned(bytes, p => buffer.Write(p, bytes.Length, position));
+                    break;
+                case "delegate":
+                    buffer.Write(p => { ran(); Marshal.Copy(bytes, 0, p, bytes.Length); }, position);
+                    break;
+                default:
+                    throw new InvalidOperationException("Unknown overload " + overload);
+            }
+        }
+
+        // Reads destination.Length bytes at position into destination through one overload, as WriteThrough writes. Whatever an
+        // overload copied before it threw is left in destination.
+        static void ReadThrough(BufferReadWrite buffer, string overload, byte[] destination, long position, Action ran)
+        {
+            switch (overload)
+            {
+                case "bytes":
+                    buffer.Read(destination, position);
+                    break;
+                case "elements":
+                    {
+                        int[] values = ToInts(destination);
+                        try
+                        {
+                            buffer.Read(values, position);
+                        }
+                        finally
+                        {
+                            Buffer.BlockCopy(values, 0, destination, 0, values.Length * sizeof(int));
+                        }
+                        break;
+                    }
+                case "pointer":
+                    Pinned(destination, p => buffer.Read(p, destination.Length, position));
+                    break;
+                case "delegate":
+                    buffer.Read(p => { ran(); Marshal.Copy(p, destination, 0, destination.Length); }, position);
+                    break;
+                default:
+                    throw new InvalidOperationException("Unknown overload " + overload);
+            }
+        }
+
+        // "write <overload>" or "read <overload>", with bytes as the source or the destination
+        static void Call(BufferReadWrite buffer, string call, byte[] bytes, long position, Action ran)
+        {
+            string[] parts = call.Split(' ');
+            if (parts[0] == "write")
+                WriteThrough(buffer, parts[1], bytes, position, ran);
+            else if (parts[0] == "read")
+                ReadThrough(buffer, parts[1], bytes, position, ran);
+            else
+                throw new InvalidOperationException("Unknown call " + call);
         }
 
         // The protected array copies that CircularBuffer and other subclasses call

@@ -167,7 +167,7 @@ namespace SharedMemory
             if (startIndex < 0 || startIndex > Length - buffer.Length)
                 throw new ArgumentOutOfRangeException("startIndex");
 
-            base.Write(buffer, (long)startIndex * _elementSize);
+            base.Write(buffer, PositionOf(startIndex, buffer.Length));
         }
 
         #endregion
@@ -204,7 +204,14 @@ namespace SharedMemory
             if (startIndex < 0 || startIndex > Length - buffer.Length)
                 throw new ArgumentOutOfRangeException("startIndex");
 
-            base.Read(buffer, (long)startIndex * _elementSize);
+            base.Read(buffer, PositionOf(startIndex, buffer.Length));
+        }
+
+        // Where a copy of count elements from startIndex starts in the buffer. An empty copy may start at Length, which is past
+        // the buffer's last byte, so it starts at 0 instead: it copies nothing either way.
+        private long PositionOf(int startIndex, int count)
+        {
+            return count == 0 ? 0 : (long)startIndex * _elementSize;
         }
 
         /// <summary>

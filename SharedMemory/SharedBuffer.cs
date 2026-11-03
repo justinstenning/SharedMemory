@@ -389,35 +389,94 @@ namespace SharedMemory
 #if NET40Plus
             FastStructure<T>.StructureToPtr(ref source, StructureAt<T>(bufferPosition));
 #else
+            // This build's own view accessor checks the end, as it always has
+            CheckRange(bufferPosition, 0, "position");
             View.Write<T>(BufferOffset + bufferPosition, ref source);
 #endif
         }
 
 #if NET40Plus
         /// <summary>
-        /// The address of a <typeparamref name="T"/> at <paramref name="bufferPosition"/>, checked as the view accessor that
-        /// copied single structures up to version 2.3.3 checked it, with the same exceptions.
+        /// The address of a <typeparamref name="T"/> at <paramref name="bufferPosition"/>, checked under the name, and with the
+        /// exceptions, that the view accessor which copied single structures up to version 2.3.3 used.
         /// </summary>
         private IntPtr StructureAt<T>(long bufferPosition)
             where T : struct
         {
-#if NET10_0_OR_GREATER
-            long capacity = (View ?? _mappedView).Capacity;
-#else
-            long capacity = View.Capacity;
-#endif
-            long position = BufferOffset + bufferPosition;
-            if (position < 0)
-                throw new ArgumentOutOfRangeException("position", "Non-negative number required.");
-            if (position > capacity - FastStructure<T>.Size)
-            {
-                if (position >= capacity)
-                    throw new ArgumentOutOfRangeException("position", "The position may not be greater or equal to the capacity of the accessor.");
-                throw new ArgumentException("There are not enough bytes remaining in the buffer for a " + typeof(T).FullName + " at this position.", "position");
-            }
+            CheckRange(bufferPosition, FastStructure<T>.Size, "position");
             return new IntPtr(BufferStartPtr + bufferPosition);
         }
 #endif
+
+        /// <summary>
+        /// The one bounds check of every read and write: <paramref name="length"/> bytes from <paramref name="bufferPosition"/>
+        /// must lie within the buffer, the first <see cref="Limit"/> bytes from <see cref="BufferStartPtr"/>. A start outside the
+        /// buffer throws <see cref="ArgumentOutOfRangeException"/>; a start inside it with more bytes than remain throws
+        /// <see cref="ArgumentException"/>. Both name <paramref name="paramName"/>. A length of 0 checks the start alone.
+        /// </summary>
+        private void CheckRange(long bufferPosition, long length, string paramName)
+        {
+            long limit = Limit;
+            if (bufferPosition < 0 || bufferPosition >= limit)
+                throw new ArgumentOutOfRangeException(paramName, bufferPosition, "The position is outside the buffer, which holds " + limit + " bytes.");
+            // With the start inside the buffer, this subtraction cannot overflow
+            if (length > limit - bufferPosition)
+                throw new ArgumentException("There are not enough bytes remaining in the buffer for " + length + " bytes at position " + bufferPosition + ": the buffer holds " + limit + " bytes.", paramName);
+        }
+
+        /// <summary>
+        /// How many bytes from <see cref="BufferStartPtr"/> reads and writes may reach: <see cref="BufferSize"/>. An opener that read
+        /// the header before its owner had written the size there (#95) has no size, and mapped all of the shared memory instead:
+        /// it may reach the end of that mapping, as it always could. Where this build cannot tell how long that mapping is (the
+        /// .NET Framework 3.5 build's own views), it may reach nothing.
+        /// </summary>
+        private long Limit
+        {
+            get
+            {
+                if (BufferSize > 0)
+                    return BufferSize;
+                long mapped = 0;
+#if NET10_0_OR_GREATER
+                if (_mapping != null && _mapping.Memory != null)
+                    mapped = (long)_mapping.Memory.ByteLength;
+                else
+#endif
+#if NET40Plus
+                if (View != null)
+                    mapped = View.Capacity;
+#endif
+                return mapped - (BufferStartPtr - ViewPtr);
+            }
+        }
+
+        /// <summary>
+        /// The bytes that <paramref name="count"/> elements of <typeparamref name="T"/> take in the buffer, in a <see cref="long"/>,
+        /// where the product cannot overflow. It first makes the checks that FastStructure's array copies make on the array, in
+        /// the same order, so that a bad array is reported as it was before the buffer's own check.
+        /// </summary>
+        private static long ArrayLength<T>(T[] array, int index, int count)
+            where T : struct
+        {
+            if (array == null)
+                throw new ArgumentNullException("buffer");
+            if (count < 0)
+                throw new ArgumentOutOfRangeException("count");
+            if (index < 0)
+                throw new ArgumentOutOfRangeException("index");
+            if (array.Length - index < count)
+                throw new ArgumentException("Invalid offset into array specified by index and count");
+            return (long)count * FastStructure<T>.Size;
+        }
+
+        /// <summary>
+        /// Refuses a negative length for a pointer copy, which the buffer's check would let through to the copy.
+        /// </summary>
+        private static void CheckLength(int length)
+        {
+            if (length < 0)
+                throw new ArgumentOutOfRangeException("length", length, "The number of bytes to copy cannot be negative.");
+        }
 
         /// <summary>
         /// Writes an array of <typeparamref name="T"/> into the buffer
@@ -441,7 +500,9 @@ namespace SharedMemory
         protected virtual void Write<T>(T[] source, int index, long bufferPosition = 0)
             where T : struct
         {
-            FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), source, index, source.Length - index);
+            int count = source.Length - index;
+            CheckRange(bufferPosition, ArrayLength(source, index, count), "bufferPosition");
+            FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), source, index, count);
         }
 
         /// <summary>
@@ -455,6 +516,7 @@ namespace SharedMemory
         protected virtual void WriteArray<T>(T[] source, int index, int count, long bufferPosition = 0)
             where T : struct
         {
+            CheckRange(bufferPosition, ArrayLength(source, index, count), "bufferPosition");
             FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), source, index, count);
         }
 
@@ -466,6 +528,8 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
         protected virtual void Write(IntPtr source, int length, long bufferPosition = 0)
         {
+            CheckLength(length);
+            CheckRange(bufferPosition, length, "bufferPosition");
 #if NETCORE
             Buffer.MemoryCopy((void*)source, BufferStartPtr + bufferPosition, BufferSize - bufferPosition, length);
 #else
@@ -480,6 +544,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region to start writing to.</param>
         protected virtual void Write(Action<IntPtr> writeFunc, long bufferPosition = 0)
         {
+            CheckRange(bufferPosition, 0, "bufferPosition");
             writeFunc(new IntPtr(BufferStartPtr + bufferPosition));
         }
 
@@ -499,6 +564,8 @@ namespace SharedMemory
 #if NET40Plus
             data = FastStructure<T>.PtrToStructure(StructureAt<T>(bufferPosition));
 #else
+            // This build's own view accessor checks the end, as it always has
+            CheckRange(bufferPosition, 0, "position");
             View.Read<T>(BufferOffset + bufferPosition, out data);
 #endif
         }
@@ -512,6 +579,7 @@ namespace SharedMemory
         protected virtual void Read<T>(T[] destination, long bufferPosition = 0)
             where T : struct
         {
+            CheckRange(bufferPosition, ArrayLength(destination, 0, destination.Length), "bufferPosition");
             FastStructure.ReadArray<T>(destination, (IntPtr)(BufferStartPtr + bufferPosition), 0, destination.Length);
         }
 
@@ -526,6 +594,7 @@ namespace SharedMemory
         protected virtual void ReadArray<T>(T[] destination, int index, int count, long bufferPosition)
             where T : struct
         {
+            CheckRange(bufferPosition, ArrayLength(destination, index, count), "bufferPosition");
             FastStructure.ReadArray<T>(destination, (IntPtr)(BufferStartPtr + bufferPosition), index, count);
         }
 
@@ -537,6 +606,8 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected virtual void Read(IntPtr destination, int length, long bufferPosition = 0)
         {
+            CheckLength(length);
+            CheckRange(bufferPosition, length, "bufferPosition");
 #if NETCORE
             Buffer.MemoryCopy(BufferStartPtr + bufferPosition, (void*)destination, length, length);
 #else
@@ -551,6 +622,7 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected virtual void Read(Action<IntPtr> readFunc, long bufferPosition = 0)
         {
+            CheckRange(bufferPosition, 0, "bufferPosition");
             readFunc(new IntPtr(BufferStartPtr + bufferPosition));
         }
 
