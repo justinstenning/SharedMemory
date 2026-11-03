@@ -167,11 +167,30 @@ namespace SharedMemory
         #region Writing
 
         /// <summary>
+        /// Waits up to <see cref="ReadWriteTimeout"/> at a gate. Dispose on another thread may dispose the event meanwhile: the read or
+        /// write then throws <see cref="ObjectDisposedException"/> naming the buffer, as one after Dispose does.
+        /// </summary>
+        private bool WaitOn(NamedEvent gate)
+        {
+            try
+            {
+                return gate.WaitOne(ReadWriteTimeout);
+            }
+            catch (ObjectDisposedException)
+            {
+                throw new ObjectDisposedException(Name);
+            }
+        }
+
+        /// <summary>
         /// Prevents write operations from deadlocking by throwing a TimeoutException if writes are not let through within <see cref="ReadWriteTimeout"/> milliseconds
         /// </summary>
         private void WriteWait()
         {
-            if (!_writeEvent.WaitOne(ReadWriteTimeout))
+            // A closed buffer's write throws ObjectDisposedException rather than wait, as its events may be disposed
+            if (!IsOpen)
+                throw new ObjectDisposedException(Name);
+            if (!WaitOn(_writeEvent))
                 throw new TimeoutException("The write operation timed out waiting for the write lock WaitEvent. Check your usage of AcquireWriteLock/ReleaseWriteLock and AcquireReadLock/ReleaseReadLock.");
         }
 
@@ -231,7 +250,10 @@ namespace SharedMemory
         /// </summary>
         private void ReadWait()
         {
-            if (!_readEvent.WaitOne(ReadWriteTimeout))
+            // A closed buffer's read throws ObjectDisposedException rather than wait, as its events may be disposed
+            if (!IsOpen)
+                throw new ObjectDisposedException(Name);
+            if (!WaitOn(_readEvent))
                 throw new TimeoutException("The read operation timed out waiting for the read lock WaitEvent. Check your usage of AcquireWriteLock/ReleaseWriteLock and AcquireReadLock/ReleaseReadLock.");
         }
 

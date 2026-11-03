@@ -28,6 +28,7 @@ using System;
 using System.Collections.Generic;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Permissions;
 using System.Text;
@@ -144,6 +145,11 @@ namespace SharedMemory
         // What DataExists and NodeAvailable return: the events' handles from DoOpen to DoClose, unless a subclass assigns others
         private EventWaitHandle _dataExistsHandle;
         private EventWaitHandle _nodeAvailableHandle;
+
+        // Whether a subclass overrides GetNodeForWriting or GetNodeForReading. The overloads then reserve through the override, holding
+        // a lease across it, as the override's node comes without one.
+        private readonly bool _overridesGetNodeForWriting;
+        private readonly bool _overridesGetNodeForReading;
         
         #endregion
 
@@ -284,6 +290,21 @@ namespace SharedMemory
                 NodeCount = nodeCount;
                 NodeBufferSize = nodeBufferSize;
             }
+
+            _overridesGetNodeForWriting = Overrides("GetNodeForWriting");
+            _overridesGetNodeForReading = Overrides("GetNodeForReading");
+        }
+
+        // Whether this instance's type overrides CircularBuffer's protected method of that name, which takes a timeout
+        private bool Overrides(string methodName)
+        {
+            for (Type type = GetType(); type != typeof(CircularBuffer); type = type.BaseType)
+            {
+                MethodInfo method = type.GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly, null, new[] { typeof(int) }, null);
+                if (method != null && method.GetBaseDefinition().DeclaringType == typeof(CircularBuffer))
+                    return true;
+            }
+            return false;
         }
 
         #endregion
@@ -402,12 +423,20 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Closes the events. The shared memory could still be open within one or more other instances.
+        /// Stops the protected wait-handle properties returning the events. The events are closed with the mapping, once no read or
+        /// write uses them. The shared memory could still be open within one or more other instances.
         /// </summary>
         protected override void DoClose()
         {
             _dataExistsHandle = null;
             _nodeAvailableHandle = null;
+        }
+
+        /// <summary>
+        /// Closes the events and forgets the node header, once no read or write uses them, as the mapping is released.
+        /// </summary>
+        internal override void OnUnmap()
+        {
             if (_dataExists != null)
             {
                 _dataExists.Dispose();
@@ -431,34 +460,108 @@ namespace SharedMemory
         /// </summary>
         /// <param name="timeout">The number of milliseconds to wait if a node is not immediately available for writing.</param>
         /// <returns>An unsafe pointer to the node if successful, otherwise null</returns>
+        /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
+        /// <remarks>The node is valid until the buffer is closed: a subclass that writes to it itself must post it before Close is called, on
+        /// this thread or another.</remarks>
         protected virtual Node* GetNodeForWriting(int timeout)
+        {
+            // The caller holds no lease on the mapping, as before
+            Node* node = TakeNodeForWriting(timeout);
+            if (node != null)
+                Exit();
+            return node;
+        }
+
+        /// <summary>
+        /// The overloads' reservation of a node for writing: the node with a lease on the mapping, which the caller releases once it
+        /// has posted the node, or null at the timeout.
+        /// </summary>
+        private Node* ReserveNodeForWriting(int timeout)
+        {
+            if (!_overridesGetNodeForWriting)
+                return TakeNodeForWriting(timeout);
+
+            // A subclass's own reservation holds no lease of its own, so this one keeps the node it returns mapped until it is posted
+            Enter();
+            Node* node = null;
+            try
+            {
+                node = GetNodeForWriting(timeout);
+            }
+            finally
+            {
+                if (node == null)
+                    Exit();
+            }
+            return node;
+        }
+
+        /// <summary>
+        /// Reserves a node for writing, and returns it with a lease on the mapping for the caller to release. Each look at the ring
+        /// holds a lease of its own, and a wait holds none, so that a wait never keeps a closed instance's mapping.
+        /// </summary>
+        /// <returns>The node, or null at the timeout.</returns>
+        /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
+        private Node* TakeNodeForWriting(int timeout)
         {
             long waitStart = 0;
             for (; ; )
             {
-                int blockIndex = _nodeHeader->WriteStart;
-                Node* node = this[blockIndex];
-                if (node->Next == _nodeHeader->ReadEnd)
+                Enter();
+                bool leased = false;
+                NamedEvent nodeAvailable;
+                try
                 {
-                    // No room is available, wait for room to become available. Room can appear without
-                    // _nodeAvailable being set, so wait in slices of at most 10 ms and look at the ring again
-                    // between them. The last slice ends the wait, as a single wait for the whole timeout did.
-                    int remaining = RemainingTimeout(timeout, ref waitStart);
-                    int wait = remaining == Timeout.Infinite || remaining > 10 ? 10 : remaining;
-                    if (_nodeAvailable.WaitOne(wait) || wait != remaining)
-                        continue;
-
-                    // Timeout
-                    return null;
-                }
-
+                    int blockIndex = _nodeHeader->WriteStart;
+                    Node* node = this[blockIndex];
+                    if (node->Next != _nodeHeader->ReadEnd)
+                    {
 #pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
-                if (Interlocked.CompareExchange(ref _nodeHeader->WriteStart, node->Next, blockIndex) == blockIndex)
-                    return node;
+                        if (Interlocked.CompareExchange(ref _nodeHeader->WriteStart, node->Next, blockIndex) == blockIndex)
+                        {
+                            leased = true;
+                            return node;
+                        }
 #pragma warning restore 0420
 
-                // Another thread has already acquired this node for writing, try again.
-                continue;
+                        // Another thread has already acquired this node for writing, try again.
+                        continue;
+                    }
+                    nodeAvailable = _nodeAvailable;
+                }
+                finally
+                {
+                    if (!leased)
+                        Exit();
+                }
+
+                // No room is available, wait for room to become available. Room can appear without
+                // _nodeAvailable being set, so wait in slices of at most 10 ms and look at the ring again
+                // between them. The last slice ends the wait, as a single wait for the whole timeout did.
+                int remaining = RemainingTimeout(timeout, ref waitStart);
+                int wait = remaining == Timeout.Infinite || remaining > 10 ? 10 : remaining;
+                if (WaitOn(nodeAvailable, wait) || wait != remaining)
+                    continue;
+
+                // Timeout
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Waits on one of the buffer's events, which a call takes while it holds a lease and waits on after letting go of it. A Close
+        /// in between may release the events with the mapping: the wait then throws <see cref="ObjectDisposedException"/> naming the
+        /// buffer, as any call after Close does.
+        /// </summary>
+        private bool WaitOn(NamedEvent namedEvent, int millisecondsTimeout)
+        {
+            try
+            {
+                return namedEvent.WaitOne(millisecondsTimeout);
+            }
+            catch (ObjectDisposedException)
+            {
+                throw new ObjectDisposedException(Name);
             }
         }
 
@@ -524,21 +627,27 @@ namespace SharedMemory
         /// <remarks>The maximum number of bytes that can be written is the minimum of the length of <paramref name="source"/> and <see cref="NodeBufferSize"/>.</remarks>
         public virtual int Write(byte[] source, int startIndex = 0, int timeout = 1000)
         {
-            // Grab a node for writing
-            Node* node = GetNodeForWriting(timeout);
+            // Grab a node for writing, and a lease on the mapping until it is posted
+            Node* node = ReserveNodeForWriting(timeout);
             if (node == null) return 0;
 
-            // Copy the data
-            int amount = Math.Min(source.Length - startIndex, NodeBufferSize);
-            
-            Marshal.Copy(source, startIndex, new IntPtr(BufferStartPtr + node->Offset), amount);
-            node->AmountWritten = amount;
-            
+            try
+            {
+                // Copy the data
+                int amount = Math.Min(source.Length - startIndex, NodeBufferSize);
 
-            // Writing is complete, make readable
-            PostNode(node);
+                Marshal.Copy(source, startIndex, new IntPtr(BufferStartPtr + node->Offset), amount);
+                node->AmountWritten = amount;
 
-            return amount;
+                // Writing is complete, make readable
+                PostNode(node);
+
+                return amount;
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
@@ -552,19 +661,26 @@ namespace SharedMemory
         public virtual int Write<T>(T[] source, int startIndex = 0, int timeout = 1000)
             where T : struct
         {
-            // Grab a node for writing
-            Node* node = GetNodeForWriting(timeout);
+            // Grab a node for writing, and a lease on the mapping until it is posted
+            Node* node = ReserveNodeForWriting(timeout);
             if (node == null) return 0;
 
-            // Write the data using the FastStructure class (much faster than the MemoryMappedViewAccessor WriteArray<T> method)
-            int count = Math.Min(source.Length - startIndex, NodeBufferSize / FastStructure.SizeOf<T>());
-            base.WriteArray<T>(source, startIndex, count, node->Offset);
-            node->AmountWritten = count * FastStructure.SizeOf<T>();
+            try
+            {
+                // Write the data using the FastStructure class (much faster than the MemoryMappedViewAccessor WriteArray<T> method)
+                int count = Math.Min(source.Length - startIndex, NodeBufferSize / FastStructure.SizeOf<T>());
+                WriteArrayLeased<T>(source, startIndex, count, node->Offset);
+                node->AmountWritten = count * FastStructure.SizeOf<T>();
 
-            // Writing is complete, make node readable
-            PostNode(node);
+                // Writing is complete, make node readable
+                PostNode(node);
 
-            return count;
+                return count;
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
@@ -582,18 +698,25 @@ namespace SharedMemory
             if (structSize > NodeBufferSize)
                 throw new ArgumentOutOfRangeException("T", "The size of structure " + typeof(T).Name + " is larger than NodeBufferSize");
 
-            // Attempt to retrieve a node for writing
-            Node* node = GetNodeForWriting(timeout);
+            // Attempt to retrieve a node for writing, and a lease on the mapping until it is posted
+            Node* node = ReserveNodeForWriting(timeout);
             if (node == null) return 0;
 
-            // Copy the data using the MemoryMappedViewAccessor
-            base.Write<T>(ref source, node->Offset);
-            node->AmountWritten = structSize;
+            try
+            {
+                // Copy the data using the MemoryMappedViewAccessor
+                WriteStructureLeased<T>(ref source, node->Offset);
+                node->AmountWritten = structSize;
 
-            // Return the node for further writing
-            PostNode(node);
+                // Return the node for further writing
+                PostNode(node);
 
-            return structSize;
+                return structSize;
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
@@ -606,19 +729,26 @@ namespace SharedMemory
         /// <remarks>The maximum number of bytes that can be written is the minimum of <paramref name="length"/> and <see cref="NodeBufferSize"/>.</remarks>        
         public virtual int Write(IntPtr source, int length, int timeout = 1000)
         {
-            // Grab a node for writing
-            Node* node = GetNodeForWriting(timeout);
+            // Grab a node for writing, and a lease on the mapping until it is posted
+            Node* node = ReserveNodeForWriting(timeout);
             if (node == null) return 0;
 
-            // Copy the data
-            int amount = Math.Min(length, NodeBufferSize);
-            base.Write(source, amount, node->Offset);
-            node->AmountWritten = amount;
+            try
+            {
+                // Copy the data
+                int amount = Math.Min(length, NodeBufferSize);
+                WriteLeased(source, amount, node->Offset);
+                node->AmountWritten = amount;
 
-            // Writing is complete, make readable
-            PostNode(node);
+                // Writing is complete, make readable
+                PostNode(node);
 
-            return amount;
+                return amount;
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
@@ -628,23 +758,31 @@ namespace SharedMemory
         /// The provided function should return the number of bytes written.</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for writing (default 1000ms)</param>
         /// <returns>The number of bytes written</returns>
+        /// <remarks>The pointer stays valid until <paramref name="writeFunc"/> returns, even if the buffer is closed meanwhile.</remarks>
         public virtual int Write(Func<IntPtr, int> writeFunc, int timeout = 1000)
         {
-            // Grab a node for writing
-            Node* node = GetNodeForWriting(timeout);
+            // Grab a node for writing, and a lease on the mapping until it is posted
+            Node* node = ReserveNodeForWriting(timeout);
             if (node == null) return 0;
 
             int amount = 0;
             try
             {
-                // Pass destination IntPtr to custom write function
-                amount = writeFunc(new IntPtr(BufferStartPtr + node->Offset));
-                node->AmountWritten = amount;
+                try
+                {
+                    // Pass destination IntPtr to custom write function
+                    amount = writeFunc(new IntPtr(BufferStartPtr + node->Offset));
+                    node->AmountWritten = amount;
+                }
+                finally
+                {
+                    // Writing is complete, make readable
+                    PostNode(node);
+                }
             }
             finally
             {
-                // Writing is complete, make readable
-                PostNode(node);
+                Exit();
             }
 
             return amount;
@@ -657,9 +795,18 @@ namespace SharedMemory
         /// <summary>
         /// Returns a copy of the shared memory header
         /// </summary>
+        /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
         public NodeHeader ReadNodeHeader()
         {
-            return (NodeHeader)Marshal.PtrToStructure(new IntPtr(_nodeHeader), typeof(NodeHeader));
+            Enter();
+            try
+            {
+                return (NodeHeader)Marshal.PtrToStructure(new IntPtr(_nodeHeader), typeof(NodeHeader));
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
@@ -667,29 +814,86 @@ namespace SharedMemory
         /// </summary>
         /// <param name="timeout">The number of milliseconds to wait if a node is not immediately available for reading.</param>
         /// <returns>An unsafe pointer to the node if successful, otherwise null</returns>
+        /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
+        /// <remarks>The node is valid until the buffer is closed: a subclass that reads it itself must return it before Close is called, on
+        /// this thread or another.</remarks>
         protected virtual Node* GetNodeForReading(int timeout)
+        {
+            // The caller holds no lease on the mapping, as before
+            Node* node = TakeNodeForReading(timeout);
+            if (node != null)
+                Exit();
+            return node;
+        }
+
+        /// <summary>
+        /// The overloads' reservation of a node for reading: the node with a lease on the mapping, which the caller releases once it
+        /// has returned the node, or null at the timeout.
+        /// </summary>
+        private Node* ReserveNodeForReading(int timeout)
+        {
+            if (!_overridesGetNodeForReading)
+                return TakeNodeForReading(timeout);
+
+            // A subclass's own reservation holds no lease of its own, so this one keeps the node it returns mapped until it is returned
+            Enter();
+            Node* node = null;
+            try
+            {
+                node = GetNodeForReading(timeout);
+            }
+            finally
+            {
+                if (node == null)
+                    Exit();
+            }
+            return node;
+        }
+
+        /// <summary>
+        /// Reserves a node for reading, and returns it with a lease on the mapping for the caller to release. Each look at the ring
+        /// holds a lease of its own, and a wait holds none, so that a wait never keeps a closed instance's mapping.
+        /// </summary>
+        /// <returns>The node, or null at the timeout.</returns>
+        /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
+        private Node* TakeNodeForReading(int timeout)
         {
             for (; ; )
             {
-                int blockIndex = _nodeHeader->ReadStart;
-                Node* node = this[blockIndex];
-                if (blockIndex == _nodeHeader->WriteEnd)
+                Enter();
+                bool leased = false;
+                NamedEvent dataExists;
+                try
                 {
-                    // No data is available, wait for it
-                    if (_dataExists.WaitOne(timeout))
-                        continue;
-
-                    // Timeout
-                    return null;
-                }
-
+                    int blockIndex = _nodeHeader->ReadStart;
+                    Node* node = this[blockIndex];
+                    if (blockIndex != _nodeHeader->WriteEnd)
+                    {
 #pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
-                if (Interlocked.CompareExchange(ref _nodeHeader->ReadStart, node->Next, blockIndex) == blockIndex)
-                    return node;
+                        if (Interlocked.CompareExchange(ref _nodeHeader->ReadStart, node->Next, blockIndex) == blockIndex)
+                        {
+                            leased = true;
+                            return node;
+                        }
 #pragma warning restore 0420
 
-                // Another thread has already acquired this node for reading, try again
-                continue;
+                        // Another thread has already acquired this node for reading, try again
+                        continue;
+                    }
+                    dataExists = _dataExists;
+                }
+                finally
+                {
+                    if (!leased)
+                        Exit();
+                }
+
+                // No data is available, wait for it
+                if (WaitOn(dataExists, timeout))
+                    continue;
+
+                // Timeout
+                return null;
             }
         }
 
@@ -740,19 +944,27 @@ namespace SharedMemory
         /// <remarks>The maximum number of bytes that can be read is the minimum of the length of <paramref name="destination"/> subtracted by <paramref name="startIndex"/> and <see cref="NodeBufferSize"/>.</remarks>
         public virtual int Read(byte[] destination, int startIndex = 0, int timeout = 1000)
         {
-            Node* node = GetNodeForReading(timeout);
+            // A node to read, and a lease on the mapping until it is returned
+            Node* node = ReserveNodeForReading(timeout);
             if (node == null) return 0;
 
-            //int amount = Math.Min(buffer.Length, NodeBufferSize);
-            int amount = Math.Min(destination.Length - startIndex, node->AmountWritten);
+            try
+            {
+                //int amount = Math.Min(buffer.Length, NodeBufferSize);
+                int amount = Math.Min(destination.Length - startIndex, node->AmountWritten);
 
-            // Copy the data
-            Marshal.Copy(new IntPtr(BufferStartPtr + node->Offset), destination, startIndex, amount);
+                // Copy the data
+                Marshal.Copy(new IntPtr(BufferStartPtr + node->Offset), destination, startIndex, amount);
 
-            // Return the node for further writing
-            ReturnNode(node);
+                // Return the node for further writing
+                ReturnNode(node);
 
-            return amount;
+                return amount;
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
@@ -767,17 +979,25 @@ namespace SharedMemory
         public virtual int Read<T>(T[] destination, int startIndex = 0, int timeout = 1000)
             where T : struct
         {
-            Node* node = GetNodeForReading(timeout);
+            // A node to read, and a lease on the mapping until it is returned
+            Node* node = ReserveNodeForReading(timeout);
             if (node == null) return 0;
 
-            // Copy the data using the FastStructure class (much faster than the MemoryMappedViewAccessor ReadArray<T> method)
-            int count = Math.Min(destination.Length - startIndex, node->AmountWritten / FastStructure.SizeOf<T>());
-            base.ReadArray<T>(destination, startIndex, count, node->Offset);
+            try
+            {
+                // Copy the data using the FastStructure class (much faster than the MemoryMappedViewAccessor ReadArray<T> method)
+                int count = Math.Min(destination.Length - startIndex, node->AmountWritten / FastStructure.SizeOf<T>());
+                ReadArrayLeased<T>(destination, startIndex, count, node->Offset);
 
-            // Return the node for further writing
-            ReturnNode(node);
+                // Return the node for further writing
+                ReturnNode(node);
 
-            return count;
+                return count;
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
@@ -795,21 +1015,28 @@ namespace SharedMemory
             if (structSize > NodeBufferSize)
                 throw new ArgumentOutOfRangeException("T", "The size of structure " + typeof(T).Name + " is larger than NodeBufferSize");
 
-            // Attempt to retrieve a node
-            Node* node = GetNodeForReading(timeout);
+            // Attempt to retrieve a node, and a lease on the mapping until it is returned
+            Node* node = ReserveNodeForReading(timeout);
             if (node == null)
             {
                 destination = default(T);
                 return 0;
             }
 
-            // Copy the data using the MemoryMappedViewAccessor
-            base.Read<T>(out destination, node->Offset);
+            try
+            {
+                // Copy the data using the MemoryMappedViewAccessor
+                ReadStructureLeased<T>(out destination, node->Offset);
 
-            // Return the node for further writing
-            ReturnNode(node);
+                // Return the node for further writing
+                ReturnNode(node);
 
-            return structSize;
+                return structSize;
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
@@ -822,19 +1049,27 @@ namespace SharedMemory
         /// <remarks>The maximum number of bytes that can be read is the minimum of the <paramref name="length"/> and <see cref="Node.AmountWritten"/>.</remarks>
         public virtual int Read(IntPtr destination, int length, int timeout = 1000)
         {
-            Node* node = GetNodeForReading(timeout);
+            // A node to read, and a lease on the mapping until it is returned
+            Node* node = ReserveNodeForReading(timeout);
             if (node == null) return 0;
 
-            //int amount = Math.Min(length, NodeBufferSize);
-            int amount = Math.Min(length, node->AmountWritten);
+            try
+            {
+                //int amount = Math.Min(length, NodeBufferSize);
+                int amount = Math.Min(length, node->AmountWritten);
 
-            // Copy the data
-            base.Read(destination, amount, node->Offset);
+                // Copy the data
+                ReadLeased(destination, amount, node->Offset);
 
-            // Return node for further writing
-            ReturnNode(node);
+                // Return node for further writing
+                ReturnNode(node);
 
-            return amount;
+                return amount;
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
@@ -844,21 +1079,30 @@ namespace SharedMemory
         /// The provided function should return the number of bytes read.</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of bytes read</returns>
+        /// <remarks>The pointer stays valid until <paramref name="readFunc"/> returns, even if the buffer is closed meanwhile.</remarks>
         public virtual int Read(Func<IntPtr, int> readFunc, int timeout = 1000)
         {
-            Node* node = GetNodeForReading(timeout);
+            // A node to read, and a lease on the mapping until it is returned
+            Node* node = ReserveNodeForReading(timeout);
             if (node == null) return 0;
 
             int amount = 0;
             try
             {
-                // Pass pointer to buffer directly to custom read function
-                amount = readFunc(new IntPtr(BufferStartPtr + node->Offset));
+                try
+                {
+                    // Pass pointer to buffer directly to custom read function
+                    amount = readFunc(new IntPtr(BufferStartPtr + node->Offset));
+                }
+                finally
+                {
+                    // Return the node for further writing
+                    ReturnNode(node);
+                }
             }
             finally
             {
-                // Return the node for further writing
-                ReturnNode(node);
+                Exit();
             }
             return amount;
         }
