@@ -106,7 +106,7 @@ A round trip between two processes passing a message back and forth through two 
 
 ### Members that are null on Linux and macOS
 
-This only matters if you subclass the library's classes. The protected `BufferWithLocks.WriteWaitEvent` and `ReadWaitEvent`, and `CircularBuffer.DataExists` and `NodeAvailable`, are `EventWaitHandle`s on Windows only. On Linux and macOS they're null, because the library waits on events of its own there. `SharedBuffer.Mmf` and `View` are null on macOS, where there's no `MemoryMappedFile` behind a buffer. A subclass that uses any of them only works on Windows.
+This only matters if you subclass the library's classes. The protected `BufferWithLocks.WriteWaitEvent` and `ReadWaitEvent`, and `CircularBuffer.DataExists` and `NodeAvailable`, are obsolete. They're `EventWaitHandle`s on Windows only and null on Linux and macOS, and the library waits on and signals its own events whatever a subclass assigns to them. To hold reads back, use `AcquireWriteLock` instead; to hold writes back, `AcquireReadLock`. Using them becomes an error in 2.5.0, and they're removed in 3.0. `SharedBuffer.Mmf` and `View` are null on macOS, where there's no `MemoryMappedFile` behind a buffer. A subclass that uses any of them only works on Windows.
 
 Behaviour to know
 -----------------

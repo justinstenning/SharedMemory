@@ -37,8 +37,7 @@ namespace SharedMemory
     /// <summary>
     /// <para>Extends <see cref="SharedBuffer"/> to support simple thread-synchronisation for read/write 
     /// to the buffer by allowing callers to acquire and release read/write locks.</para>
-    /// <para>All buffer read/write operations have been overloaded to first perform a <see cref="System.Threading.WaitHandle.WaitOne()"/> 
-    /// using the <see cref="ReadWaitEvent"/> and <see cref="WriteWaitEvent"/> respectively.</para>
+    /// <para>All buffer read/write operations have been overloaded to wait first until reads or writes, respectively, are let through.</para>
     /// <para>By default all read/write operations will not block, it is necessary to first acquire locks 
     /// through calls to <see cref="AcquireReadLock"/> and <see cref="AcquireWriteLock"/> as appropriate, with corresponding 
     /// calls to <see cref="ReleaseReadLock"/> and <see cref="ReleaseWriteLock"/> to release the locks.</para>
@@ -58,14 +57,24 @@ namespace SharedMemory
         /// <summary>
         /// An event handle used for blocking write operations.
         /// </summary>
-        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. Writes still block there.</remarks>
-        protected EventWaitHandle WriteWaitEvent { get; private set; }
+        /// <remarks>Obsolete: to hold writes back, use <see cref="AcquireReadLock"/> and <see cref="ReleaseReadLock"/>. Null on Linux and macOS, where the
+        /// named events are not <see cref="EventWaitHandle"/>s; writes still block there. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.</remarks>
+        [Obsolete("Set on Windows only, and null on Linux and macOS. To hold writes back, use AcquireReadLock and ReleaseReadLock. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.")]
+        protected EventWaitHandle WriteWaitEvent
+        {
+            get { return _writeEvent.WaitHandle; }
+        }
         
         /// <summary>
         /// An event handle used for blocking read operations.
         /// </summary>
-        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. Reads still block there.</remarks>
-        protected EventWaitHandle ReadWaitEvent { get; private set; }
+        /// <remarks>Obsolete: to hold reads back, use <see cref="AcquireWriteLock"/> and <see cref="ReleaseWriteLock"/>. Null on Linux and macOS, where the
+        /// named events are not <see cref="EventWaitHandle"/>s; reads still block there. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.</remarks>
+        [Obsolete("Set on Windows only, and null on Linux and macOS. To hold reads back, use AcquireWriteLock and ReleaseWriteLock. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.")]
+        protected EventWaitHandle ReadWaitEvent
+        {
+            get { return _readEvent.WaitHandle; }
+        }
 
         private readonly NamedEvent _writeEvent;
         private readonly NamedEvent _readEvent;
@@ -81,10 +90,8 @@ namespace SharedMemory
         protected BufferWithLocks(string name, long bufferSize, bool ownsSharedMemory)
             : base(name, bufferSize, ownsSharedMemory)
         {
-            _writeEvent = NamedEvent.CreateOrOpen(Name + "_evt_write", true, EventResetMode.ManualReset, () => WriteWaitEvent);
-            WriteWaitEvent = _writeEvent.WaitHandle;
-            _readEvent = NamedEvent.CreateOrOpen(Name + "_evt_read", true, EventResetMode.ManualReset, () => ReadWaitEvent);
-            ReadWaitEvent = _readEvent.WaitHandle;
+            _writeEvent = NamedEvent.CreateOrOpen(Name + "_evt_write", true, EventResetMode.ManualReset);
+            _readEvent = NamedEvent.CreateOrOpen(Name + "_evt_read", true, EventResetMode.ManualReset);
         }
 
         #endregion
@@ -160,7 +167,7 @@ namespace SharedMemory
         #region Writing
 
         /// <summary>
-        /// Prevents write operations from deadlocking by throwing a TimeoutException if the WriteWaitEvent is not available within <see cref="ReadWriteTimeout"/> milliseconds
+        /// Prevents write operations from deadlocking by throwing a TimeoutException if writes are not let through within <see cref="ReadWriteTimeout"/> milliseconds
         /// </summary>
         private void WriteWait()
         {
@@ -220,7 +227,7 @@ namespace SharedMemory
         #region Reading
 
         /// <summary>
-        /// Prevents read operations from deadlocking by throwing a TimeoutException if the ReadWaitEvent is not available within <see cref="ReadWriteTimeout"/> milliseconds
+        /// Prevents read operations from deadlocking by throwing a TimeoutException if reads are not let through within <see cref="ReadWriteTimeout"/> milliseconds
         /// </summary>
         private void ReadWait()
         {
@@ -287,11 +294,6 @@ namespace SharedMemory
         {
             if (disposeManagedResources)
             {
-                // Null on Linux and macOS
-                if (WriteWaitEvent != null)
-                    (WriteWaitEvent as IDisposable).Dispose();
-                if (ReadWaitEvent != null)
-                    (ReadWaitEvent as IDisposable).Dispose();
                 _writeEvent.Dispose();
                 _readEvent.Dispose();
             }

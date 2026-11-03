@@ -63,16 +63,26 @@ namespace SharedMemory
         /// <summary>
         /// Event signaled when data has been written if the reading index has caught up to the writing index
         /// </summary>
-        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. The buffer signals and waits on its own event there,
-        /// so a handle a subclass assigns is neither signalled nor waited on.</remarks>
-        protected EventWaitHandle DataExists { get; set; }
+        /// <remarks>Obsolete. Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. The buffer waits on and signals its own
+        /// event, so a handle a subclass assigns here is not used. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.</remarks>
+        [Obsolete("Set on Windows only, and null on Linux and macOS. Read and Write wait on and signal the buffer's own event, and a handle assigned here is not used. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.")]
+        protected EventWaitHandle DataExists
+        {
+            get { return _dataExistsHandle; }
+            set { _dataExistsHandle = value; }
+        }
 
         /// <summary>
         /// Event signaled when a node becomes available after reading if the writing index has caught up to the reading index
         /// </summary>
-        /// <remarks>Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. The buffer signals and waits on its own event there,
-        /// so a handle a subclass assigns is neither signalled nor waited on.</remarks>
-        protected EventWaitHandle NodeAvailable { get; set; }
+        /// <remarks>Obsolete. Null on Linux and macOS, where the named events are not <see cref="EventWaitHandle"/>s. The buffer waits on and signals its own
+        /// event, so a handle a subclass assigns here is not used. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.</remarks>
+        [Obsolete("Set on Windows only, and null on Linux and macOS. Read and Write wait on and signal the buffer's own event, and a handle assigned here is not used. It becomes an error in SharedMemory 2.5.0 and is removed in 3.0.")]
+        protected EventWaitHandle NodeAvailable
+        {
+            get { return _nodeAvailableHandle; }
+            set { _nodeAvailableHandle = value; }
+        }
 
         /// <summary>
         /// The offset relative to <see cref="SharedBuffer.BufferStartPtr"/> where the node header starts within the buffer region of the shared memory
@@ -131,6 +141,9 @@ namespace SharedMemory
 
         private NamedEvent _dataExists;
         private NamedEvent _nodeAvailable;
+        // What DataExists and NodeAvailable return: the events' handles from DoOpen to DoClose, unless a subclass assigns others
+        private EventWaitHandle _dataExistsHandle;
+        private EventWaitHandle _nodeAvailableHandle;
         
         #endregion
 
@@ -284,10 +297,10 @@ namespace SharedMemory
         protected override bool DoOpen()
         {
             // Create signal events
-            _dataExists = NamedEvent.CreateOrOpen(Name + "_evt_dataexists", false, EventResetMode.AutoReset, () => DataExists);
-            DataExists = _dataExists.WaitHandle;
-            _nodeAvailable = NamedEvent.CreateOrOpen(Name + "_evt_nodeavail", false, EventResetMode.AutoReset, () => NodeAvailable);
-            NodeAvailable = _nodeAvailable.WaitHandle;
+            _dataExists = NamedEvent.CreateOrOpen(Name + "_evt_dataexists", false, EventResetMode.AutoReset);
+            _dataExistsHandle = _dataExists.WaitHandle;
+            _nodeAvailable = NamedEvent.CreateOrOpen(Name + "_evt_nodeavail", false, EventResetMode.AutoReset);
+            _nodeAvailableHandle = _nodeAvailable.WaitHandle;
 
             if (IsOwnerOfSharedMemory)
             {
@@ -393,13 +406,8 @@ namespace SharedMemory
         /// </summary>
         protected override void DoClose()
         {
-            if (DataExists != null)
-            {
-                (DataExists as IDisposable).Dispose();
-                DataExists = null;
-                (NodeAvailable as IDisposable).Dispose();
-                NodeAvailable = null;
-            }
+            _dataExistsHandle = null;
+            _nodeAvailableHandle = null;
             if (_dataExists != null)
             {
                 _dataExists.Dispose();
