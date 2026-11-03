@@ -760,7 +760,7 @@ namespace SharedMemoryTests
         /// Event objects on macOS as the tests make and read them: created 0600 as the library creates them, the mode where a
         /// variadic argument goes on arm64, and woken with os_sync in shared mode.
         /// </summary>
-        static unsafe class MacObjects
+        internal static unsafe class MacObjects
         {
             const string Library = "/usr/lib/libSystem.B.dylib";
             const int O_RDONLY = 0;

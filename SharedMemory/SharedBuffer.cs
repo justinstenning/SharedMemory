@@ -146,6 +146,9 @@ namespace SharedMemory
         #region Private field members
 
         private NamedMapping _mapping;
+        // The handle of View that Open took ViewPtr from, for the finaliser: the .NET Framework 3.5 build's own view drops its handle when
+        // it is finalised, which may be before this instance is
+        private Microsoft.Win32.SafeHandles.SafeMemoryMappedViewHandle _viewHandle;
 #if NET10_0_OR_GREATER
         // Where the memory is mapped without a MemoryMappedFile (macOS), this stands in for View: the header is written through it, and the
         // struct reads and writes check their bounds against its capacity.
@@ -253,6 +256,7 @@ namespace SharedMemory
                     // Create a view to the entire region of the shared memory
                     View = Mmf.CreateViewAccessor(0, SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
                     View.SafeMemoryMappedViewHandle.AcquirePointer(ref ViewPtr);
+                    _viewHandle = View.SafeMemoryMappedViewHandle;
                     Header = (SharedHeader*)(ViewPtr + HeaderOffset);
                     BufferStartPtr = ViewPtr + BufferOffset;
                     // Initialise the header
@@ -277,6 +281,7 @@ namespace SharedMemory
                     // Create a view to the entire region of the shared memory
                     View = Mmf.CreateViewAccessor(0, SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
                     View.SafeMemoryMappedViewHandle.AcquirePointer(ref ViewPtr);
+                    _viewHandle = View.SafeMemoryMappedViewHandle;
                     Header = (SharedHeader*)(ViewPtr + HeaderOffset);
                     BufferStartPtr = ViewPtr + HeaderOffset + Marshal.SizeOf(typeof(SharedHeader));
                 }
@@ -521,6 +526,7 @@ namespace SharedMemory
             View = null;
             Mmf = null;
             _mapping = null;
+            _viewHandle = null;
         }
 
         /// <summary>
@@ -931,13 +937,45 @@ namespace SharedMemory
         /// <summary>
         /// IDisposable pattern - dispose of managed/unmanaged resources
         /// </summary>
-        /// <param name="disposeManagedResources">true to dispose of managed resources as well as unmanaged.</param>
+        /// <param name="disposeManagedResources">true to dispose of managed resources as well as unmanaged, which calls <see cref="Close"/>.
+        /// false from the finaliser of an instance nobody closed, which only lets the memory go once the garbage collector has finalised
+        /// its handles: it writes nothing to the shared memory, so other processes see no change, and <see cref="ShuttingDown"/> stays as it was.</param>
         protected virtual void Dispose(bool disposeManagedResources)
         {
             if (disposeManagedResources)
             {
                 this.Close();
             }
+            else
+            {
+                ReleaseMappingPointer();
+            }
+        }
+
+        /// <summary>
+        /// The finaliser's part, for an instance nobody closed: gives up the pointer that <see cref="Open"/> took into the mapping, so
+        /// that the mapping's own finaliser can release it. Nothing else is touched: no header write, no <see cref="ShuttingDown"/>, no
+        /// <see cref="DoClose"/>, and the view, the file and any events are left to their own finalisers. Never throws.
+        /// </summary>
+        private void ReleaseMappingPointer()
+        {
+            // Only a mapped instance with no call running holds the pointer; taking it to Unmapped means nothing releases it again
+            if (Interlocked.CompareExchange(ref _leases, Unmapped, Opened) != Opened)
+                return;
+            try
+            {
+                if (_viewHandle != null)
+                    _viewHandle.ReleasePointer();
+                else if (_mapping != null)
+                    _mapping.ReleasePointer();
+            }
+            catch (Exception)
+            {
+                // A finaliser must not throw; at worst the mapping stays, as it did before
+            }
+            Header = null;
+            ViewPtr = null;
+            BufferStartPtr = null;
         }
 
         #endregion
