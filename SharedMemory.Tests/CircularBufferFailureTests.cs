@@ -34,6 +34,12 @@ namespace SharedMemoryTests
             public long A, B, C, D, E;
         }
 
+        // A structure FastStructure refuses, as it holds a reference
+        struct HoldsAReference
+        {
+            public string Text;
+        }
+
         // Memory for the pointer overloads, which a bad length keeps them from touching
         static readonly IntPtr Somewhere = Marshal.AllocHGlobal(NodeSize);
 
@@ -46,6 +52,7 @@ namespace SharedMemoryTests
             { "Write T[] null", Bad<ArgumentNullException>(ring => ring.Write((int[])null)) },
             { "Write T[] startIndex past the end", Bad<ArgumentOutOfRangeException>(ring => ring.Write(new int[4], startIndex: 5)) },
             { "Write T[] negative startIndex", Bad<ArgumentOutOfRangeException>(ring => ring.Write(new int[4], startIndex: -1)) },
+            { "Write T[] of a type FastStructure refuses", Bad<TypeInitializationException>(ring => ring.Write(new[] { new HoldsAReference { Text = "refused" } })) },
             { "Write ref T larger than a node", Bad<ArgumentOutOfRangeException>(ring => { var value = new LargerThanANode(); ring.Write(ref value); }) },
             { "Write IntPtr negative length", Bad<ArgumentOutOfRangeException>(ring => ring.Write(Somewhere, -1)) },
             { "Write Func null", Bad<ArgumentNullException>(ring => ring.Write((Func<IntPtr, int>)null)) },
@@ -55,6 +62,7 @@ namespace SharedMemoryTests
             { "Read T[] null", Bad<ArgumentNullException>(ring => ring.Read((int[])null)) },
             { "Read T[] startIndex past the end", Bad<ArgumentOutOfRangeException>(ring => ring.Read(new int[4], startIndex: 5)) },
             { "Read T[] negative startIndex", Bad<ArgumentOutOfRangeException>(ring => ring.Read(new int[4], startIndex: -1)) },
+            { "Read T[] of a type FastStructure refuses", Bad<TypeInitializationException>(ring => ring.Read(new HoldsAReference[1])) },
             { "Read out T larger than a node", Bad<ArgumentOutOfRangeException>(ring => { LargerThanANode value; ring.Read(out value); }) },
             { "Read IntPtr negative length", Bad<ArgumentOutOfRangeException>(ring => ring.Read(Somewhere, -1)) },
             { "Read Func null", Bad<ArgumentNullException>(ring => ring.Read((Func<IntPtr, int>)null)) },
@@ -78,6 +86,7 @@ namespace SharedMemoryTests
         [DataRow("Write T[] null")]
         [DataRow("Write T[] startIndex past the end")]
         [DataRow("Write T[] negative startIndex")]
+        [DataRow("Write T[] of a type FastStructure refuses")]
         [DataRow("Write ref T larger than a node")]
         [DataRow("Write IntPtr negative length")]
         [DataRow("Write Func null")]
@@ -87,6 +96,7 @@ namespace SharedMemoryTests
         [DataRow("Read T[] null")]
         [DataRow("Read T[] startIndex past the end")]
         [DataRow("Read T[] negative startIndex")]
+        [DataRow("Read T[] of a type FastStructure refuses")]
         [DataRow("Read out T larger than a node")]
         [DataRow("Read IntPtr negative length")]
         [DataRow("Read Func null")]

@@ -820,6 +820,8 @@ namespace SharedMemory
             where T : struct
         {
             CheckArray(source, startIndex, "source");
+            // Before the node too: FastStructure throws here for a type it cannot copy
+            int elementSize = FastStructure.SizeOf<T>();
 
             // Grab a node for writing, and a lease on the mapping until it is posted
             int index;
@@ -830,14 +832,14 @@ namespace SharedMemory
             try
             {
                 // Write the data using the FastStructure class (much faster than the MemoryMappedViewAccessor WriteArray<T> method)
-                int toWrite = Math.Min(source.Length - startIndex, NodeBufferSize / FastStructure.SizeOf<T>());
+                int toWrite = Math.Min(source.Length - startIndex, NodeBufferSize / elementSize);
                 WriteArrayLeased<T>(source, startIndex, toWrite, NodeBufferPosition(index));
                 count = toWrite;
             }
             finally
             {
                 // Writing is complete, make node readable; a copy that failed posts the node empty
-                PostAndExit(node, count * FastStructure.SizeOf<T>());
+                PostAndExit(node, count * elementSize);
             }
             return count;
         }
@@ -1227,6 +1229,8 @@ namespace SharedMemory
             where T : struct
         {
             CheckArray(destination, startIndex, "destination");
+            // Before the node too: FastStructure throws here for a type it cannot copy
+            int elementSize = FastStructure.SizeOf<T>();
 
             // A node to read, and a lease on the mapping until it is returned
             int index;
@@ -1236,7 +1240,7 @@ namespace SharedMemory
             try
             {
                 // Copy the data using the FastStructure class (much faster than the MemoryMappedViewAccessor ReadArray<T> method)
-                int count = Math.Min(destination.Length - startIndex, Clamp(node->AmountWritten) / FastStructure.SizeOf<T>());
+                int count = Math.Min(destination.Length - startIndex, Clamp(node->AmountWritten) / elementSize);
                 ReadArrayLeased<T>(destination, startIndex, count, NodeBufferPosition(index));
 
                 return count;
