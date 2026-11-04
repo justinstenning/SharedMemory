@@ -172,7 +172,8 @@ namespace SharedMemoryTests
 
         /// <summary>
         /// An index in the node header outside the node list: the call that reads it throws InvalidOperationException, naming the
-        /// buffer, the field and its value.
+        /// buffer, the field and its value. The index is damaged before the call, which meets it as it reserves a node, or while the
+        /// call holds its node, which it then meets as it posts or returns the node.
         /// </summary>
         [TestMethod]
         [DataRow("ReadStart", NodeCount + 3, "Read")]
@@ -181,20 +182,30 @@ namespace SharedMemoryTests
         [DataRow("WriteStart", NodeCount + 3, "Write")]
         [DataRow("WriteStart", -1, "Write")]
         [DataRow("ReadEnd", NodeCount + 3, "Write")]
+        [DataRow("WriteEnd", NodeCount + 3, "Write(Func), damaged as it writes")]
+        [DataRow("ReadStart", NodeCount + 3, "Write(Func), damaged as it writes")]
+        [DataRow("ReadEnd", NodeCount + 3, "Read(Func), damaged as it reads")]
+        [DataRow("WriteStart", NodeCount + 3, "Read(Func), damaged as it reads")]
         public void Call_HeaderIndexOutsideTheNodeList_ThrowsInvalidOperationException(string field, int value, string call)
         {
             string name = Guid.NewGuid().ToString();
+            byte[] damage = BitConverter.GetBytes(value);
             using (var ring = new CircularBuffer(name, NodeCount, NodeSize))
             {
                 Assert.AreEqual(4, ring.Write(new byte[] { 1, 2, 3, 4 }));
-                Poke(name, HeaderField(field), BitConverter.GetBytes(value));
+                if (call == "Read" || call == "Write")
+                    Poke(name, HeaderField(field), damage);
 
                 InvalidOperationException e = Assert.ThrowsExactly<InvalidOperationException>(() =>
                 {
                     if (call == "Read")
                         ring.Read(new byte[NodeSize], timeout: 100);
-                    else
+                    else if (call == "Write")
                         ring.Write(new byte[] { 5, 6, 7, 8 }, timeout: 100);
+                    else if (call.StartsWith("Write(Func)", StringComparison.Ordinal))
+                        ring.Write(p => { Poke(name, HeaderField(field), damage); return 4; }, timeout: 100);
+                    else
+                        ring.Read(p => { Poke(name, HeaderField(field), damage); return 4; }, timeout: 100);
                 });
 
                 Console.WriteLine(e.Message);
