@@ -254,6 +254,47 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
+        /// A subclass that lays the ring out its own way, with the node buffers first: the owner writes, and an opener reads, each
+        /// node's buffer where the subclass's NodeBufferOffset puts it.
+        /// </summary>
+        [TestMethod]
+        public void ReadAndWrite_SubclassNodeBufferOffset_UseTheSubclasssLayout()
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = new BuffersFirst(name, NodeCount, NodeSize))
+            using (var opener = new BuffersFirst(name))
+            {
+                for (int node = 0; node < NodeCount - 1; node++)
+                {
+                    byte[] item = Pattern(NodeSize, node + 1);
+                    Assert.AreEqual(NodeSize, owner.Write(item), "The write to node " + node);
+                    CollectionAssert.AreEqual(item, Peek(name, (long)NodeSize * node, NodeSize), "Node " + node + "'s buffer is not where the subclass puts it");
+                    var read = new byte[NodeSize];
+                    Assert.AreEqual(NodeSize, opener.Read(read, timeout: 1000), "The read of node " + node);
+                    CollectionAssert.AreEqual(item, read, "What the opener read from node " + node);
+                }
+            }
+        }
+
+        // NodeCount nodes of NodeSize bytes with their buffers at the start of the buffer, then the node header and the node list:
+        // the size of the usual layout, and known to an opener before it reads the node header
+        class BuffersFirst : CircularBuffer
+        {
+            public BuffersFirst(string name, int nodeCount, int nodeBufferSize) : base(name, nodeCount, nodeBufferSize) { }
+            public BuffersFirst(string name) : base(name) { }
+
+            protected override long NodeHeaderOffset
+            {
+                get { return (long)CircularBufferMetadataTests.NodeCount * CircularBufferMetadataTests.NodeSize; }
+            }
+
+            protected override long NodeBufferOffset
+            {
+                get { return 0; }
+            }
+        }
+
+        /// <summary>
         /// Writes a whole node with the overload named through the owner, checks that it is in the first node's own buffer, and
         /// reads it back with the same overload through the opener.
         /// </summary>
