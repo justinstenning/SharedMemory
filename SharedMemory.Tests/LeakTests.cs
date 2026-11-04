@@ -36,10 +36,10 @@ namespace SharedMemoryTests
         {
             string name = Guid.NewGuid().ToString();
 
-            IntPtr address = CreateAndDrop(kind, name, a => Assert.IsTrue(Windows.IsMappedView(a), "The view should be mapped before the owner is collected."));
+            Mapping mapping = CreateAndDrop(kind, name);
             Collect();
 
-            Assert.IsFalse(Windows.IsMappedView(address), "The view is still mapped.");
+            Assert.IsFalse(mapping.IsMapped, "The view is still mapped.");
             Assert.ThrowsExactly<FileNotFoundException>(() => new EventFreeBuffer(name).Dispose());
         }
 
@@ -80,12 +80,10 @@ namespace SharedMemoryTests
         {
             string name = Guid.NewGuid().ToString();
 
-            string mapping = null;
-            CreateAndDrop(kind, name, a => mapping = Linux.MappingAt(a));
-            Assert.IsNotNull(mapping, "The owner's memory should be mapped from /dev/shm.");
+            Mapping mapping = CreateAndDrop(kind, name);
             Collect();
 
-            CollectionAssert.DoesNotContain(Linux.DevShmMappings(), mapping, "The owner's memory is still mapped.");
+            Assert.IsFalse(mapping.IsMapped, "The owner's memory is still mapped.");
         }
 
         /// <summary>
@@ -101,10 +99,10 @@ namespace SharedMemoryTests
         {
             string name = Guid.NewGuid().ToString();
 
-            IntPtr address = CreateAndDrop(kind, name, a => Assert.IsTrue(UnixEventTests.MacObjects.IsMapped(a), "The owner's memory should be mapped."));
+            Mapping mapping = CreateAndDrop(kind, name);
             Collect();
 
-            Assert.IsFalse(UnixEventTests.MacObjects.IsMapped(address), "The owner's memory is still mapped.");
+            Assert.IsFalse(mapping.IsMapped, "The owner's memory is still mapped.");
         }
 #endif
 
@@ -140,18 +138,18 @@ namespace SharedMemoryTests
 
         /// <summary>
         /// Creates an owner of <paramref name="kind"/> and drops it, in a method of its own so that nothing keeps it alive once it
-        /// returns. <paramref name="whileAlive"/> sees the address while the owner is still held, so that a collection cannot
-        /// release the owner before the test has looked at its mapping.
+        /// returns. Its mapping is taken, and found mapped, while the owner is still held, so that a collection cannot release the
+        /// owner before then.
         /// </summary>
-        /// <returns>The address its memory is mapped at.</returns>
+        /// <returns>The owner's mapping.</returns>
         [MethodImpl(MethodImplOptions.NoInlining)]
-        static IntPtr CreateAndDrop(string kind, string name, Action<IntPtr> whileAlive)
+        static Mapping CreateAndDrop(string kind, string name)
         {
             SharedBuffer owner = Create(kind, name);
-            IntPtr address = AddressOf(owner);
-            whileAlive(address);
+            Mapping mapping = Mapping.Of(owner);
+            Assert.IsTrue(mapping.IsMapped, "The owner's memory should be mapped before it is collected.");
             GC.KeepAlive(owner);
-            return address;
+            return mapping;
         }
 
         /// <summary>
@@ -216,39 +214,83 @@ namespace SharedMemoryTests
         /// <summary>
         /// Where the buffer's memory starts: its protected ViewPtr, read through reflection.
         /// </summary>
-        internal static unsafe IntPtr AddressOf(SharedBuffer buffer)
+        static unsafe IntPtr AddressOf(SharedBuffer buffer)
         {
             object pointer = typeof(SharedBuffer).GetField("ViewPtr", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(buffer);
             return new IntPtr(Pointer.Unbox(pointer));
         }
 
         /// <summary>
-        /// Whether a buffer's memory is still mapped at <paramref name="address"/>, from <see cref="AddressOf"/>, where each OS
-        /// shows it: VirtualQuery on Windows, /proc/self/maps on Linux and mach_vm_region on macOS.
+        /// A buffer's mapping as this process sees it, taken while the buffer is mapped, so that a later look tells that mapping from
+        /// one the address space has put at the same address since: .NET's own code mappings take addresses that a view freed (W^X).
+        /// On Windows (VirtualQuery) and macOS (mach_vm_region) a readable mapping at the address is the buffer's while its first
+        /// bytes, the shared header's size, are still the buffer's; on Linux, while /proc/self/maps lists the same range of the same
+        /// /dev/shm file.
         /// </summary>
-        internal static bool IsMapped(IntPtr address)
+        internal sealed class Mapping
         {
+            readonly IntPtr address;
+            readonly long firstBytes;
 #if NET
-            if (OperatingSystem.IsLinux())
-                return Linux.MappingAt(address) != null;
-            if (OperatingSystem.IsMacOS())
-                return UnixEventTests.MacObjects.IsMapped(address);
+            readonly string devShm;
 #endif
-            return Windows.IsMappedView(address);
+
+            Mapping(IntPtr address)
+            {
+                this.address = address;
+                firstBytes = Marshal.ReadInt64(address);
+#if NET
+                if (OperatingSystem.IsLinux())
+                    devShm = Linux.MappingAt(address);
+#endif
+            }
+
+            /// <summary>
+            /// The mapping of <paramref name="buffer"/>, which must be mapped.
+            /// </summary>
+            public static Mapping Of(SharedBuffer buffer)
+            {
+                return new Mapping(AddressOf(buffer));
+            }
+
+            /// <summary>
+            /// Whether the buffer's mapping is still there.
+            /// </summary>
+            public bool IsMapped
+            {
+                get
+                {
+#if NET
+                    if (OperatingSystem.IsLinux())
+                        return devShm != null && Linux.DevShmMappings().Contains(devShm);
+                    if (OperatingSystem.IsMacOS())
+                    {
+                        int protection = UnixEventTests.MacObjects.Protection(address);
+                        return protection >= 0 && (protection & 1) != 0 && Marshal.ReadInt64(address) == firstBytes; // VM_PROT_READ
+                    }
+#endif
+                    return Windows.IsReadableView(address) && Marshal.ReadInt64(address) == firstBytes;
+                }
+            }
         }
 
         static class Windows
         {
             const uint MemMapped = 0x40000;
+            const uint MemCommit = 0x1000;
+            // PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY
+            const uint Readable = 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80;
+            const uint PageGuard = 0x100;
 
             /// <summary>
-            /// Whether a view of a file mapping starts at <paramref name="address"/>.
+            /// Whether a view of a file mapping starts at <paramref name="address"/>, committed and readable.
             /// </summary>
-            public static bool IsMappedView(IntPtr address)
+            public static bool IsReadableView(IntPtr address)
             {
                 MemoryBasicInformation info;
                 Assert.AreNotEqual(UIntPtr.Zero, VirtualQuery(address, out info, new UIntPtr((uint)Marshal.SizeOf(typeof(MemoryBasicInformation)))), "VirtualQuery");
-                return info.Type == MemMapped && info.AllocationBase == address;
+                return info.Type == MemMapped && info.AllocationBase == address && info.State == MemCommit &&
+                    (info.Protect & Readable) != 0 && (info.Protect & PageGuard) == 0;
             }
 
             [StructLayout(LayoutKind.Sequential)]

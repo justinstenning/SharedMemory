@@ -261,7 +261,7 @@ namespace SharedMemoryTests
             byte[] seenByOpener = null;
             bool mappedInCallback = false;
             var owner = Create(kind, name);
-            IntPtr address = LeakTests.AddressOf(owner.Buffer);
+            LeakTests.Mapping mapping = LeakTests.Mapping.Of(owner.Buffer);
             // Twice, so that a ring holds a node for the opener besides the one the owner reads
             owner.Put(data);
             owner.Put(data);
@@ -269,7 +269,7 @@ namespace SharedMemoryTests
             owner.ReadWith(pointer =>
             {
                 owner.Dispose();
-                mappedInCallback = LeakTests.IsMapped(address);
+                mappedInCallback = mapping.IsMapped;
                 // Still mapped: another instance opens it, and finds what the owner wrote
                 using (var opener = Open(kind, name))
                     seenByOpener = opener.Take();
@@ -279,7 +279,7 @@ namespace SharedMemoryTests
             CollectionAssert.AreEqual(data, seenByOpener, "What an opener read while the owner's callback ran");
             Assert.ThrowsExactly<FileNotFoundException>(() => Open(kind, name).Dispose(), "The memory was still mapped after the callback returned.");
             // The name goes with the last handle, even while a view stays mapped (Windows), so the view is looked for too
-            Assert.IsFalse(LeakTests.IsMapped(address), "The owner's view was still mapped after the callback returned.");
+            Assert.IsFalse(mapping.IsMapped, "The owner's view was still mapped after the callback returned.");
         }
 
         /// <summary>
@@ -293,7 +293,7 @@ namespace SharedMemoryTests
             byte[] first = Pattern(Chunk, 1), second = Pattern(Chunk, 2);
             var failures = new List<Exception>();
             var owner = Create(RingKind, name);
-            IntPtr address = LeakTests.AddressOf(owner.Buffer);
+            LeakTests.Mapping mapping = LeakTests.Mapping.Of(owner.Buffer);
             // Never disposed: if the memory went with the first callback, the second must not go on to write through its pointer
             var releaseSecond = new ManualResetEvent(false);
             using (var opener = Open(RingKind, name))
@@ -309,7 +309,7 @@ namespace SharedMemoryTests
                 owner.Dispose();
                 releaseFirst.Set();
                 Assert.IsTrue(one.Join(WaitMs), "The first callback did not return.");
-                Assert.IsTrue(LeakTests.IsMapped(address), "The owner's memory was unmapped when the first of two callbacks returned.");
+                Assert.IsTrue(mapping.IsMapped, "The owner's memory was unmapped when the first of two callbacks returned.");
 
                 releaseSecond.Set();
                 Assert.IsTrue(two.Join(WaitMs), "The second callback did not return.");
@@ -318,7 +318,7 @@ namespace SharedMemoryTests
                 CollectionAssert.AreEqual(first, opener.Take(), "What the first callback wrote");
                 CollectionAssert.AreEqual(second, opener.Take(), "What the second callback wrote after the first returned");
             }
-            Assert.IsFalse(LeakTests.IsMapped(address), "The owner's memory was still mapped after the last callback returned.");
+            Assert.IsFalse(mapping.IsMapped, "The owner's memory was still mapped after the last callback returned.");
         }
 
         // A write whose callback signals that it has started, waits for its release, then writes the data through its pointer
