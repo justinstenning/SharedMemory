@@ -152,6 +152,45 @@ namespace SharedMemoryTests
                 $"the read thread allocated {allocated} bytes; its arrays are {arrays}");
         }
 
+        /// <summary>
+        /// A request that claims 256 MiB and sends one packet past 1 MiB: its array doubles to 2 MiB, rather than grow to the size
+        /// it claims, so the read thread holds at most twice what arrived.
+        /// </summary>
+        [TestMethod]
+        public void RPC_MessageClaimingMoreThanItSends_GrowsByDoublingNotToItsClaim()
+        {
+            const int claimed = 256 * OneMiB;
+            var owner = Own(new AllocationProbe(name, (msgId, payload) => new byte[] { 1 }, Capacity, 10));
+            var toOwner = Own(new CircularBuffer(name + "_Owner_SharedMemory_MMF"));
+            var fromOwner = Own(new CircularBuffer(name + "_Opener_SharedMemory_MMF"));
+            // Enough packets to pass 1 MiB by less than one packet: the array grows once
+            int packets = OneMiB / PacketPayload + 1;
+
+            var before = ReadThreadAllocated(owner, toOwner, fromOwner);
+            for (int p = 0; p < packets; p++)
+            {
+                WritePacket(toOwner, Packet(new PacketHeader
+                {
+                    HeaderLength = HeaderSize,
+                    Type = MessageType.RpcRequest,
+                    PayloadSize = claimed,
+                    MsgId = 7,
+                    PayloadOffset = p * PacketPayload,
+                    PacketLength = PacketPayload,
+                }, Pattern(PacketPayload, p)));
+            }
+            var after = ReadThreadAllocated(owner, toOwner, fromOwner);
+            long allocated = after.Bytes - before.Bytes;
+            Console.WriteLine($"{packets} packets of a message claiming {claimed} bytes: the read thread allocated {allocated} bytes");
+
+            // 1 MiB for the first packet, then 2 MiB
+            long arrays = 3L * OneMiB;
+            Assert.AreEqual(
+                "allocated its arrays and under 64 KiB more True, counted on the read thread True",
+                $"allocated its arrays and under 64 KiB more {allocated >= arrays && allocated < arrays + Slack}, counted on the read thread {before.OnReadThread(after)}",
+                $"the read thread allocated {allocated} bytes; its arrays are {arrays}");
+        }
+
         [TestMethod]
         public void RPC_LaterPacketClaimingASmallerMessage_DropsIt()
         {
