@@ -596,6 +596,23 @@ namespace SharedMemoryTests
 
         #endregion
 
+        #region How the JIT sees the lease
+
+        /// <summary>
+        /// The last call out's release of the mapping is never inlined, so that each call's Exit stays small where the JIT inlines
+        /// it. Inlined into every Exit, it made .NET 10 compile RpcBuffer's read loop for about half a second on Linux as it ran,
+        /// while every call waited.
+        /// </summary>
+        [TestMethod]
+        public void Unmap_NeverInlined()
+        {
+            var unmap = typeof(SharedBuffer).GetMethod("Unmap", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            Assert.IsNotNull(unmap);
+            Assert.AreEqual(System.Reflection.MethodImplAttributes.NoInlining, unmap.MethodImplementationFlags & System.Reflection.MethodImplAttributes.NoInlining);
+        }
+
+        #endregion
+
         #region Helpers
 
         static void End(SharedBuffer buffer, string how)

@@ -503,8 +503,12 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Releases the mapping, once the count has come to 0 after <see cref="Close"/>, and lets <see cref="Open"/> map again.
+        /// Releases the mapping, once the count has come to 0 after <see cref="Close"/>, and lets <see cref="Open"/> map again. Never
+        /// inlined, so that <see cref="Exit"/> stays an add and a compare wherever the JIT inlines it. Inlined into every Exit, it
+        /// gave a loop over a ring's calls several times as many inlined methods, and on .NET 10 on Linux RpcBuffer's read loop
+        /// then took about half a second to compile as it ran, which every call waited for.
         /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private void Unmap()
         {
             try
