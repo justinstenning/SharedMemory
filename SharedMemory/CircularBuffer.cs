@@ -261,7 +261,7 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The name of the shared memory to be created</param>
         /// <param name="nodeCount">The number of nodes within the circular linked-list (minimum of 2). The buffer holds at most <paramref name="nodeCount"/> - 1 unread items.</param>
-        /// <param name="nodeBufferSize">The buffer size per node in bytes. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.SharedHeader) + Marshal.SizeOf(CircularBuffer.NodeHeader) + (Marshal.SizeOf(CircularBuffer.Node) * nodeCount) + (bufferSize * nodeCount)</code></param>
+        /// <param name="nodeBufferSize">The buffer size per node in bytes (minimum of 1). The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.SharedHeader) + Marshal.SizeOf(CircularBuffer.NodeHeader) + (Marshal.SizeOf(CircularBuffer.Node) * nodeCount) + (bufferSize * nodeCount)</code></param>
         /// <remarks>
         /// <para>The maximum total shared memory size is dependent upon the system and current memory fragmentation.</para>
         /// <para>The shared memory layout on 32-bit and 64-bit architectures is:<br />
@@ -273,6 +273,7 @@ namespace SharedMemory
         /// </code>
         /// </para>
         /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="nodeCount"/> is less than 2, or <paramref name="nodeBufferSize"/> is less than 1.</exception>
         public CircularBuffer(string name, int nodeCount, int nodeBufferSize)
             : this(name, nodeCount, nodeBufferSize, true)
         {
@@ -298,6 +299,8 @@ namespace SharedMemory
             #region Argument validation
             if (ownsSharedMemory && nodeCount < 2)
                 throw new ArgumentOutOfRangeException("nodeCount", nodeCount, "The node count must be a minimum of 2.");
+            else if (ownsSharedMemory && nodeBufferSize < 1)
+                throw new ArgumentOutOfRangeException("nodeBufferSize", nodeBufferSize, "The node buffer size must be a minimum of 1.");
 #if DEBUG
             else if (!ownsSharedMemory && (nodeCount != 0 || nodeBufferSize > 0))
                 System.Diagnostics.Debug.Write("Node count and nodeBufferSize are ignored when opening an existing shared memory circular buffer.", "Warning");

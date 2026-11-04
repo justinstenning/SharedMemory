@@ -119,6 +119,21 @@ namespace SharedMemoryTests
             }
         }
 
+        [TestMethod]
+        [DataRow(0)]
+        [DataRow(-1)]
+        public void Constructor_ProducerNodeBufferSizeBelow1_ExceptionThrown(int nodeBufferSize)
+        {
+            string name = Guid.NewGuid().ToString();
+
+            var e = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new CircularBuffer(name, 4, nodeBufferSize));
+            Assert.AreEqual("nodeBufferSize", e.ParamName);
+
+            // Nothing was created, so the name is free for a ring that can hold data
+            using (var owner = new CircularBuffer(name, 4, 1))
+                Assert.AreEqual(1, owner.NodeBufferSize);
+        }
+
         #endregion
 
         #region Open/Close tests
