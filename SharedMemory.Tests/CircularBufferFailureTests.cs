@@ -240,6 +240,54 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
+        /// A subclass that reserves through the protected GetNodeForReading never gets an empty node either: the skip gives the
+        /// empty node back through the subclass's ReturnNode, and the reservation goes on to the message behind it.
+        /// </summary>
+        [TestMethod]
+        public void GetNodeForReading_AfterAnEmptyWrite_SkipsItThroughTheSubclasssReturnNode()
+        {
+            string name = Guid.NewGuid().ToString();
+            byte[] message = { 1, 2, 3, 4 };
+            using (var ring = new ReservingReader(name, NodeCount, NodeSize))
+            {
+                Assert.AreEqual(0, ring.Write(new byte[0]));
+                Assert.AreEqual(message.Length, ring.Write(message));
+
+                int returnsDuringReservation;
+                int amount = ring.ReserveAndReturn(LongTimeout, out returnsDuringReservation);
+
+                Assert.AreEqual(
+                    "the node holds 4 bytes, ReturnNode ran 1 time during the reservation and 2 in all",
+                    String.Format("the node holds {0} bytes, ReturnNode ran {1} time during the reservation and {2} in all", amount, returnsDuringReservation, ring.Returns));
+            }
+        }
+
+        unsafe class ReservingReader : CircularBuffer
+        {
+            public int Returns;
+
+            public ReservingReader(string name, int nodeCount, int nodeBufferSize) : base(name, nodeCount, nodeBufferSize) { }
+
+            protected override void ReturnNode(Node* node)
+            {
+                Returns++;
+                base.ReturnNode(node);
+            }
+
+            // Reserves a node through the protected method, and returns it: what the node held, or -1 for no node
+            public int ReserveAndReturn(int timeout, out int returnsDuringReservation)
+            {
+                Node* node = GetNodeForReading(timeout);
+                returnsDuringReservation = Returns;
+                if (node == null)
+                    return -1;
+                int amount = node->AmountWritten;
+                ReturnNode(node);
+                return amount;
+            }
+        }
+
+        /// <summary>
         /// A read with a timeout of 0 skips an empty node and takes the item behind it, without waiting.
         /// </summary>
         [TestMethod]
