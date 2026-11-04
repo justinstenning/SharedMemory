@@ -36,8 +36,7 @@ namespace SharedMemoryTests
         {
             string name = Guid.NewGuid().ToString();
 
-            IntPtr address = CreateAndDrop(kind, name);
-            Assert.IsTrue(Windows.IsMappedView(address), "The view should be mapped before the owner is collected.");
+            IntPtr address = CreateAndDrop(kind, name, a => Assert.IsTrue(Windows.IsMappedView(a), "The view should be mapped before the owner is collected."));
             Collect();
 
             Assert.IsFalse(Windows.IsMappedView(address), "The view is still mapped.");
@@ -81,7 +80,8 @@ namespace SharedMemoryTests
         {
             string name = Guid.NewGuid().ToString();
 
-            string mapping = Linux.MappingAt(CreateAndDrop(kind, name));
+            string mapping = null;
+            CreateAndDrop(kind, name, a => mapping = Linux.MappingAt(a));
             Assert.IsNotNull(mapping, "The owner's memory should be mapped from /dev/shm.");
             Collect();
 
@@ -101,8 +101,7 @@ namespace SharedMemoryTests
         {
             string name = Guid.NewGuid().ToString();
 
-            IntPtr address = CreateAndDrop(kind, name);
-            Assert.IsTrue(UnixEventTests.MacObjects.IsMapped(address), "The owner's memory should be mapped.");
+            IntPtr address = CreateAndDrop(kind, name, a => Assert.IsTrue(UnixEventTests.MacObjects.IsMapped(a), "The owner's memory should be mapped."));
             Collect();
 
             Assert.IsFalse(UnixEventTests.MacObjects.IsMapped(address), "The owner's memory is still mapped.");
@@ -140,13 +139,19 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// Creates an owner of <paramref name="kind"/> and drops it, in a method of its own so that nothing keeps it alive.
+        /// Creates an owner of <paramref name="kind"/> and drops it, in a method of its own so that nothing keeps it alive once it
+        /// returns. <paramref name="whileAlive"/> sees the address while the owner is still held, so that a collection cannot
+        /// release the owner before the test has looked at its mapping.
         /// </summary>
         /// <returns>The address its memory is mapped at.</returns>
         [MethodImpl(MethodImplOptions.NoInlining)]
-        static IntPtr CreateAndDrop(string kind, string name)
+        static IntPtr CreateAndDrop(string kind, string name, Action<IntPtr> whileAlive)
         {
-            return AddressOf(Create(kind, name));
+            SharedBuffer owner = Create(kind, name);
+            IntPtr address = AddressOf(owner);
+            whileAlive(address);
+            GC.KeepAlive(owner);
+            return address;
         }
 
         /// <summary>
@@ -211,10 +216,25 @@ namespace SharedMemoryTests
         /// <summary>
         /// Where the buffer's memory starts: its protected ViewPtr, read through reflection.
         /// </summary>
-        static unsafe IntPtr AddressOf(SharedBuffer buffer)
+        internal static unsafe IntPtr AddressOf(SharedBuffer buffer)
         {
             object pointer = typeof(SharedBuffer).GetField("ViewPtr", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(buffer);
             return new IntPtr(Pointer.Unbox(pointer));
+        }
+
+        /// <summary>
+        /// Whether a buffer's memory is still mapped at <paramref name="address"/>, from <see cref="AddressOf"/>, where each OS
+        /// shows it: VirtualQuery on Windows, /proc/self/maps on Linux and mach_vm_region on macOS.
+        /// </summary>
+        internal static bool IsMapped(IntPtr address)
+        {
+#if NET
+            if (OperatingSystem.IsLinux())
+                return Linux.MappingAt(address) != null;
+            if (OperatingSystem.IsMacOS())
+                return UnixEventTests.MacObjects.IsMapped(address);
+#endif
+            return Windows.IsMappedView(address);
         }
 
         static class Windows
