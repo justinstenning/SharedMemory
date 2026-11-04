@@ -278,6 +278,26 @@ namespace SharedMemoryTests
             }
         }
 
+        /// <summary>
+        /// A structure that starts inside the buffer and runs past its end writes nothing. The .NET Framework 3.5 build's own view
+        /// accessor throws ArgumentOutOfRangeException for it, and every other build ArgumentException.
+        /// </summary>
+        [TestMethod]
+        public void Structure_RunningPastTheEnd_ThrowsAndWritesNothing()
+        {
+            string name = Guid.NewGuid().ToString();
+            byte[] before = Pattern(Size, 11);
+            using (var owner = new BufferReadWrite(name, Size))
+            {
+                owner.Write(before);
+                long value = -1;
+
+                Assert.Throws<ArgumentException>(() => owner.Write(ref value, Size - 4));
+
+                CollectionAssert.AreEqual(before, Contents(name), "Bytes 1,020 to 1,023 changed.");
+            }
+        }
+
         [TestMethod]
         public void Structure_BeforeTheStart_ThrowsArgumentOutOfRangeExceptionAndLeavesTheHeaderAlone()
         {
