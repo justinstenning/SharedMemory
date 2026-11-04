@@ -51,6 +51,8 @@ namespace SharedMemory
     /// this instance is closed returns 0; one that starts after <see cref="SharedBuffer.Close"/> throws <see cref="ObjectDisposedException"/>.</para>
     /// <para>A read or write checks its arguments before it takes a node. One whose copy or callback throws still gives its node back: a write
     /// posts it empty, and a read returns it for writing, so the ring goes on working for every process.</para>
+    /// <para>A read skips an empty node, from a write that failed or wrote nothing, and goes on to the next item within its timeout, so it never
+    /// returns 0 for one or runs a callback on one. Readers using a version before 2.4.0 do not skip empty nodes.</para>
     /// </remarks>
 #if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
@@ -894,8 +896,9 @@ namespace SharedMemory
         /// <returns>An unsafe pointer to the node if successful, otherwise null: at the timeout, at once when the owner has shut down and
         /// nothing is left to read, or when this instance is closed while the call waits.</returns>
         /// <exception cref="ObjectDisposedException">This instance was closed before the call.</exception>
-        /// <remarks>The node is valid until the buffer is closed: a subclass that reads it itself must return it before Close is called, on
-        /// this thread or another.</remarks>
+        /// <remarks>An empty node, from a write that failed or wrote nothing, is never returned: it is returned for writing unread, and the
+        /// call goes on to the next node. The node is valid until the buffer is closed: a subclass that reads it itself must return it before
+        /// Close is called, on this thread or another.</remarks>
         protected virtual Node* GetNodeForReading(int timeout)
         {
             // The caller holds no lease on the mapping, as before
@@ -940,12 +943,14 @@ namespace SharedMemory
         private Node* TakeNodeForReading(int timeout)
         {
             long deadline = Deadline(timeout);
+            int skips = 0;
             for (bool firstLook = true; ; firstLook = false)
             {
                 if (!EnterForLook(firstLook))
                     return null;
                 bool leased = false;
-                NamedEvent dataExists;
+                bool skipped = false;
+                NamedEvent dataExists = null;
                 try
                 {
                     int blockIndex = _nodeHeader->ReadStart;
@@ -953,21 +958,30 @@ namespace SharedMemory
                     if (blockIndex != _nodeHeader->WriteEnd)
                     {
 #pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
-                        if (Interlocked.CompareExchange(ref _nodeHeader->ReadStart, node->Next, blockIndex) == blockIndex)
+                        if (Interlocked.CompareExchange(ref _nodeHeader->ReadStart, node->Next, blockIndex) != blockIndex)
+                        {
+                            // Another thread has already acquired this node for reading, try again
+                            continue;
+                        }
+#pragma warning restore 0420
+
+                        if (node->AmountWritten != 0)
                         {
                             leased = true;
                             return node;
                         }
-#pragma warning restore 0420
 
-                        // Another thread has already acquired this node for reading, try again
-                        continue;
+                        // An empty node, from a write that failed or wrote nothing: give it back unread, and look again
+                        ReturnNode(node);
+                        skipped = true;
                     }
-
-                    // Nothing to read, and the owner has shut down (ShuttingDown): return now rather than wait
-                    if (Header->Shutdown == 1)
-                        return null;
-                    dataExists = _dataExists;
+                    else
+                    {
+                        // Nothing to read, and the owner has shut down (ShuttingDown): return now rather than wait
+                        if (Header->Shutdown == 1)
+                            return null;
+                        dataExists = _dataExists;
+                    }
                 }
                 finally
                 {
@@ -975,10 +989,32 @@ namespace SharedMemory
                         Exit();
                 }
 
+                if (skipped)
+                {
+                    // Look again at once, without waiting, unless the call's time is up: a stream of empty writes must not hold it
+                    // past its timeout
+                    if (SkipsEnd(timeout, deadline, ++skips))
+                        return null;
+                    continue;
+                }
+
                 // No data is available: wait for a writer to post a node, then look again
                 if (!WaitBeforeNextLook(dataExists, timeout, deadline))
                     return null;
             }
+        }
+
+        /// <summary>
+        /// Whether a read that has just skipped an empty node gives up rather than look again: at its deadline, or for a timeout of 0,
+        /// once it has skipped as many nodes as the ring has, more than were in the ring when it started.
+        /// </summary>
+        private bool SkipsEnd(int timeout, long deadline, int skips)
+        {
+            if (timeout == 0)
+                return skips >= NodeCount;
+            if (timeout < 0)
+                return false; // Timeout.Infinite, or a timeout below it that the wait refuses
+            return System.Diagnostics.Stopwatch.GetTimestamp() >= deadline;
         }
 
         /// <summary>

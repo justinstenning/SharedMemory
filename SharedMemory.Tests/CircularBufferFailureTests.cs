@@ -17,6 +17,11 @@ namespace SharedMemoryTests
     {
         const int NodeCount = 4;
         const int NodeSize = 32;
+        const int LongTimeout = 5000;
+        // How soon a read gets an item already in the ring, with room for a slow machine's scheduling
+        const int PromptLimit = 250;
+        // A 100 ms call's limit: its timeout, one slice (up to a 15.6 ms timer tick on Windows), and 60 ms for a slow machine's scheduling
+        const int TimedCallLimit = 100 + 16 + 60;
 
         class CallbackException : Exception
         {
@@ -148,8 +153,8 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// A Write(Func) whose callback throws posts its node empty, as every 2.x release has: the next read returns 0 for it, at
-        /// once, and the read after that gets the message written after it.
+        /// A Write(Func) whose callback throws posts its node empty, and a reader skips it: the next read gets the message written
+        /// after it, within its timeout, and nothing is left after that. A Read(byte[]) before 2.4.0 returns 0 for the failed write's node.
         /// </summary>
         [TestMethod]
         public void Read_AfterAWriteFuncCallbackThrew_ReturnsNoDataFromTheFailedWrite()
@@ -163,12 +168,213 @@ namespace SharedMemoryTests
 
                 var destination = new byte[NodeSize];
                 var timer = Stopwatch.StartNew();
-                Assert.AreEqual(0, ring.Read(destination, timeout: 1000), "The read after the failed write");
-                Assert.IsTrue(timer.ElapsedMilliseconds < 500, String.Format("The read of the failed write's node took {0} ms", timer.ElapsedMilliseconds));
+                Assert.AreEqual(message.Length, ring.Read(destination, timeout: 1000), "The read after the failed write");
+                Assert.IsTrue(timer.ElapsedMilliseconds < 500, String.Format("The read past the failed write's node took {0} ms", timer.ElapsedMilliseconds));
+                CollectionAssert.AreEqual(message, destination.Take(message.Length).ToArray());
 
-                Assert.AreEqual(message.Length, ring.Read(destination, timeout: 0), "The read after that");
+                Assert.AreEqual(0, ring.Read(destination, timeout: 0), "The read after that");
+            }
+        }
+
+        /// <summary>
+        /// BufferAndRingSafety FR-009: after a write whose callback threw and a good one, each read overload gets the good one, at once,
+        /// and a Read(Func) callback runs once, for it.
+        /// </summary>
+        [TestMethod]
+        [DataRow("byte[]")]
+        [DataRow("T[]")]
+        [DataRow("out T")]
+        [DataRow("IntPtr")]
+        [DataRow("Func")]
+        public void Read_AfterAFailedWriteAndAGoodOne_GetsTheGoodOneAtOnce(string overload)
+        {
+            string name = Guid.NewGuid().ToString();
+            byte[] message = { 1, 2, 3, 4, 5, 6, 7, 8 };
+            using (var ring = new CircularBuffer(name, NodeCount, NodeSize))
+            {
+                Assert.ThrowsExactly<CallbackException>(() => ring.Write(p => { throw new CallbackException(); }));
+                Assert.AreEqual(message.Length, ring.Write(message));
+
+                var timer = Stopwatch.StartNew();
+                byte[] read = ReadWith(overload, ring, message.Length, LongTimeout);
+                timer.Stop();
+
+                CollectionAssert.AreEqual(message, read, overload + " did not get the good write");
+                Assert.IsTrue(timer.ElapsedMilliseconds < PromptLimit, String.Format("{0} took {1} ms", overload, timer.ElapsedMilliseconds));
+                Assert.AreEqual(0, ring.Read(new byte[NodeSize], timeout: 0), "Something was left in the ring");
+            }
+        }
+
+        /// <summary>
+        /// A write of nothing still posts a node, and a reader skips it and gets the message after it.
+        /// </summary>
+        [TestMethod]
+        [DataRow("byte[]")]
+        [DataRow("T[]")]
+        [DataRow("IntPtr")]
+        [DataRow("Func")]
+        public void Read_AfterAnEmptyWrite_SkipsItAndGetsTheNextMessage(string overload)
+        {
+            string name = Guid.NewGuid().ToString();
+            byte[] message = { 1, 2, 3, 4 };
+            using (var ring = new CircularBuffer(name, NodeCount, NodeSize))
+            {
+                Assert.AreEqual(0, WriteNothing(overload, ring), "The empty write");
+                Assert.AreEqual(1, Queued(ring), "The empty write did not post a node");
+                Assert.AreEqual(message.Length, ring.Write(message));
+
+                var destination = new byte[NodeSize];
+                Assert.AreEqual(message.Length, ring.Read(destination, timeout: LongTimeout), "The read after the empty write");
                 CollectionAssert.AreEqual(message, destination.Take(message.Length).ToArray());
             }
+        }
+
+        /// <summary>
+        /// A read with a timeout of 0 skips an empty node and takes the item behind it, without waiting.
+        /// </summary>
+        [TestMethod]
+        public void Read_Timeout0AfterAnEmptyWrite_GetsTheItemBehindIt()
+        {
+            string name = Guid.NewGuid().ToString();
+            byte[] message = { 1, 2, 3, 4 };
+            using (var ring = new CircularBuffer(name, NodeCount, NodeSize))
+            {
+                Assert.AreEqual(0, ring.Write(new byte[0]));
+                Assert.AreEqual(message.Length, ring.Write(message));
+
+                var destination = new byte[NodeSize];
+                Assert.AreEqual(message.Length, ring.Read(destination, timeout: 0));
+                CollectionAssert.AreEqual(message, destination.Take(message.Length).ToArray());
+            }
+        }
+
+        /// <summary>
+        /// While a writer posts nothing but empty writes, a read skips each one and returns 0 at its timeout: the skips neither end
+        /// the read early nor hold it past its timeout.
+        /// </summary>
+        [TestMethod]
+        public void Read_WhileOnlyEmptyWritesArrive_SkipsThemUntilItsTimeout()
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var ring = new CircularBuffer(name, NodeCount, NodeSize))
+            using (var opener = new CircularBuffer(name))
+            {
+                bool stop = false;
+                var writer = new System.Threading.Thread(() =>
+                {
+                    while (!System.Threading.Volatile.Read(ref stop))
+                        opener.Write(new byte[0], timeout: 0);
+                });
+                writer.IsBackground = true;
+                writer.Start();
+                try
+                {
+                    // Let the writer fill the ring with empty writes
+                    var filling = Stopwatch.StartNew();
+                    while (Queued(ring) == 0 && filling.ElapsedMilliseconds < LongTimeout)
+                        System.Threading.Thread.Sleep(1);
+                    Assert.AreNotEqual(0, Queued(ring), "The writer posted no empty write");
+
+                    var timer = Stopwatch.StartNew();
+                    int read = ring.Read(new byte[NodeSize], timeout: 100);
+                    timer.Stop();
+
+                    Console.WriteLine("Read(timeout: 100) returned {0} after {1} ms", read, timer.ElapsedMilliseconds);
+                    Assert.AreEqual(0, read);
+                    Assert.IsTrue(timer.ElapsedMilliseconds >= 90, String.Format("The read returned after {0} ms, before its timeout", timer.ElapsedMilliseconds));
+                    Assert.IsTrue(timer.ElapsedMilliseconds < TimedCallLimit, String.Format("The read returned after {0} ms", timer.ElapsedMilliseconds));
+                }
+                finally
+                {
+                    System.Threading.Volatile.Write(ref stop, true);
+                    Assert.IsTrue(writer.Join(LongTimeout), "The writer did not stop");
+                }
+            }
+        }
+
+        /// <summary>
+        /// A reader in a second process skips the node of a write here whose callback threw, and gets the message after it.
+        /// </summary>
+        [TestMethod]
+        public void Read_InASecondProcessAfterAFailedWrite_GetsTheGoodOne()
+        {
+            string name = Guid.NewGuid().ToString();
+            byte[] message = { 1, 2, 3, 4 };
+            using (var ring = new CircularBuffer(name, NodeCount, NodeSize))
+            using (var peer = PeerProcess.Start())
+            {
+                peer.Ok("open circular " + name);
+                Assert.ThrowsExactly<CallbackException>(() => ring.Write(p => { throw new CallbackException(); }));
+                Assert.AreEqual(message.Length, ring.Write(message));
+
+                Assert.AreEqual(PeerProtocol.ToHex(message), peer.Ok("read " + NodeSize + " 1000"));
+                peer.Exit();
+            }
+        }
+
+        // How many posted items the ring holds
+        static int Queued(CircularBuffer ring)
+        {
+            CircularBuffer.NodeHeader header = ring.ReadNodeHeader();
+            return (header.WriteEnd - header.ReadStart + NodeCount) % NodeCount;
+        }
+
+        static unsafe int WriteNothing(string overload, CircularBuffer ring)
+        {
+            switch (overload)
+            {
+                case "byte[]": return ring.Write(new byte[0]);
+                case "T[]": return ring.Write(new int[0]);
+                case "IntPtr": return ring.Write(Somewhere, 0);
+                case "Func": return ring.Write(p => 0);
+                default: throw new ArgumentException("Unknown overload: " + overload);
+            }
+        }
+
+        /// <summary>
+        /// Reads one item with the overload named, into a destination of a whole node.
+        /// </summary>
+        /// <returns>The bytes read, <paramref name="length"/> of them for the structure and callback overloads.</returns>
+        static unsafe byte[] ReadWith(string overload, CircularBuffer ring, int length, int timeout)
+        {
+            var destination = new byte[NodeSize];
+            int bytes;
+            switch (overload)
+            {
+                case "byte[]":
+                    bytes = ring.Read(destination, timeout: timeout);
+                    break;
+                case "T[]":
+                    {
+                        var longs = new long[NodeSize / 8];
+                        bytes = ring.Read(longs, timeout: timeout) * 8;
+                        Buffer.BlockCopy(longs, 0, destination, 0, NodeSize);
+                        break;
+                    }
+                case "out T":
+                    {
+                        long value;
+                        ring.Read(out value, timeout);
+                        bytes = length;
+                        Buffer.BlockCopy(BitConverter.GetBytes(value), 0, destination, 0, 8);
+                        break;
+                    }
+                case "IntPtr":
+                    fixed (byte* p = destination)
+                        bytes = ring.Read((IntPtr)p, NodeSize, timeout);
+                    break;
+                case "Func":
+                    {
+                        int calls = 0;
+                        ring.Read(p => { calls++; Marshal.Copy(p, destination, 0, NodeSize); return NodeSize; }, timeout);
+                        Assert.AreEqual(1, calls, "The read callback's calls");
+                        bytes = length;
+                        break;
+                    }
+                default:
+                    throw new ArgumentException("Unknown overload: " + overload);
+            }
+            return destination.Take(bytes).ToArray();
         }
 
         static void AssertThrows(Type expected, Action call, string what)
