@@ -416,15 +416,20 @@ namespace SharedMemoryTests
             return Enumerable.Repeat(value, NodeSize).ToArray();
         }
 
-        // Runs the call on a thread of its own and times it
+        // Runs the call on a thread of its own and times it, returning once that thread is about to make the call, so that a thread
+        // slow to start cannot make its call after what the test does next
         static Task<Outcome<T>> StartTimed<T>(Func<T> call)
         {
-            return Task.Factory.StartNew(() =>
+            var started = new ManualResetEventSlim(false);
+            Task<Outcome<T>> task = Task.Factory.StartNew(() =>
             {
+                started.Set();
                 var timer = Stopwatch.StartNew();
                 T value = call();
                 return new Outcome<T> { Value = value, Milliseconds = timer.ElapsedMilliseconds, Returned = Stopwatch.GetTimestamp() };
             }, TaskCreationOptions.LongRunning);
+            Assert.IsTrue(started.Wait(LongTimeout), "The call's thread did not start");
+            return task;
         }
 
         // Gives calls just started time to find nothing and wait. One that has not yet looked finds what it needs on its first look.
