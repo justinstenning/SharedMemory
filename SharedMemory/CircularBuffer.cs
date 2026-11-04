@@ -53,6 +53,9 @@ namespace SharedMemory
     /// posts it empty, and a read returns it for writing, so the ring goes on working for every process.</para>
     /// <para>A read skips an empty node, from a write that failed or wrote nothing, and goes on to the next item within its timeout, so it never
     /// returns 0 for one or runs a callback on one. Readers using a version before 2.4.0 do not skip empty nodes.</para>
+    /// <para>What other processes can write in the shared memory is checked before it is used: a node's buffer is found from the node's index,
+    /// an amount is limited to 0 to <see cref="NodeBufferSize"/>, and an index in the node header outside the node list, or a node header that
+    /// does not fit the buffer when it is opened, throws <see cref="InvalidOperationException"/> naming the buffer.</para>
     /// </remarks>
 #if NETFULL
     [PermissionSet(SecurityAction.LinkDemand)]
@@ -150,6 +153,10 @@ namespace SharedMemory
         #region Private field members
 
         private NodeHeader* _nodeHeader = null;
+
+        // Where the node buffers start, read from NodeBufferOffset once each Open, when the node count is known. A node's buffer is
+        // computed from it and the node's index, never read from the node's Offset (BufferAndRingSafety FR-010).
+        private long _nodeBufferOffset;
 
         private NamedEvent _dataExists;
         private NamedEvent _nodeAvailable;
@@ -277,7 +284,8 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The name of an existing <see cref="CircularBuffer"/> previously created with <see cref="SharedBuffer.IsOwnerOfSharedMemory"/>=true</param>
         /// <remarks>If the owner is still initialising the buffer, this waits up to 1 s for it to finish.</remarks>
-        /// <exception cref="InvalidOperationException">The owner had not finished initialising the buffer after 1 s.</exception>
+        /// <exception cref="InvalidOperationException">The owner had not finished initialising the buffer after 1 s, or its node header does
+        /// not describe at least 2 nodes of at least 1 byte that fit in the buffer.</exception>
         public CircularBuffer(string name)
             : this(name, 0, 0, false)
         {
@@ -338,6 +346,7 @@ namespace SharedMemory
             {
                 // Retrieve pointer to node header
                 _nodeHeader = (NodeHeader*)(BufferStartPtr + NodeHeaderOffset);
+                _nodeBufferOffset = NodeBufferOffset;
 
                 // Initialise nodes entries first: an opener takes a non-zero NodeCount to mean the buffer is ready
                 InitialiseLinkedListNodes();
@@ -347,13 +356,31 @@ namespace SharedMemory
             }
             else
             {
-                // Load the NodeHeader, waiting for the owner to finish initialising it
+                // Load the NodeHeader, waiting for the owner to finish initialising it, and check it before using it
                 _nodeHeader = (NodeHeader*)(BufferStartPtr + NodeHeaderOffset);
                 NodeCount = WaitForNodeCount();
                 NodeBufferSize = _nodeHeader->NodeBufferSize;
+                _nodeBufferOffset = NodeBufferOffset;
+                CheckNodeHeader();
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// An opener's check of the node count and node size it read from the node header: at least 2 nodes of at least 1 byte, with
+        /// the node list and the node buffers inside the buffer (BufferAndRingSafety FR-010).
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The node header does not describe a circular buffer that fits.</exception>
+        private void CheckNodeHeader()
+        {
+            if (NodeCount < 2 || NodeBufferSize < 1)
+                throw new InvalidOperationException(String.Format("The circular buffer \"{0}\" is damaged: its header gives {1} nodes of {2} bytes, where a circular buffer has at least 2 nodes of at least 1 byte.", Name, NodeCount, NodeBufferSize));
+
+            long nodeListEnd = NodeOffset + (long)Marshal.SizeOf(typeof(Node)) * NodeCount;
+            long nodeBuffersEnd = _nodeBufferOffset + (long)NodeBufferSize * NodeCount;
+            if (NodeOffset < 0 || _nodeBufferOffset < 0 || nodeListEnd > BufferSize || nodeBuffersEnd > BufferSize)
+                throw new InvalidOperationException(String.Format("The circular buffer \"{0}\" is damaged: its header gives {1} nodes of {2} bytes, which need {3} bytes, but it holds {4}.", Name, NodeCount, NodeBufferSize, Math.Max(nodeListEnd, nodeBuffersEnd), BufferSize));
         }
 
         /// <summary>
@@ -473,51 +500,71 @@ namespace SharedMemory
         /// <returns>An unsafe pointer to the node if successful, otherwise null: at the timeout, at once when the owner has shut down and no
         /// node is free, or when this instance is closed while the call waits.</returns>
         /// <exception cref="ObjectDisposedException">This instance was closed before the call.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         /// <remarks>The node is valid until the buffer is closed: a subclass that writes to it itself must post it before Close is called, on
         /// this thread or another.</remarks>
         protected virtual Node* GetNodeForWriting(int timeout)
         {
             // The caller holds no lease on the mapping, as before
-            Node* node = TakeNodeForWriting(timeout);
+            int index;
+            Node* node = TakeNodeForWriting(timeout, out index);
             if (node != null)
                 Exit();
             return node;
         }
 
         /// <summary>
-        /// The overloads' reservation of a node for writing: the node with a lease on the mapping, which the caller releases once it
-        /// has posted the node; or null at the timeout, at once when the owner has shut down and no node is free, or when this instance
-        /// is closed while the call waits.
+        /// The overloads' reservation of a node for writing: the node and its index, with a lease on the mapping, which the caller
+        /// releases once it has posted the node; or null at the timeout, at once when the owner has shut down and no node is free, or
+        /// when this instance is closed while the call waits.
         /// </summary>
-        private Node* ReserveNodeForWriting(int timeout)
+        private Node* ReserveNodeForWriting(int timeout, out int index)
         {
             if (!_overridesGetNodeForWriting)
-                return TakeNodeForWriting(timeout);
+                return TakeNodeForWriting(timeout, out index);
 
             // A subclass's own reservation holds no lease of its own, so this one keeps the node it returns mapped until it is posted
             Enter();
             Node* node = null;
+            index = -1;
             try
             {
                 node = GetNodeForWriting(timeout);
+                if (node != null)
+                    index = IndexOf(node);
             }
             finally
             {
-                if (node == null)
+                if (index < 0)
                     Exit();
             }
             return node;
         }
 
         /// <summary>
+        /// The index of a node that a subclass's <see cref="GetNodeForWriting"/> or <see cref="GetNodeForReading"/> returned: where it
+        /// sits in the node list, which must be where <see cref="this[int]"/> puts that index.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The node is not one of this buffer's nodes.</exception>
+        private int IndexOf(Node* node)
+        {
+            long index = node - this[0];
+            if (index < 0 || index >= NodeCount || this[(int)index] != node)
+                throw new InvalidOperationException(String.Format("The node a subclass reserved is not one of the circular buffer \"{0}\"'s nodes.", Name));
+            return (int)index;
+        }
+
+        /// <summary>
         /// Reserves a node for writing, and returns it with a lease on the mapping for the caller to release. Each look at the ring
         /// holds a lease of its own, and a wait holds none, so that a wait never keeps a closed instance's mapping.
         /// </summary>
-        /// <returns>The node; or null at the timeout, at once when the owner has shut down and no node is free, or when this instance
-        /// is closed while the call waits.</returns>
+        /// <returns>The node, and its index in <paramref name="index"/>; or null at the timeout, at once when the owner has shut down
+        /// and no node is free, or when this instance is closed while the call waits.</returns>
         /// <exception cref="ObjectDisposedException">This instance was closed before the call.</exception>
-        private Node* TakeNodeForWriting(int timeout)
+        /// <exception cref="InvalidOperationException">An index in the node header is outside the node list.</exception>
+        private Node* TakeNodeForWriting(int timeout, out int index)
         {
+            index = -1;
             long deadline = Deadline(timeout);
             for (bool firstLook = true; ; firstLook = false)
             {
@@ -527,14 +574,16 @@ namespace SharedMemory
                 NamedEvent nodeAvailable;
                 try
                 {
-                    int blockIndex = _nodeHeader->WriteStart;
+                    int blockIndex = HeaderIndex(_nodeHeader->WriteStart, "WriteStart");
                     Node* node = this[blockIndex];
-                    if (node->Next != _nodeHeader->ReadEnd)
+                    int next = Next(blockIndex);
+                    if (next != HeaderIndex(_nodeHeader->ReadEnd, "ReadEnd"))
                     {
 #pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
-                        if (Interlocked.CompareExchange(ref _nodeHeader->WriteStart, node->Next, blockIndex) == blockIndex)
+                        if (Interlocked.CompareExchange(ref _nodeHeader->WriteStart, next, blockIndex) == blockIndex)
                         {
                             leased = true;
+                            index = blockIndex;
                             return node;
                         }
 #pragma warning restore 0420
@@ -637,6 +686,7 @@ namespace SharedMemory
         /// Makes a node available for reading after writing is complete
         /// </summary>
         /// <param name="node">An unsafe pointer to the node to return</param>
+        /// <exception cref="InvalidOperationException">An index in the node header is outside the node list.</exception>
         protected virtual void PostNode(Node* node)
         {
             // Set the write flag for this node (the node is reserved so no need for locks). The exchange is a full fence: the node's
@@ -650,7 +700,7 @@ namespace SharedMemory
             // completed nodes available for reading.
             for (; ; )
             {
-                int blockIndex = _nodeHeader->WriteEnd;
+                int blockIndex = HeaderIndex(_nodeHeader->WriteEnd, "WriteEnd");
                 node = this[blockIndex];
 #pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
                 if (Interlocked.CompareExchange(ref node->DoneWrite, 0, 1) != 1)
@@ -662,13 +712,61 @@ namespace SharedMemory
                 }
 
                 // Move the pointer one forward
-                Interlocked.CompareExchange(ref _nodeHeader->WriteEnd, node->Next, blockIndex);
+                Interlocked.CompareExchange(ref _nodeHeader->WriteEnd, Next(blockIndex), blockIndex);
 #pragma warning restore 0420
 
                 // Signal the "data exists" event if read threads are waiting
-                if (blockIndex == _nodeHeader->ReadStart)
+                if (blockIndex == HeaderIndex(_nodeHeader->ReadStart, "ReadStart"))
                     _dataExists.Set();
             }
+        }
+
+        /// <summary>
+        /// The node after node <paramref name="index"/> in the ring, as every creator links them; the node's own Next is not read
+        /// (BufferAndRingSafety FR-010).
+        /// </summary>
+        private int Next(int index)
+        {
+            return index + 1 == NodeCount ? 0 : index + 1;
+        }
+
+        /// <summary>
+        /// The node before node <paramref name="index"/> in the ring, as every creator links them; the node's own Prev is not read.
+        /// </summary>
+        private int Prev(int index)
+        {
+            return index == 0 ? NodeCount - 1 : index - 1;
+        }
+
+        /// <summary>
+        /// An index read from the node header, checked against the node list (BufferAndRingSafety FR-010).
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The index is outside 0 to <see cref="NodeCount"/> - 1.</exception>
+        private int HeaderIndex(int index, string field)
+        {
+            if (index < 0 || index >= NodeCount)
+                throw new InvalidOperationException(String.Format("The circular buffer \"{0}\" is damaged: its {1} is {2}, outside 0 to {3}.", Name, field, index, NodeCount - 1));
+            return index;
+        }
+
+        /// <summary>
+        /// Where node <paramref name="index"/>'s buffer starts, from <see cref="SharedBuffer.BufferStartPtr"/>: computed from the index,
+        /// as every creator lays the buffers out, not read from the node's Offset (BufferAndRingSafety FR-010).
+        /// </summary>
+        private long NodeBufferPosition(int index)
+        {
+            return _nodeBufferOffset + (long)NodeBufferSize * index;
+        }
+
+        /// <summary>
+        /// An amount of a node's buffer, limited to 0 to <see cref="NodeBufferSize"/>: an AmountWritten read from shared memory, or
+        /// one about to be written there (BufferAndRingSafety FR-010).
+        /// </summary>
+        private int Clamp(int amount)
+        {
+            if (amount > NodeBufferSize)
+                amount = NodeBufferSize;
+            return amount < 0 ? 0 : amount;
         }
 
         /// <summary>
@@ -681,12 +779,14 @@ namespace SharedMemory
         /// <remarks>The maximum number of bytes that can be written is the minimum of the length of <paramref name="source"/> and <see cref="NodeBufferSize"/>.</remarks>
         /// <exception cref="ArgumentNullException"><paramref name="source"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is negative or greater than the length of <paramref name="source"/>.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         public virtual int Write(byte[] source, int startIndex = 0, int timeout = 1000)
         {
             CheckArray(source, startIndex, "source");
 
             // Grab a node for writing, and a lease on the mapping until it is posted
-            Node* node = ReserveNodeForWriting(timeout);
+            int index;
+            Node* node = ReserveNodeForWriting(timeout, out index);
             if (node == null) return 0;
 
             int amount = 0;
@@ -694,7 +794,7 @@ namespace SharedMemory
             {
                 // Copy the data
                 int count = Math.Min(source.Length - startIndex, NodeBufferSize);
-                Marshal.Copy(source, startIndex, new IntPtr(BufferStartPtr + node->Offset), count);
+                Marshal.Copy(source, startIndex, new IntPtr(BufferStartPtr + NodeBufferPosition(index)), count);
                 amount = count;
             }
             finally
@@ -715,13 +815,15 @@ namespace SharedMemory
         /// <remarks>The maximum number of elements that can be written is the minimum of the length of <paramref name="source"/> subtracted by <paramref name="startIndex"/> and <see cref="NodeBufferSize"/> divided by <code>FastStructure.SizeOf&gt;T&lt;()</code>.</remarks>        
         /// <exception cref="ArgumentNullException"><paramref name="source"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is negative or greater than the length of <paramref name="source"/>.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         public virtual int Write<T>(T[] source, int startIndex = 0, int timeout = 1000)
             where T : struct
         {
             CheckArray(source, startIndex, "source");
 
             // Grab a node for writing, and a lease on the mapping until it is posted
-            Node* node = ReserveNodeForWriting(timeout);
+            int index;
+            Node* node = ReserveNodeForWriting(timeout, out index);
             if (node == null) return 0;
 
             int count = 0;
@@ -729,7 +831,7 @@ namespace SharedMemory
             {
                 // Write the data using the FastStructure class (much faster than the MemoryMappedViewAccessor WriteArray<T> method)
                 int toWrite = Math.Min(source.Length - startIndex, NodeBufferSize / FastStructure.SizeOf<T>());
-                WriteArrayLeased<T>(source, startIndex, toWrite, node->Offset);
+                WriteArrayLeased<T>(source, startIndex, toWrite, NodeBufferPosition(index));
                 count = toWrite;
             }
             finally
@@ -748,6 +850,7 @@ namespace SharedMemory
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for writing (default 1000ms)</param>
         /// <returns>The number of bytes written - larger than 0 if successful</returns>
         /// <exception cref="ArgumentOutOfRangeException">If the size of the <typeparamref name="T"/> structure is larger than <see cref="NodeBufferSize"/>.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         public virtual int Write<T>(ref T source, int timeout = 1000)
             where T : struct
         {
@@ -756,14 +859,15 @@ namespace SharedMemory
                 throw new ArgumentOutOfRangeException("T", "The size of structure " + typeof(T).Name + " is larger than NodeBufferSize");
 
             // Attempt to retrieve a node for writing, and a lease on the mapping until it is posted
-            Node* node = ReserveNodeForWriting(timeout);
+            int index;
+            Node* node = ReserveNodeForWriting(timeout, out index);
             if (node == null) return 0;
 
             int amount = 0;
             try
             {
                 // Copy the data using the MemoryMappedViewAccessor
-                WriteStructureLeased<T>(ref source, node->Offset);
+                WriteStructureLeased<T>(ref source, NodeBufferPosition(index));
                 amount = structSize;
             }
             finally
@@ -783,12 +887,14 @@ namespace SharedMemory
         /// <returns>The number of bytes written</returns>
         /// <remarks>The maximum number of bytes that can be written is the minimum of <paramref name="length"/> and <see cref="NodeBufferSize"/>.</remarks>        
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> is negative.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         public virtual int Write(IntPtr source, int length, int timeout = 1000)
         {
             CheckLength(length);
 
             // Grab a node for writing, and a lease on the mapping until it is posted
-            Node* node = ReserveNodeForWriting(timeout);
+            int index;
+            Node* node = ReserveNodeForWriting(timeout, out index);
             if (node == null) return 0;
 
             int amount = 0;
@@ -796,7 +902,7 @@ namespace SharedMemory
             {
                 // Copy the data
                 int count = Math.Min(length, NodeBufferSize);
-                WriteLeased(source, count, node->Offset);
+                WriteLeased(source, count, NodeBufferPosition(index));
                 amount = count;
             }
             finally
@@ -813,23 +919,25 @@ namespace SharedMemory
         /// <param name="writeFunc">A function to used to write to the node's buffer. The first parameter is a pointer to the node's buffer. 
         /// The provided function should return the number of bytes written.</param>
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for writing (default 1000ms)</param>
-        /// <returns>The number of bytes written</returns>
+        /// <returns>The number of bytes written: what <paramref name="writeFunc"/> returned, limited to 0 to <see cref="NodeBufferSize"/></returns>
         /// <remarks>The pointer stays valid until <paramref name="writeFunc"/> returns, even if the buffer is closed meanwhile.</remarks>
         /// <exception cref="ArgumentNullException"><paramref name="writeFunc"/> is null.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         public virtual int Write(Func<IntPtr, int> writeFunc, int timeout = 1000)
         {
             if (writeFunc == null)
                 throw new ArgumentNullException("writeFunc");
 
             // Grab a node for writing, and a lease on the mapping until it is posted
-            Node* node = ReserveNodeForWriting(timeout);
+            int index;
+            Node* node = ReserveNodeForWriting(timeout, out index);
             if (node == null) return 0;
 
             int amount = 0;
             try
             {
-                // Pass destination IntPtr to custom write function
-                amount = writeFunc(new IntPtr(BufferStartPtr + node->Offset));
+                // Pass destination IntPtr to custom write function, and hold what it says it wrote to the node's size
+                amount = Clamp(writeFunc(new IntPtr(BufferStartPtr + NodeBufferPosition(index))));
             }
             finally
             {
@@ -847,7 +955,7 @@ namespace SharedMemory
         {
             try
             {
-                node->AmountWritten = amount;
+                node->AmountWritten = Clamp(amount);
                 PostNode(node);
             }
             finally
@@ -896,38 +1004,43 @@ namespace SharedMemory
         /// <returns>An unsafe pointer to the node if successful, otherwise null: at the timeout, at once when the owner has shut down and
         /// nothing is left to read, or when this instance is closed while the call waits.</returns>
         /// <exception cref="ObjectDisposedException">This instance was closed before the call.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         /// <remarks>An empty node, from a write that failed or wrote nothing, is never returned: it is returned for writing unread, and the
         /// call goes on to the next node. The node is valid until the buffer is closed: a subclass that reads it itself must return it before
         /// Close is called, on this thread or another.</remarks>
         protected virtual Node* GetNodeForReading(int timeout)
         {
             // The caller holds no lease on the mapping, as before
-            Node* node = TakeNodeForReading(timeout);
+            int index;
+            Node* node = TakeNodeForReading(timeout, out index);
             if (node != null)
                 Exit();
             return node;
         }
 
         /// <summary>
-        /// The overloads' reservation of a node for reading: the node with a lease on the mapping, which the caller releases once it
-        /// has returned the node; or null at the timeout, at once when the owner has shut down and the ring is empty, or when this
-        /// instance is closed while the call waits.
+        /// The overloads' reservation of a node for reading: the node and its index, with a lease on the mapping, which the caller
+        /// releases once it has returned the node; or null at the timeout, at once when the owner has shut down and the ring is empty,
+        /// or when this instance is closed while the call waits.
         /// </summary>
-        private Node* ReserveNodeForReading(int timeout)
+        private Node* ReserveNodeForReading(int timeout, out int index)
         {
             if (!_overridesGetNodeForReading)
-                return TakeNodeForReading(timeout);
+                return TakeNodeForReading(timeout, out index);
 
             // A subclass's own reservation holds no lease of its own, so this one keeps the node it returns mapped until it is returned
             Enter();
             Node* node = null;
+            index = -1;
             try
             {
                 node = GetNodeForReading(timeout);
+                if (node != null)
+                    index = IndexOf(node);
             }
             finally
             {
-                if (node == null)
+                if (index < 0)
                     Exit();
             }
             return node;
@@ -937,11 +1050,13 @@ namespace SharedMemory
         /// Reserves a node for reading, and returns it with a lease on the mapping for the caller to release. Each look at the ring
         /// holds a lease of its own, and a wait holds none, so that a wait never keeps a closed instance's mapping.
         /// </summary>
-        /// <returns>The node; or null at the timeout, at once when the owner has shut down and the ring is empty, or when this
-        /// instance is closed while the call waits.</returns>
+        /// <returns>The node, and its index in <paramref name="index"/>; or null at the timeout, at once when the owner has shut down
+        /// and the ring is empty, or when this instance is closed while the call waits.</returns>
         /// <exception cref="ObjectDisposedException">This instance was closed before the call.</exception>
-        private Node* TakeNodeForReading(int timeout)
+        /// <exception cref="InvalidOperationException">An index in the node header is outside the node list.</exception>
+        private Node* TakeNodeForReading(int timeout, out int index)
         {
+            index = -1;
             long deadline = Deadline(timeout);
             int skips = 0;
             for (bool firstLook = true; ; firstLook = false)
@@ -953,21 +1068,22 @@ namespace SharedMemory
                 NamedEvent dataExists = null;
                 try
                 {
-                    int blockIndex = _nodeHeader->ReadStart;
+                    int blockIndex = HeaderIndex(_nodeHeader->ReadStart, "ReadStart");
                     Node* node = this[blockIndex];
-                    if (blockIndex != _nodeHeader->WriteEnd)
+                    if (blockIndex != HeaderIndex(_nodeHeader->WriteEnd, "WriteEnd"))
                     {
 #pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
-                        if (Interlocked.CompareExchange(ref _nodeHeader->ReadStart, node->Next, blockIndex) != blockIndex)
+                        if (Interlocked.CompareExchange(ref _nodeHeader->ReadStart, Next(blockIndex), blockIndex) != blockIndex)
                         {
                             // Another thread has already acquired this node for reading, try again
                             continue;
                         }
 #pragma warning restore 0420
 
-                        if (node->AmountWritten != 0)
+                        if (Clamp(node->AmountWritten) != 0)
                         {
                             leased = true;
+                            index = blockIndex;
                             return node;
                         }
 
@@ -1021,6 +1137,7 @@ namespace SharedMemory
         /// Returns a node to the available list of nodes for writing.
         /// </summary>
         /// <param name="node">An unsafe pointer to the node to be returned</param>
+        /// <exception cref="InvalidOperationException">An index in the node header is outside the node list.</exception>
         protected virtual void ReturnNode(Node* node)
         {
             // Keep it clean and reset AmountWritten to prepare it for next Write, while the node is still this reader's: once the flag
@@ -1038,7 +1155,7 @@ namespace SharedMemory
             // read nodes available for writing.
             for (; ; )
             {
-                int blockIndex = _nodeHeader->ReadEnd;
+                int blockIndex = HeaderIndex(_nodeHeader->ReadEnd, "ReadEnd");
                 node = this[blockIndex];
 #pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
                 if (Interlocked.CompareExchange(ref node->DoneRead, 0, 1) != 1)
@@ -1049,11 +1166,11 @@ namespace SharedMemory
                 }
 
                 // Move the pointer forward one node
-                Interlocked.CompareExchange(ref _nodeHeader->ReadEnd, node->Next, blockIndex);
+                Interlocked.CompareExchange(ref _nodeHeader->ReadEnd, Next(blockIndex), blockIndex);
 #pragma warning restore 0420
 
                // If a writer thread is waiting on "node available" signal the event
-                if (node->Prev == _nodeHeader->WriteStart)
+                if (Prev(blockIndex) == HeaderIndex(_nodeHeader->WriteStart, "WriteStart"))
                         _nodeAvailable.Set();
             }
         }
@@ -1068,20 +1185,22 @@ namespace SharedMemory
         /// <remarks>The maximum number of bytes that can be read is the minimum of the length of <paramref name="destination"/> subtracted by <paramref name="startIndex"/> and <see cref="NodeBufferSize"/>.</remarks>
         /// <exception cref="ArgumentNullException"><paramref name="destination"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is negative or greater than the length of <paramref name="destination"/>.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         public virtual int Read(byte[] destination, int startIndex = 0, int timeout = 1000)
         {
             CheckArray(destination, startIndex, "destination");
 
             // A node to read, and a lease on the mapping until it is returned
-            Node* node = ReserveNodeForReading(timeout);
+            int index;
+            Node* node = ReserveNodeForReading(timeout, out index);
             if (node == null) return 0;
 
             try
             {
-                int amount = Math.Min(destination.Length - startIndex, node->AmountWritten);
+                int amount = Math.Min(destination.Length - startIndex, Clamp(node->AmountWritten));
 
                 // Copy the data
-                Marshal.Copy(new IntPtr(BufferStartPtr + node->Offset), destination, startIndex, amount);
+                Marshal.Copy(new IntPtr(BufferStartPtr + NodeBufferPosition(index)), destination, startIndex, amount);
 
                 return amount;
             }
@@ -1103,20 +1222,22 @@ namespace SharedMemory
         /// <remarks>The maximum number of elements that can be read is the minimum of the length of <paramref name="destination"/> subtracted by <paramref name="startIndex"/> and <see cref="Node.AmountWritten"/> divided by <code>FastStructure.SizeOf&gt;T&lt;()</code>.</remarks>
         /// <exception cref="ArgumentNullException"><paramref name="destination"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="startIndex"/> is negative or greater than the length of <paramref name="destination"/>.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         public virtual int Read<T>(T[] destination, int startIndex = 0, int timeout = 1000)
             where T : struct
         {
             CheckArray(destination, startIndex, "destination");
 
             // A node to read, and a lease on the mapping until it is returned
-            Node* node = ReserveNodeForReading(timeout);
+            int index;
+            Node* node = ReserveNodeForReading(timeout, out index);
             if (node == null) return 0;
 
             try
             {
                 // Copy the data using the FastStructure class (much faster than the MemoryMappedViewAccessor ReadArray<T> method)
-                int count = Math.Min(destination.Length - startIndex, node->AmountWritten / FastStructure.SizeOf<T>());
-                ReadArrayLeased<T>(destination, startIndex, count, node->Offset);
+                int count = Math.Min(destination.Length - startIndex, Clamp(node->AmountWritten) / FastStructure.SizeOf<T>());
+                ReadArrayLeased<T>(destination, startIndex, count, NodeBufferPosition(index));
 
                 return count;
             }
@@ -1135,6 +1256,7 @@ namespace SharedMemory
         /// <param name="timeout">The maximum number of milliseconds to wait for a node to become available for reading (default 1000ms)</param>
         /// <returns>The number of bytes read</returns>
         /// <exception cref="ArgumentOutOfRangeException">If the size of <typeparamref name="T"/> is larger than <see cref="NodeBufferSize"/>.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         public virtual int Read<T>(out T destination, int timeout = 1000)
             where T: struct
         {
@@ -1143,7 +1265,8 @@ namespace SharedMemory
                 throw new ArgumentOutOfRangeException("T", "The size of structure " + typeof(T).Name + " is larger than NodeBufferSize");
 
             // Attempt to retrieve a node, and a lease on the mapping until it is returned
-            Node* node = ReserveNodeForReading(timeout);
+            int index;
+            Node* node = ReserveNodeForReading(timeout, out index);
             if (node == null)
             {
                 destination = default(T);
@@ -1153,7 +1276,7 @@ namespace SharedMemory
             try
             {
                 // Copy the data using the MemoryMappedViewAccessor
-                ReadStructureLeased<T>(out destination, node->Offset);
+                ReadStructureLeased<T>(out destination, NodeBufferPosition(index));
 
                 return structSize;
             }
@@ -1173,20 +1296,22 @@ namespace SharedMemory
         /// <returns>The number of bytes read</returns>
         /// <remarks>The maximum number of bytes that can be read is the minimum of the <paramref name="length"/> and <see cref="Node.AmountWritten"/>.</remarks>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> is negative.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         public virtual int Read(IntPtr destination, int length, int timeout = 1000)
         {
             CheckLength(length);
 
             // A node to read, and a lease on the mapping until it is returned
-            Node* node = ReserveNodeForReading(timeout);
+            int index;
+            Node* node = ReserveNodeForReading(timeout, out index);
             if (node == null) return 0;
 
             try
             {
-                int amount = Math.Min(length, node->AmountWritten);
+                int amount = Math.Min(length, Clamp(node->AmountWritten));
 
                 // Copy the data
-                ReadLeased(destination, amount, node->Offset);
+                ReadLeased(destination, amount, NodeBufferPosition(index));
 
                 return amount;
             }
@@ -1206,19 +1331,21 @@ namespace SharedMemory
         /// <returns>The number of bytes read</returns>
         /// <remarks>The pointer stays valid until <paramref name="readFunc"/> returns, even if the buffer is closed meanwhile.</remarks>
         /// <exception cref="ArgumentNullException"><paramref name="readFunc"/> is null.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is damaged: an index in its node header is outside the node list.</exception>
         public virtual int Read(Func<IntPtr, int> readFunc, int timeout = 1000)
         {
             if (readFunc == null)
                 throw new ArgumentNullException("readFunc");
 
             // A node to read, and a lease on the mapping until it is returned
-            Node* node = ReserveNodeForReading(timeout);
+            int index;
+            Node* node = ReserveNodeForReading(timeout, out index);
             if (node == null) return 0;
 
             try
             {
                 // Pass pointer to buffer directly to custom read function
-                return readFunc(new IntPtr(BufferStartPtr + node->Offset));
+                return readFunc(new IntPtr(BufferStartPtr + NodeBufferPosition(index)));
             }
             finally
             {
