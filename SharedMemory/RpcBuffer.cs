@@ -294,6 +294,10 @@ namespace SharedMemory
         /// </summary>
         internal int BytesReceived { get; set; }
         /// <summary>
+        /// The size of the whole message, as its first packet gave it. <see cref="Data"/> grows towards it as packets arrive
+        /// </summary>
+        internal int PayloadSize { get; set; }
+        /// <summary>
         /// Whether code awaiting the response must run on the thread pool, rather than on the read thread that completes it
         /// </summary>
         internal bool ContinuesOnThreadPool { get; }
@@ -669,6 +673,7 @@ namespace SharedMemory
         const int disposeWaitMs = 1000; // how long Dispose waits for the read thread and for a send under way
         const int readWaitMs = 100; // the read thread looks for Dispose this often
         const int roomWaitSliceMs = 50; // a send waiting for room looks for Dispose this often
+        const int firstAllocationLimit = 1 << 20; // the most a message's first packet allocates, whatever size it claims
         object lock_sendQ = new object();
         readonly ManualResetEventSlim readStopped = new ManualResetEventSlim();
         int buffersInUse; // calls in ThrowIfDisposedOrShutdown, which look at the buffers outside the send lock
@@ -1414,23 +1419,41 @@ namespace SharedMemory
                     }
 
                     // Each packet starts where the one before it ended, and gives the size its message's first packet gave.
-                    // Otherwise a packet was lost or the message is damaged: drop the message, and fail the request it answers
+                    // Otherwise a packet was lost or the message is damaged: drop the message, and fail the request it answers.
+                    // So is a message whose array is shorter than what arrived or longer than its size, which only a subclass
+                    // that set Data itself makes
                     if (header.PayloadOffset != request.BytesReceived ||
-                        (header.PayloadOffset > 0 && header.PayloadSize != request.Data.Length))
+                        (header.PayloadOffset > 0 && (header.PayloadSize != request.PayloadSize ||
+                            request.Data.Length < header.PayloadOffset || request.Data.Length > request.PayloadSize)))
                     {
                         DropMessage(header);
                         Statistics.ReadPacket(header.PacketLength);
                         return header.HeaderLength + header.PacketLength;
                     }
 
-                    if (header.PayloadOffset == 0 && header.PayloadSize > 0)
+                    // The first packet allocates the message's size, or 1 MiB if it claims more, so that one packet cannot make
+                    // this end allocate what it claims. A packet that does not fit doubles the array, never past that size,
+                    // so the last packet leaves it exactly that long
+                    if (header.PayloadOffset == 0)
                     {
-                        request.Data = new byte[header.PayloadSize];
+                        request.PayloadSize = header.PayloadSize;
+                        if (header.PayloadSize > 0)
+                        {
+                            request.Data = new byte[Math.Min(header.PayloadSize, firstAllocationLimit)];
+                        }
                     }
 
                     if (header.PacketLength > 0)
                     {
-                        FastStructure.ReadBytes(request.Data, ptr + header.HeaderLength, header.PayloadOffset, header.PacketLength);
+                        var data = request.Data;
+                        int end = header.PayloadOffset + header.PacketLength; // at most PayloadSize, as checked above
+                        if (end > data.Length)
+                        {
+                            var grown = new byte[(int)Math.Min(request.PayloadSize, Math.Max(end, 2L * data.Length))];
+                            Buffer.BlockCopy(data, 0, grown, 0, header.PayloadOffset);
+                            request.Data = data = grown;
+                        }
+                        FastStructure.ReadBytes(data, ptr + header.HeaderLength, header.PayloadOffset, header.PacketLength);
                     }
 
                     request.BytesReceived += header.PacketLength;
