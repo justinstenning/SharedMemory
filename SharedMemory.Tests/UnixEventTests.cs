@@ -760,7 +760,7 @@ namespace SharedMemoryTests
         /// Event objects on macOS as the tests make and read them: created 0600 as the library creates them, the mode where a
         /// variadic argument goes on arm64, and woken with os_sync in shared mode.
         /// </summary>
-        static unsafe class MacObjects
+        internal static unsafe class MacObjects
         {
             const string Library = "/usr/lib/libSystem.B.dylib";
             const int O_RDONLY = 0;
@@ -867,6 +867,15 @@ namespace SharedMemoryTests
             /// </summary>
             public static bool IsMapped(IntPtr address)
             {
+                return Protection(address) >= 0;
+            }
+
+            /// <summary>
+            /// The protection of the region of this process's address space that holds <paramref name="address"/> (VM_PROT_READ 1,
+            /// VM_PROT_WRITE 2, VM_PROT_EXECUTE 4), or -1 if no region holds it.
+            /// </summary>
+            public static int Protection(IntPtr address)
+            {
                 const int BasicInfo64 = 9;     // VM_REGION_BASIC_INFO_64
                 const int KernSuccess = 0;
                 const int KernInvalidAddress = 1;
@@ -878,9 +887,10 @@ namespace SharedMemoryTests
                 uint objectName;
                 int result = mach_vm_region(task, &start, &size, BasicInfo64, info, &count, &objectName);
                 if (result == KernInvalidAddress)
-                    return false;
+                    return -1;
                 Assert.AreEqual(KernSuccess, result, "mach_vm_region");
-                return start <= (ulong)address && (ulong)address < start + size;
+                // vm_region_basic_info_64 starts with the region's protection
+                return start <= (ulong)address && (ulong)address < start + size ? info[0] : -1;
             }
 
             static int Open(string objectName, int flags)

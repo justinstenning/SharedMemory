@@ -87,6 +87,9 @@ namespace ClientTest
 
                         if (amount == 0)
                         {
+                            // Once the server has closed the buffer, Read returns 0 at once: stop rather than spin
+                            if (theClient.ShuttingDown)
+                                break;
                             Interlocked.Increment(ref skipCount);
                         }
                         else

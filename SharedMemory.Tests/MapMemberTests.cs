@@ -45,7 +45,7 @@ namespace SharedMemoryTests
 #if NET
         /// <summary>
         /// A struct read or write that runs past the end of the buffer throws as a view's does, rather than reaching what lies
-        /// beyond: on macOS the mapping runs on to the end of its page. After Close they throw NullReferenceException, as
+        /// beyond: on macOS the mapping runs on to the end of its page. After Close they throw ObjectDisposedException, as
         /// SharedBuffer.Close documents. The .NET Framework 3.5 build's views are its own, and are not checked here.
         /// </summary>
         [TestMethod]
@@ -69,8 +69,8 @@ namespace SharedMemoryTests
                     Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => buffer.ReadStruct(-17));
 
                     buffer.Close();
-                    Assert.ThrowsExactly<NullReferenceException>(() => { long v = 1; buffer.WriteStruct(ref v, 0); });
-                    Assert.ThrowsExactly<NullReferenceException>(() => buffer.ReadStruct(0));
+                    Assert.ThrowsExactly<ObjectDisposedException>(() => { long v = 1; buffer.WriteStruct(ref v, 0); });
+                    Assert.ThrowsExactly<ObjectDisposedException>(() => buffer.ReadStruct(0));
                 }
             }
         }

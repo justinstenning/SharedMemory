@@ -119,6 +119,21 @@ namespace SharedMemoryTests
             }
         }
 
+        [TestMethod]
+        [DataRow(0)]
+        [DataRow(-1)]
+        public void Constructor_ProducerNodeBufferSizeBelow1_ExceptionThrown(int nodeBufferSize)
+        {
+            string name = Guid.NewGuid().ToString();
+
+            var e = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new CircularBuffer(name, 4, nodeBufferSize));
+            Assert.AreEqual("nodeBufferSize", e.ParamName);
+
+            // Nothing was created, so the name is free for a ring that can hold data
+            using (var owner = new CircularBuffer(name, 4, 1))
+                Assert.AreEqual(1, owner.NodeBufferSize);
+        }
+
         #endregion
 
         #region Open/Close tests
@@ -990,15 +1005,6 @@ namespace SharedMemoryTests
                 for (int i = 0; i < NodeCount; i++)
                     this[i]->Next = 0;
             }
-
-            /// <summary>
-            /// Links each node to the one after it, as the owner does when it builds the list
-            /// </summary>
-            public void BuildNodeList()
-            {
-                for (int i = 0; i < NodeCount; i++)
-                    this[i]->Next = (i + 1) % NodeCount;
-            }
         }
 
         [TestMethod]
@@ -1016,34 +1022,28 @@ namespace SharedMemoryTests
         }
 
         [TestMethod]
-        public void Write_OpenedBeforeNodeListBuilt_WritesOnceListIsBuilt()
+        public void Write_OpenedBeforeNodeListBuilt_DoesNotNeedTheList()
         {
             string name = Guid.NewGuid().ToString();
-            byte[] data = new byte[] { 1, 2, 3, 4 };
 
             using (var owner = new InitialisingCircularBuffer(name, 4, 32))
             {
+                // The node list as an opener sees it while the owner is still building it (#77); it stays that way.
+                // Each node's neighbours come from its index, so neither end reads the list.
                 owner.ClearNodeList();
 
                 using (var opener = new CircularBuffer(name))
-                using (var writing = new ManualResetEvent(false))
                 {
-                    var write = Task.Factory.StartNew(() =>
+                    // More items than nodes, so the ring goes round
+                    for (byte i = 0; i < 6; i++)
                     {
-                        writing.Set();
-                        var timer = Stopwatch.StartNew();
-                        int written = opener.Write(data, timeout: 1000);
-                        return new long[] { written, timer.ElapsedMilliseconds };
-                    }, TaskCreationOptions.LongRunning);
+                        byte[] data = new byte[] { i, 1, 2, 3 };
+                        Assert.AreEqual(data.Length, opener.Write(data, timeout: 1000), "The opener's write " + i + " waited for the node list");
 
-                    writing.WaitOne();
-                    Thread.Sleep(50);
-                    owner.BuildNodeList();
-
-                    Assert.IsTrue(write.Wait(5000), "Write did not return");
-                    Assert.AreEqual(data.Length, write.Result[0], "Write gave up although the node list was built 50 ms into its 1000 ms timeout");
-                    if (write.Result[1] < 25)
-                        Assert.Inconclusive(String.Format("Write took {0} ms: it started after the node list was built, so it did not wait for it", write.Result[1]));
+                        byte[] read = new byte[data.Length];
+                        Assert.AreEqual(data.Length, owner.Read(read, timeout: 1000), "The owner did not read write " + i);
+                        CollectionAssert.AreEqual(data, read, "Write " + i + " came back changed");
+                    }
                 }
             }
         }

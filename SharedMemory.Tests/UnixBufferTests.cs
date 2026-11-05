@@ -306,7 +306,8 @@ namespace SharedMemoryTests
 
         /// <summary>
         /// Several processes create, open, read, close, and are killed, some in the middle of a command, on a few names for
-        /// 60 s. The only failures are IOException and FileNotFoundException; the lifetime rules hold throughout; and at the
+        /// 60 s. The only failures are IOException and FileNotFoundException, and an open's InvalidOperationException for a file
+        /// whose creator was killed before it wrote the header; the lifetime rules hold throughout; and at the
         /// end nothing is left in /dev/shm, or in the lock folder on macOS, but temporary files from kills between create
         /// and publish, which the library leaves rather than sweeping for them; the test removes and reports them, with the
         /// objects they name on macOS.
@@ -1312,7 +1313,9 @@ namespace SharedMemoryTests
                     return;
                 string type = reply.StartsWith("error ", StringComparison.Ordinal) ? reply.Substring(6, Math.Max(0, reply.IndexOf(':') - 6)) : reply;
                 Counted(what + " " + type);
-                if (type != "System.IO.IOException" && type != "System.IO.FileNotFoundException")
+                // An opener of a file whose creator was killed before it wrote the header waits for the size, then gives up
+                bool notReady = what == "open" && type == "System.InvalidOperationException" && reply.Contains("is not ready");
+                if (type != "System.IO.IOException" && type != "System.IO.FileNotFoundException" && !notReady)
                     Problem(what + ": " + reply);
                 else if (reply.Contains("kept changing"))
                     Problem(what + ": " + reply);

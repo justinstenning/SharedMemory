@@ -162,11 +162,26 @@ namespace SharedMemory
 #endif
 
         /// <summary>
+        /// For the finaliser of a <see cref="SharedBuffer"/> nobody closed: gives up the pointer this instance holds into the mapping on macOS,
+        /// so that the mapping's own finaliser unmaps it. Elsewhere it holds none. The object and its lock file are left to their own finaliser.
+        /// </summary>
+        internal unsafe void ReleasePointer()
+        {
+#if NET10_0_OR_GREATER
+            if (_macObject != null && Pointer != null)
+            {
+                Pointer = null;
+                _macObject.Memory.ReleasePointer();
+            }
+#endif
+        }
+
+        /// <summary>
         /// Releases what this instance holds besides <see cref="File"/>, which <see cref="SharedBuffer"/> disposes. On Windows that is nothing;
         /// on Linux it is the file, which is removed if no other process holds it; on macOS the mapping, and the object and its lock file,
         /// which are removed if no other process holds them.
         /// </summary>
-        public void Dispose()
+        public unsafe void Dispose()
         {
 #if NET10_0_OR_GREATER
             if (_linuxFile != null)
@@ -176,7 +191,9 @@ namespace SharedMemory
             }
             if (_macObject != null)
             {
-                _macObject.Memory.ReleasePointer();
+                if (Pointer != null)
+                    _macObject.Memory.ReleasePointer();
+                Pointer = null;
                 _macObject.Dispose();
                 _macObject = null;
             }

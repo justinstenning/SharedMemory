@@ -51,7 +51,16 @@ namespace SharedMemory
         public BufferReadWrite(string name, int bufferSize)
             : base(name, bufferSize, true)
         {
-            Open();
+            try
+            {
+                Open();
+            }
+            catch
+            {
+                // Nobody can dispose an instance whose constructor threw
+                DisposeEvents();
+                throw;
+            }
         }
 
         /// <summary>
@@ -61,7 +70,16 @@ namespace SharedMemory
         public BufferReadWrite(string name)
             : base(name, 0, false)
         {
-            Open();
+            try
+            {
+                Open();
+            }
+            catch
+            {
+                // Nobody can dispose an instance whose constructor threw
+                DisposeEvents();
+                throw;
+            }
         }
 
         #endregion
@@ -74,6 +92,8 @@ namespace SharedMemory
         /// <typeparam name="T">A structure type</typeparam>
         /// <param name="data">A reference to an instance of <typeparamref name="T"/> to be written</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferPosition"/> is outside the buffer: less than 0, or at or past <see cref="SharedBuffer.BufferSize"/>.</exception>
+        /// <exception cref="ArgumentException">The structure runs past the end of the buffer. The .NET Framework 3.5 build throws <see cref="ArgumentOutOfRangeException"/> for this.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Write<T>(ref T data, long bufferPosition = 0)
             where T : struct
@@ -87,6 +107,8 @@ namespace SharedMemory
         /// <typeparam name="T">A structure type</typeparam>
         /// <param name="buffer">An array of <typeparamref name="T"/> to be written. The length of this array controls the number of elements to be written.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferPosition"/> is outside the buffer: less than 0, or at or past <see cref="SharedBuffer.BufferSize"/>.</exception>
+        /// <exception cref="ArgumentException">The array's elements run past the end of the buffer.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Write<T>(T[] buffer, long bufferPosition = 0)
             where T : struct
@@ -100,6 +122,8 @@ namespace SharedMemory
         /// <param name="ptr">A managed pointer to the memory location to be copied into the buffer</param>
         /// <param name="length">The number of bytes to be copied</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferPosition"/> is outside the buffer: less than 0, or at or past <see cref="SharedBuffer.BufferSize"/> -or- <paramref name="length"/> is negative.</exception>
+        /// <exception cref="ArgumentException"><paramref name="length"/> bytes run past the end of the buffer.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Write(IntPtr ptr, int length, long bufferPosition = 0)
         {
@@ -111,6 +135,7 @@ namespace SharedMemory
         /// </summary>
         /// <param name="writeFunc">A function used to write to the buffer. The IntPtr parameter is a pointer to the buffer offset by <paramref name="bufferPosition"/>.</param>
         /// <param name="bufferPosition">The offset within the buffer region to start writing from.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferPosition"/> is outside the buffer: less than 0, or at or past <see cref="SharedBuffer.BufferSize"/>.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Write(Action<IntPtr> writeFunc, long bufferPosition = 0)
         {
@@ -127,6 +152,8 @@ namespace SharedMemory
         /// <typeparam name="T">A structure type</typeparam>
         /// <param name="data">Output parameter that will contain the value read from the buffer</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferPosition"/> is outside the buffer: less than 0, or at or past <see cref="SharedBuffer.BufferSize"/>.</exception>
+        /// <exception cref="ArgumentException">The structure runs past the end of the buffer. The .NET Framework 3.5 build throws <see cref="ArgumentOutOfRangeException"/> for this.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Read<T>(out T data, long bufferPosition = 0)
             where T : struct
@@ -140,6 +167,8 @@ namespace SharedMemory
         /// <typeparam name="T">A structure type</typeparam>
         /// <param name="buffer">Array that will contain the values read from the buffer. The length of this array controls the number of elements to read.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferPosition"/> is outside the buffer: less than 0, or at or past <see cref="SharedBuffer.BufferSize"/>.</exception>
+        /// <exception cref="ArgumentException">The array's elements run past the end of the buffer.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Read<T>(T[] buffer, long bufferPosition = 0)
             where T : struct
@@ -153,6 +182,8 @@ namespace SharedMemory
         /// <param name="destination">A managed pointer to the memory location to copy data into from the buffer</param>
         /// <param name="length">The number of bytes to be copied</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferPosition"/> is outside the buffer: less than 0, or at or past <see cref="SharedBuffer.BufferSize"/> -or- <paramref name="length"/> is negative.</exception>
+        /// <exception cref="ArgumentException"><paramref name="length"/> bytes run past the end of the buffer.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Read(IntPtr destination, int length, long bufferPosition = 0)
         {
@@ -164,6 +195,7 @@ namespace SharedMemory
         /// </summary>
         /// <param name="readFunc">A function used to read from the buffer. The IntPtr parameter is a pointer to the buffer offset by <paramref name="bufferPosition"/>.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferPosition"/> is outside the buffer: less than 0, or at or past <see cref="SharedBuffer.BufferSize"/>.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods")]
         new public void Read(Action<IntPtr> readFunc, long bufferPosition = 0)
         {

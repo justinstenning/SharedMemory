@@ -74,19 +74,21 @@ namespace SharedMemory
         public bool IsOwnerOfSharedMemory { get; private set; }
         
         /// <summary>
-        /// Returns true if the SharedMemory owner has/is shutting down
+        /// Returns true if the SharedMemory owner has/is shutting down, or if this instance is closed
         /// </summary>
         public bool ShuttingDown
         {
             get
             {
-                if (Header == null || Header->Shutdown == 1)
-                {
+                if (!TryEnter())
                     return true;
-                }
-                else
+                try
                 {
-                    return false;
+                    return Header == null || Header->Shutdown == 1;
+                }
+                finally
+                {
+                    Exit();
                 }
             }
         }
@@ -144,11 +146,22 @@ namespace SharedMemory
         #region Private field members
 
         private NamedMapping _mapping;
+        // The handle of View that Open took ViewPtr from, for the finaliser: the .NET Framework 3.5 build's own view drops its handle when
+        // it is finalised, which may be before this instance is
+        private Microsoft.Win32.SafeHandles.SafeMemoryMappedViewHandle _viewHandle;
 #if NET10_0_OR_GREATER
         // Where the memory is mapped without a MemoryMappedFile (macOS), this stands in for View: the header is written through it, and the
         // struct reads and writes check their bounds against its capacity.
         private System.IO.UnmanagedMemoryAccessor _mappedView;
 #endif
+
+        // The lease on the mapping. Bit 0 (Opened) is set from Open until Close, and each call that uses the mapping adds Call while it
+        // runs. Whoever brings the count to 0 unmaps, and then sets it to Unmapped, the only state Open maps from: so Close never unmaps
+        // under a running call, the last call out unmaps instead, and a call after Close finds bit 0 clear and throws.
+        private const int Opened = 1;
+        private const int Call = 2;
+        private const int Unmapped = int.MinValue;
+        private int _leases = Unmapped;
 
         #endregion
 
@@ -211,10 +224,20 @@ namespace SharedMemory
         /// <exception cref="System.IO.IOException">If trying to create a new shared memory buffer with a duplicate name as buffer owner.</exception>
         /// <exception cref="System.IO.FileNotFoundException">If trying to open a new shared memory buffer that does not exist as a consumer of existing buffer.</exception>
         /// <exception cref="System.ArgumentOutOfRangeException">If trying to create a new shared memory buffer with a size larger than the logical addressable space.</exception>
+        /// <exception cref="System.InvalidOperationException">A read or write on the earlier mapping of this instance is still running, for example on another thread or in the callback that calls Open.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA2202:Do not dispose objects multiple times")]
         protected bool Open()
         {
+            // A call still running keeps the earlier mapping until it returns; one count cannot hold two mappings
+            int leases = _leases;
+            if (leases != Unmapped && leases != Opened)
+                throw StillInUse();
+
             Close();
+
+            // Opened from here on, so that Close unmaps whatever the steps below map before one of them fails
+            if (Interlocked.CompareExchange(ref _leases, Opened, Unmapped) != Unmapped)
+                throw StillInUse();
 
             try
             {
@@ -233,6 +256,7 @@ namespace SharedMemory
                     // Create a view to the entire region of the shared memory
                     View = Mmf.CreateViewAccessor(0, SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
                     View.SafeMemoryMappedViewHandle.AcquirePointer(ref ViewPtr);
+                    _viewHandle = View.SafeMemoryMappedViewHandle;
                     Header = (SharedHeader*)(ViewPtr + HeaderOffset);
                     BufferStartPtr = ViewPtr + BufferOffset;
                     // Initialise the header
@@ -249,14 +273,21 @@ namespace SharedMemory
                     {
                         byte* headerPtr = null;
                         headerView.SafeMemoryMappedViewHandle.AcquirePointer(ref headerPtr);
-                        var header = (SharedHeader*)(headerPtr + HeaderOffset);
-                        BufferSize = header->SharedMemorySize - Marshal.SizeOf(typeof(SharedHeader));
-                        headerView.SafeMemoryMappedViewHandle.ReleasePointer();
+                        try
+                        {
+                            var header = (SharedHeader*)(headerPtr + HeaderOffset);
+                            BufferSize = WaitForSharedMemorySize(header) - Marshal.SizeOf(typeof(SharedHeader));
+                        }
+                        finally
+                        {
+                            headerView.SafeMemoryMappedViewHandle.ReleasePointer();
+                        }
                     }
 
                     // Create a view to the entire region of the shared memory
                     View = Mmf.CreateViewAccessor(0, SharedMemorySize, MemoryMappedFileAccess.ReadWrite);
                     View.SafeMemoryMappedViewHandle.AcquirePointer(ref ViewPtr);
+                    _viewHandle = View.SafeMemoryMappedViewHandle;
                     Header = (SharedHeader*)(ViewPtr + HeaderOffset);
                     BufferStartPtr = ViewPtr + HeaderOffset + Marshal.SizeOf(typeof(SharedHeader));
                 }
@@ -288,6 +319,27 @@ namespace SharedMemory
         }
 
         /// <summary>
+        /// Reads the total size from the header, waiting up to 1 s while it is 0 because the owner has made the shared memory but not yet
+        /// written its header.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The size was still 0 after 1 s.</exception>
+        private long WaitForSharedMemorySize(SharedHeader* header)
+        {
+            long size = header->SharedMemorySize;
+            if (size != 0)
+                return size;
+
+            var waited = System.Diagnostics.Stopwatch.StartNew();
+            while ((size = header->SharedMemorySize) == 0)
+            {
+                if (waited.ElapsedMilliseconds >= 1000)
+                    throw new InvalidOperationException(String.Format("The shared memory \"{0}\" is not ready: its size was still 0 after waiting 1 s for its owner to write it.", Name));
+                Thread.Sleep(1);
+            }
+            return size;
+        }
+
+        /// <summary>
         /// Allows any classes that inherit from <see cref="SharedBuffer"/> to perform additional open logic. There is no need to call base.DoOpen() from these implementations.
         /// </summary>
         /// <returns>True if successful, otherwise false.</returns>
@@ -316,26 +368,168 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Sets the <see cref="ShuttingDown"/> flag, and disposes of the MemoryMappedFile and MemoryMappedViewAccessor.<br />
-        /// Attempting to read/write to the buffer after closing will result in a <see cref="System.NullReferenceException"/>.
+        /// Sets the <see cref="ShuttingDown"/> flag if this instance owns the shared memory, calls <see cref="DoClose"/>, and releases the
+        /// MemoryMappedFile and MemoryMappedViewAccessor.<br />
+        /// Close returns at once. A read or write still running on another thread, or a callback that called Close, keeps the memory
+        /// mapped until it returns, and the memory is released then. Reads and writes that start after Close throw
+        /// <see cref="ObjectDisposedException"/>. Close may be called again, and <see cref="Dispose()"/> after it.
         /// </summary>
         public virtual void Close()
         {
-#if NET10_0_OR_GREATER
-            if (IsOwnerOfSharedMemory && (View != null || _mappedView != null))
-#else
-            if (IsOwnerOfSharedMemory && View != null)
-#endif
+            // Hold the mapping while closing, so that a call that returns meanwhile cannot release it under DoClose
+            bool held = TryHold();
+            if (!held)
+                WaitWhileUnmapping();
+            try
             {
-                // Indicates to any open instances that the owner is no longer open
+                if (held && IsOwnerOfSharedMemory && Header != null)
+                {
+                    // Indicates to any open instances that the owner is no longer open
 #pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
-                Interlocked.Exchange(ref Header->Shutdown, 1);
+                    Interlocked.Exchange(ref Header->Shutdown, 1);
 #pragma warning restore 0420
+                }
+
+                // Allow additional close logic
+                DoClose();
+            }
+            catch
+            {
+                // Open as before, as when DoClose threw before
+                if (held)
+                    Exit();
+                throw;
             }
 
-            // Allow additional close logic
-            DoClose();
+            if (held)
+            {
+                // Later calls throw, and the last call out, which may be this one, releases the memory
+                ClearOpened();
+                Exit();
+            }
+        }
 
+        /// <summary>
+        /// A call starts using the mapping: adds one to the lease, unless this instance is not open.
+        /// </summary>
+        /// <returns>true if the mapping stays until the matching <see cref="Exit"/>; false if this instance is closed or not yet opened.</returns>
+        internal bool TryEnter()
+        {
+            // A stale read only costs a retry
+            int leases = _leases;
+            while ((leases & Opened) != 0)
+            {
+                int seen = Interlocked.CompareExchange(ref _leases, leases + Call, leases);
+                if (seen == leases)
+                    return true;
+                leases = seen;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// <see cref="TryEnter"/>, throwing <see cref="ObjectDisposedException"/> with the buffer's name if this instance is closed.
+        /// </summary>
+        internal void Enter()
+        {
+            if (!TryEnter())
+                throw new ObjectDisposedException(Name);
+        }
+
+        /// <summary>
+        /// A call has finished with the mapping. The last one out after <see cref="Close"/> releases it, on its own thread.
+        /// </summary>
+        internal void Exit()
+        {
+            if (Interlocked.Add(ref _leases, -Call) == 0)
+                Unmap();
+        }
+
+        /// <summary>
+        /// Whether this instance is open: from <see cref="Open"/> until <see cref="Close"/>.
+        /// </summary>
+        internal bool IsOpen
+        {
+            get { return (_leases & Opened) != 0; }
+        }
+
+        // Close's hold on the mapping: like TryEnter, but also while a call keeps a closed instance's mapping, so that Close can
+        // call DoClose with the mapping in place however often it is called.
+        private bool TryHold()
+        {
+            int leases = _leases;
+            while (leases > 0)
+            {
+                int seen = Interlocked.CompareExchange(ref _leases, leases + Call, leases);
+                if (seen == leases)
+                    return true;
+                leases = seen;
+            }
+            return false;
+        }
+
+        // Waits while the last call out of another thread releases the mapping, so that DoClose runs before or after that, not during it.
+        // Releasing takes as long as disposing the view, the file and a ring's events.
+        private void WaitWhileUnmapping()
+        {
+            for (int spins = 0; Interlocked.CompareExchange(ref _leases, 0, 0) == 0; spins++)
+                Thread.Sleep(spins < 20 ? 0 : 1);
+        }
+
+        // Clears bit 0. The caller holds a lease, so this never brings the count to 0.
+        private void ClearOpened()
+        {
+            int leases = _leases;
+            while ((leases & Opened) != 0)
+            {
+                int seen = Interlocked.CompareExchange(ref _leases, leases - Opened, leases);
+                if (seen == leases)
+                    return;
+                leases = seen;
+            }
+        }
+
+        private InvalidOperationException StillInUse()
+        {
+            return new InvalidOperationException("The shared memory \"" + Name + "\" cannot be opened again while a read or write on its earlier mapping is still running.");
+        }
+
+        /// <summary>
+        /// Called once no call uses the mapping any more, just before it is released, on the thread of the last call out. A
+        /// subclass in this library releases here what its calls use until they return.
+        /// </summary>
+        internal virtual void OnUnmap()
+        {
+        }
+
+        /// <summary>
+        /// Releases the mapping, once the count has come to 0 after <see cref="Close"/>, and lets <see cref="Open"/> map again. Never
+        /// inlined, so that <see cref="Exit"/> stays an add and a compare wherever the JIT inlines it. Inlined into every Exit, it
+        /// gave a loop over a ring's calls several times as many inlined methods, and on .NET 10 on Linux RpcBuffer's read loop
+        /// then took about half a second to compile as it ran, which every call waited for.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private void Unmap()
+        {
+            try
+            {
+                try
+                {
+                    OnUnmap();
+                }
+                finally
+                {
+                    ReleaseMapping();
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _leases, Unmapped);
+            }
+        }
+
+        private void ReleaseMapping()
+        {
             // Close the MemoryMappedFile and MemoryMappedViewAccessor
             if (View != null)
             {
@@ -363,6 +557,7 @@ namespace SharedMemory
             View = null;
             Mmf = null;
             _mapping = null;
+            _viewHandle = null;
         }
 
         /// <summary>
@@ -386,38 +581,114 @@ namespace SharedMemory
         protected virtual void Write<T>(ref T source, long bufferPosition = 0)
             where T : struct
         {
+            Enter();
+            try
+            {
+                WriteStructureLeased(ref source, bufferPosition);
+            }
+            finally
+            {
+                Exit();
+            }
+        }
+
+        /// <summary>
+        /// <see cref="Write{T}(ref T, long)"/> for a caller that already holds a lease on the mapping (<see cref="Enter"/>).
+        /// </summary>
+        internal void WriteStructureLeased<T>(ref T source, long bufferPosition)
+            where T : struct
+        {
 #if NET40Plus
             FastStructure<T>.StructureToPtr(ref source, StructureAt<T>(bufferPosition));
 #else
+            // This build's own view accessor checks the end, as it always has
+            CheckRange(bufferPosition, 0, "position");
             View.Write<T>(BufferOffset + bufferPosition, ref source);
 #endif
         }
 
 #if NET40Plus
         /// <summary>
-        /// The address of a <typeparamref name="T"/> at <paramref name="bufferPosition"/>, checked as the view accessor that
-        /// copied single structures up to version 2.3.3 checked it, with the same exceptions.
+        /// The address of a <typeparamref name="T"/> at <paramref name="bufferPosition"/>, checked under the name, and with the
+        /// exceptions, that the view accessor which copied single structures up to version 2.3.3 used.
         /// </summary>
         private IntPtr StructureAt<T>(long bufferPosition)
             where T : struct
         {
-#if NET10_0_OR_GREATER
-            long capacity = (View ?? _mappedView).Capacity;
-#else
-            long capacity = View.Capacity;
-#endif
-            long position = BufferOffset + bufferPosition;
-            if (position < 0)
-                throw new ArgumentOutOfRangeException("position", "Non-negative number required.");
-            if (position > capacity - FastStructure<T>.Size)
-            {
-                if (position >= capacity)
-                    throw new ArgumentOutOfRangeException("position", "The position may not be greater or equal to the capacity of the accessor.");
-                throw new ArgumentException("There are not enough bytes remaining in the buffer for a " + typeof(T).FullName + " at this position.", "position");
-            }
+            CheckRange(bufferPosition, FastStructure<T>.Size, "position");
             return new IntPtr(BufferStartPtr + bufferPosition);
         }
 #endif
+
+        /// <summary>
+        /// The one bounds check of every read and write: <paramref name="length"/> bytes from <paramref name="bufferPosition"/>
+        /// must lie within the buffer, the first <see cref="Limit"/> bytes from <see cref="BufferStartPtr"/>. A start outside the
+        /// buffer throws <see cref="ArgumentOutOfRangeException"/>; a start inside it with more bytes than remain throws
+        /// <see cref="ArgumentException"/>. Both name <paramref name="paramName"/>. A length of 0 checks the start alone.
+        /// </summary>
+        private void CheckRange(long bufferPosition, long length, string paramName)
+        {
+            long limit = Limit;
+            if (bufferPosition < 0 || bufferPosition >= limit)
+                throw new ArgumentOutOfRangeException(paramName, bufferPosition, "The position is outside the buffer, which holds " + limit + " bytes.");
+            // With the start inside the buffer, this subtraction cannot overflow
+            if (length > limit - bufferPosition)
+                throw new ArgumentException("There are not enough bytes remaining in the buffer for " + length + " bytes at position " + bufferPosition + ": the buffer holds " + limit + " bytes.", paramName);
+        }
+
+        /// <summary>
+        /// How many bytes from <see cref="BufferStartPtr"/> reads and writes may reach: <see cref="BufferSize"/>. An opener that read
+        /// the header before its owner had written the size there (#95) has no size, and mapped all of the shared memory instead:
+        /// it may reach the end of that mapping, as it always could. Where this build cannot tell how long that mapping is (the
+        /// .NET Framework 3.5 build's own views), it may reach nothing.
+        /// </summary>
+        private long Limit
+        {
+            get
+            {
+                if (BufferSize > 0)
+                    return BufferSize;
+                long mapped = 0;
+#if NET10_0_OR_GREATER
+                if (_mapping != null && _mapping.Memory != null)
+                    mapped = (long)_mapping.Memory.ByteLength;
+                else
+#endif
+#if NET40Plus
+                if (View != null)
+                    mapped = View.Capacity;
+#endif
+                return mapped - (BufferStartPtr - ViewPtr);
+            }
+        }
+
+        /// <summary>
+        /// The bytes that <paramref name="count"/> elements of <typeparamref name="T"/> take in the buffer, in a <see cref="long"/>,
+        /// where the product cannot overflow. It first makes the checks that FastStructure's array copies make on the array, in
+        /// the same order, so that a bad array is reported as it was before the buffer's own check.
+        /// </summary>
+        private static long ArrayLength<T>(T[] array, int index, int count)
+            where T : struct
+        {
+            if (array == null)
+                throw new ArgumentNullException("buffer");
+            if (count < 0)
+                throw new ArgumentOutOfRangeException("count");
+            if (index < 0)
+                throw new ArgumentOutOfRangeException("index");
+            if (array.Length - index < count)
+                throw new ArgumentException("Invalid offset into array specified by index and count");
+            return (long)count * FastStructure<T>.Size;
+        }
+
+        /// <summary>
+        /// Refuses a negative length for a pointer copy, which the buffer's check would let through to the copy.
+        /// </summary>
+        internal static void CheckLength(int length)
+        {
+            if (length < 0)
+                throw new ArgumentOutOfRangeException("length", length, "The number of bytes to copy cannot be negative.");
+        }
 
         /// <summary>
         /// Writes an array of <typeparamref name="T"/> into the buffer
@@ -441,7 +712,15 @@ namespace SharedMemory
         protected virtual void Write<T>(T[] source, int index, long bufferPosition = 0)
             where T : struct
         {
-            FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), source, index, source.Length - index);
+            Enter();
+            try
+            {
+                WriteArrayLeased(source, index, source.Length - index, bufferPosition);
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
@@ -455,6 +734,24 @@ namespace SharedMemory
         protected virtual void WriteArray<T>(T[] source, int index, int count, long bufferPosition = 0)
             where T : struct
         {
+            Enter();
+            try
+            {
+                WriteArrayLeased(source, index, count, bufferPosition);
+            }
+            finally
+            {
+                Exit();
+            }
+        }
+
+        /// <summary>
+        /// <see cref="WriteArray{T}(T[], int, int, long)"/> for a caller that already holds a lease on the mapping (<see cref="Enter"/>).
+        /// </summary>
+        internal void WriteArrayLeased<T>(T[] source, int index, int count, long bufferPosition)
+            where T : struct
+        {
+            CheckRange(bufferPosition, ArrayLength(source, index, count), "bufferPosition");
             FastStructure.WriteArray<T>((IntPtr)(BufferStartPtr + bufferPosition), source, index, count);
         }
 
@@ -466,6 +763,24 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to write to.</param>
         protected virtual void Write(IntPtr source, int length, long bufferPosition = 0)
         {
+            Enter();
+            try
+            {
+                WriteLeased(source, length, bufferPosition);
+            }
+            finally
+            {
+                Exit();
+            }
+        }
+
+        /// <summary>
+        /// <see cref="Write(IntPtr, int, long)"/> for a caller that already holds a lease on the mapping (<see cref="Enter"/>).
+        /// </summary>
+        internal void WriteLeased(IntPtr source, int length, long bufferPosition)
+        {
+            CheckLength(length);
+            CheckRange(bufferPosition, length, "bufferPosition");
 #if NETCORE
             Buffer.MemoryCopy((void*)source, BufferStartPtr + bufferPosition, BufferSize - bufferPosition, length);
 #else
@@ -478,9 +793,19 @@ namespace SharedMemory
         /// </summary>
         /// <param name="writeFunc">A function used to write to the buffer. The IntPtr parameter is a pointer to the buffer location offset by <paramref name="bufferPosition"/>.</param>
         /// <param name="bufferPosition">The offset within the buffer region to start writing to.</param>
+        /// <remarks>The pointer stays valid until <paramref name="writeFunc"/> returns, even if <see cref="Close"/> is called meanwhile.</remarks>
         protected virtual void Write(Action<IntPtr> writeFunc, long bufferPosition = 0)
         {
-            writeFunc(new IntPtr(BufferStartPtr + bufferPosition));
+            Enter();
+            try
+            {
+                CheckRange(bufferPosition, 0, "bufferPosition");
+                writeFunc(new IntPtr(BufferStartPtr + bufferPosition));
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         #endregion
@@ -496,9 +821,28 @@ namespace SharedMemory
         protected virtual void Read<T>(out T data, long bufferPosition = 0)
             where T : struct
         {
+            Enter();
+            try
+            {
+                ReadStructureLeased(out data, bufferPosition);
+            }
+            finally
+            {
+                Exit();
+            }
+        }
+
+        /// <summary>
+        /// <see cref="Read{T}(out T, long)"/> for a caller that already holds a lease on the mapping (<see cref="Enter"/>).
+        /// </summary>
+        internal void ReadStructureLeased<T>(out T data, long bufferPosition)
+            where T : struct
+        {
 #if NET40Plus
             data = FastStructure<T>.PtrToStructure(StructureAt<T>(bufferPosition));
 #else
+            // This build's own view accessor checks the end, as it always has
+            CheckRange(bufferPosition, 0, "position");
             View.Read<T>(BufferOffset + bufferPosition, out data);
 #endif
         }
@@ -512,7 +856,15 @@ namespace SharedMemory
         protected virtual void Read<T>(T[] destination, long bufferPosition = 0)
             where T : struct
         {
-            FastStructure.ReadArray<T>(destination, (IntPtr)(BufferStartPtr + bufferPosition), 0, destination.Length);
+            Enter();
+            try
+            {
+                ReadArrayLeased(destination, 0, destination.Length, bufferPosition);
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
@@ -526,6 +878,24 @@ namespace SharedMemory
         protected virtual void ReadArray<T>(T[] destination, int index, int count, long bufferPosition)
             where T : struct
         {
+            Enter();
+            try
+            {
+                ReadArrayLeased(destination, index, count, bufferPosition);
+            }
+            finally
+            {
+                Exit();
+            }
+        }
+
+        /// <summary>
+        /// <see cref="ReadArray{T}(T[], int, int, long)"/> for a caller that already holds a lease on the mapping (<see cref="Enter"/>).
+        /// </summary>
+        internal void ReadArrayLeased<T>(T[] destination, int index, int count, long bufferPosition)
+            where T : struct
+        {
+            CheckRange(bufferPosition, ArrayLength(destination, index, count), "bufferPosition");
             FastStructure.ReadArray<T>(destination, (IntPtr)(BufferStartPtr + bufferPosition), index, count);
         }
 
@@ -537,6 +907,24 @@ namespace SharedMemory
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
         protected virtual void Read(IntPtr destination, int length, long bufferPosition = 0)
         {
+            Enter();
+            try
+            {
+                ReadLeased(destination, length, bufferPosition);
+            }
+            finally
+            {
+                Exit();
+            }
+        }
+
+        /// <summary>
+        /// <see cref="Read(IntPtr, int, long)"/> for a caller that already holds a lease on the mapping (<see cref="Enter"/>).
+        /// </summary>
+        internal void ReadLeased(IntPtr destination, int length, long bufferPosition)
+        {
+            CheckLength(length);
+            CheckRange(bufferPosition, length, "bufferPosition");
 #if NETCORE
             Buffer.MemoryCopy(BufferStartPtr + bufferPosition, (void*)destination, length, length);
 #else
@@ -549,9 +937,19 @@ namespace SharedMemory
         /// </summary>
         /// <param name="readFunc">A function used to read from the buffer. The IntPtr parameter is a pointer to the buffer offset by <paramref name="bufferPosition"/>.</param>
         /// <param name="bufferPosition">The offset within the buffer region of the shared memory to read from.</param>
+        /// <remarks>The pointer stays valid until <paramref name="readFunc"/> returns, even if <see cref="Close"/> is called meanwhile.</remarks>
         protected virtual void Read(Action<IntPtr> readFunc, long bufferPosition = 0)
         {
-            readFunc(new IntPtr(BufferStartPtr + bufferPosition));
+            Enter();
+            try
+            {
+                CheckRange(bufferPosition, 0, "bufferPosition");
+                readFunc(new IntPtr(BufferStartPtr + bufferPosition));
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         #endregion
@@ -570,13 +968,45 @@ namespace SharedMemory
         /// <summary>
         /// IDisposable pattern - dispose of managed/unmanaged resources
         /// </summary>
-        /// <param name="disposeManagedResources">true to dispose of managed resources as well as unmanaged.</param>
+        /// <param name="disposeManagedResources">true to dispose of managed resources as well as unmanaged, which calls <see cref="Close"/>.
+        /// false from the finaliser of an instance nobody closed, which only lets the memory go once the garbage collector has finalised
+        /// its handles: it writes nothing to the shared memory, so other processes see no change, and <see cref="ShuttingDown"/> stays as it was.</param>
         protected virtual void Dispose(bool disposeManagedResources)
         {
             if (disposeManagedResources)
             {
                 this.Close();
             }
+            else
+            {
+                ReleaseMappingPointer();
+            }
+        }
+
+        /// <summary>
+        /// The finaliser's part, for an instance nobody closed: gives up the pointer that <see cref="Open"/> took into the mapping, so
+        /// that the mapping's own finaliser can release it. Nothing else is touched: no header write, no <see cref="ShuttingDown"/>, no
+        /// <see cref="DoClose"/>, and the view, the file and any events are left to their own finalisers. Never throws.
+        /// </summary>
+        private void ReleaseMappingPointer()
+        {
+            // Only a mapped instance with no call running holds the pointer; taking it to Unmapped means nothing releases it again
+            if (Interlocked.CompareExchange(ref _leases, Unmapped, Opened) != Opened)
+                return;
+            try
+            {
+                if (_viewHandle != null)
+                    _viewHandle.ReleasePointer();
+                else if (_mapping != null)
+                    _mapping.ReleasePointer();
+            }
+            catch (Exception)
+            {
+                // A finaliser must not throw; at worst the mapping stays, as it did before
+            }
+            Header = null;
+            ViewPtr = null;
+            BufferStartPtr = null;
         }
 
         #endregion
@@ -601,7 +1031,7 @@ namespace SharedMemory
                 // Open an existing shared memory mapping, a whole number of pages, and size the buffer from its header
                 _mapping = NamedMapping.OpenExisting(Name);
                 ViewPtr = _mapping.Pointer;
-                BufferSize = ((SharedHeader*)(ViewPtr + HeaderOffset))->SharedMemorySize - Marshal.SizeOf(typeof(SharedHeader));
+                BufferSize = WaitForSharedMemorySize((SharedHeader*)(ViewPtr + HeaderOffset)) - Marshal.SizeOf(typeof(SharedHeader));
                 BufferStartPtr = ViewPtr + HeaderOffset + Marshal.SizeOf(typeof(SharedHeader));
             }
             _mappedView = new System.IO.UnmanagedMemoryAccessor(_mapping.Memory, 0, SharedMemorySize, System.IO.FileAccess.ReadWrite);
