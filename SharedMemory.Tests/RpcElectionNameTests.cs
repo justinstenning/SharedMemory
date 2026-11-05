@@ -8,8 +8,8 @@ namespace SharedMemoryTests
 {
     /// <summary>
     /// RpcBuffer channels whose names differ only in case, and channels with long names, each elect one owner of their own,
-    /// on every OS. On macOS .NET keeps its named mutexes on a volume that folds case, where the channels TEST and test would
-    /// otherwise share one election while their buffers are separate. An owner disposed on another thread leaves the
+    /// on every OS. On macOS the election's lock file is on a volume that folds case, where the channels TEST and test would
+    /// share one election without the hash every lock file name ends with. An owner disposed on another thread leaves the
     /// channel to the next RpcBuffer.
     /// </summary>
     [TestClass]
@@ -39,8 +39,8 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// 210 characters: within Windows' limit for the channel's longest object name (its events', 39 characters more), past
-        /// what fits before the macOS election mutex's suffix in .NET's 255 bytes.
+        /// 210 characters: within Windows' limit for the channel's longest object name (its events', 39 characters more), and
+        /// long enough that the election's lock file name on macOS is cut and hashed, as a long buffer's is.
         /// </summary>
         [TestMethod]
         public void LongChannelName_OneOwnerOneOpener()
@@ -57,8 +57,8 @@ namespace SharedMemoryTests
 
         /// <summary>
         /// An owner disposed on a thread other than the one that made it leaves the channel to the next RpcBuffer. On Linux
-        /// and macOS a named mutex its thread holds keeps its name until that thread lets it go, even once another thread has
-        /// closed it, so there the election mutex is made without being taken.
+        /// and macOS the election file belongs to the process, not to the thread that made it, so any thread's Dispose lets
+        /// it go.
         /// </summary>
         [TestMethod]
         public void OwnerDisposedOnAnotherThread_NextIsOwner()

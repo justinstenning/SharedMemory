@@ -169,6 +169,20 @@ namespace SharedMemory
         [SupportedOSPlatform("linux")]
         internal static LinuxSharedFile Create(string name, long size)
         {
+            LinuxSharedFile created = TryCreate(name, size);
+            if (created == null)
+                throw new IOException("The shared memory name '" + name + "' is already in use (" + Folder + UnixFiles.FileName(name, GetEffectiveUserId()) + ").");
+            return created;
+        }
+
+        /// <summary>
+        /// Creates the file for <paramref name="name"/>, <paramref name="size"/> bytes of zeros, or returns null if the name is in use.
+        /// </summary>
+        /// <exception cref="IOException">/dev/shm has no room for the file.</exception>
+        /// <exception cref="UnauthorizedAccessException">A file under the name belongs to another user or is not private to this one.</exception>
+        [SupportedOSPlatform("linux")]
+        internal static LinuxSharedFile TryCreate(string name, long size)
+        {
             uint uid = GetEffectiveUserId();
             string path = Folder + UnixFiles.FileName(name, uid);
             bool perUser = !UnixFiles.IsGlobal(name);
@@ -208,7 +222,8 @@ namespace SharedMemory
                         {
                             // In use. Let go of it as any holder does, which removes it if its holders closed meanwhile.
                             CloseStep(existing, path, status);
-                            throw new IOException("The shared memory name '" + name + "' is already in use (" + path + ").");
+                            handle.Dispose();
+                            return null;
                         }
                     }
                 }

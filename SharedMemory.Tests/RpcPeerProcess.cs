@@ -1,6 +1,7 @@
 #if NET
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -43,9 +44,10 @@ namespace SharedMemoryTests
 
         /// <summary>
         /// Starts the peer, in a session of its own if <paramref name="ownSession"/> is set and this is Linux or macOS, and checks
-        /// that it loaded the same SharedMemory.dll as the tests.
+        /// that it loaded the same SharedMemory.dll as the tests. <paramref name="environment"/>, when given, changes the peer's
+        /// environment: each variable in it is set to its value, or removed when the value is null.
         /// </summary>
-        public static RpcPeerProcess Start(bool ownSession)
+        public static RpcPeerProcess Start(bool ownSession, IDictionary<string, string> environment = null)
         {
             string folder = Path.Combine(Path.GetDirectoryName(typeof(RpcPeerProcess).Assembly.Location), "rpcpeer");
             // The dotnet host of the runtime running the tests, so that the peer runs on it too
@@ -64,6 +66,16 @@ namespace SharedMemoryTests
                 CreateNoWindow = true,
                 WorkingDirectory = folder,
             };
+            if (environment != null)
+            {
+                foreach (KeyValuePair<string, string> change in environment)
+                {
+                    if (change.Value == null)
+                        start.Environment.Remove(change.Key);
+                    else
+                        start.Environment[change.Key] = change.Value;
+                }
+            }
             if (perl)
             {
                 start.ArgumentList.Add("-MPOSIX");

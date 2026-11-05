@@ -276,15 +276,12 @@ namespace SharedMemoryTests
             string failed;
 
             // An owner that holds the role and has created only the first ring an opener opens
-            bool createdNew;
-            using (var role = CreateOwnerMutex(name + "SharedMemory_OwnerMutex", out createdNew))
+            using (HoldOwnerRole(name + "SharedMemory_OwnerMutex"))
             {
-                Assert.IsTrue(createdNew, "the owner mutex already existed");
                 using (new CircularBuffer(name + "_Opener_SharedMemory_MMF", 2, Capacity))
                 {
                     failed = Throws(() => new RpcBuffer(name));
                 }
-                role.ReleaseMutex();
             }
 
             // An owner started afterwards, with no garbage collection, can create the rings
@@ -310,17 +307,43 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// The owner's mutex, taken: on Windows as RpcBuffer takes it, and on Linux and macOS with the name and options of the
-        /// net10.0 build's election mutex there (RpcBuffer.CreateUnixElectionMutex), so that an RpcBuffer finds the role held.
+        /// Holds the owner's role on a channel until disposed, so that an RpcBuffer finds it taken: on Windows the election mutex,
+        /// taken as RpcBuffer takes it; on Linux and macOS a buffer under the election file's name, since RpcBuffer creates that
+        /// file as a buffer's file is created.
         /// </summary>
-        static Mutex CreateOwnerMutex(string mutexName, out bool createdNew)
+        static IDisposable HoldOwnerRole(string electionName)
         {
 #if NET
             if (!OperatingSystem.IsWindows())
-                return new Mutex(true, OperatingSystem.IsMacOS() ? UnixFiles.ElectionMutexName(mutexName) : mutexName,
-                    new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false }, out createdNew);
+                return new EventFreeBuffer(electionName, 1);
 #endif
-            return new Mutex(true, mutexName, out createdNew);
+            bool createdNew;
+            var mutex = new Mutex(true, electionName, out createdNew);
+            if (!createdNew)
+            {
+                mutex.Dispose();
+                Assert.Fail("the owner mutex already existed");
+            }
+            return new TakenMutex(mutex);
+        }
+
+        /// <summary>
+        /// A mutex this thread has taken, released and closed when disposed.
+        /// </summary>
+        sealed class TakenMutex : IDisposable
+        {
+            readonly Mutex mutex;
+
+            public TakenMutex(Mutex mutex)
+            {
+                this.mutex = mutex;
+            }
+
+            public void Dispose()
+            {
+                mutex.ReleaseMutex();
+                mutex.Dispose();
+            }
         }
 
         static string Throws(Action action)

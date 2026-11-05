@@ -348,48 +348,34 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// The election mutex on macOS: the name RpcBuffer passes elsewhere, <c>~</c>, and 26 base32 characters of its SHA-256,
-        /// <c>Global\</c> included, for three names, the hashes computed apart from the library.
+        /// An RpcBuffer channel's election file on Linux and macOS: the file and the lock file of the channel's name with
+        /// <c>SharedMemory_OwnerMutex</c> after it, the name its mutex has on Windows, under the rules every buffer's name
+        /// follows. TEST and test are two files on Linux and differ in their hash on macOS, and Global\ is the machine's.
+        /// The expected names were computed apart from the library.
         /// </summary>
         [TestMethod]
-        [DataRow("TESTSharedMemory_OwnerMutex", "TESTSharedMemory_OwnerMutex~VJ33EFFCK7FMRAC3V7PKAIYOC2")]
-        [DataRow("testSharedMemory_OwnerMutex", "testSharedMemory_OwnerMutex~AK63F5L5DXQPR5E5OSLEIUYK4T")]
-        [DataRow("Global\\TESTSharedMemory_OwnerMutex", "Global\\TESTSharedMemory_OwnerMutex~2VVGWP45DNYMQPQM6Z3O2URB67")]
-        public void ElectionMutexName_TheNameThenItsHash(string mutexName, string expected)
+        [DataRow("TEST", "SharedMemory.u1000.TESTSharedMemory_OwnerMutex", "/var/tmp/.SharedMemory-uid502/TESTSharedMemory_OwnerMutex~VJ33EFFCK7FMRAC3V7PKAIYOC2")]
+        [DataRow("test", "SharedMemory.u1000.testSharedMemory_OwnerMutex", "/var/tmp/.SharedMemory-uid502/testSharedMemory_OwnerMutex~AK63F5L5DXQPR5E5OSLEIUYK4T")]
+        [DataRow("Global\\TEST", "SharedMemory.global.TESTSharedMemory_OwnerMutex", "/var/tmp/.SharedMemory-global/TESTSharedMemory_OwnerMutex~VJ33EFFCK7FMRAC3V7PKAIYOC2")]
+        public void ElectionFileName_TheChannelsNameWithTheElectionSuffix(string channel, string linuxFile, string macLockFile)
         {
-            Assert.AreEqual(expected, UnixFiles.ElectionMutexName(mutexName));
+            string election = channel + "SharedMemory_OwnerMutex";
+            Assert.AreEqual(linuxFile, UnixFiles.FileName(election, Uid));
+            Assert.AreEqual(macLockFile, UnixFiles.LockFolder(election, MacUid) + UnixFiles.LockFileName(election));
         }
 
         /// <summary>
-        /// .NET takes 255 UTF-8 bytes after a <c>Global\</c>, so 228 before the suffix. A longer name keeps its first 200
-        /// bytes, cut back to the start of a character, before the suffix; the hash is still of the whole name.
+        /// A channel whose election file name passes 255 bytes on Linux has it cut and hashed as a buffer's is: the first
+        /// 200 bytes of the file name, then <c>~</c> and the hash of the whole. On macOS the escaped name keeps its first 200
+        /// bytes before the hash.
         /// </summary>
         [TestMethod]
-        public void ElectionMutexName_228Bytes_KeptWhole()
+        public void ElectionFileName_PastTheLimit_IsCutAndHashedAsABuffersIs()
         {
-            string mutexName = new string('k', 205) + "SharedMemory_OwnerMutex";
-            Assert.AreEqual(mutexName + "~7XOJONQADRBFMAJ4BUSJAE6DQK", UnixFiles.ElectionMutexName(mutexName));
-        }
-
-        [TestMethod]
-        public void ElectionMutexName_229Bytes_KeepsTheFirst200()
-        {
-            string mutexName = new string('k', 206) + "SharedMemory_OwnerMutex";
-            Assert.AreEqual(new string('k', 200) + "~S4ZZW3JAFTUYFX6SGZMUZOM3SZ", UnixFiles.ElectionMutexName(mutexName));
-        }
-
-        [TestMethod]
-        public void ElectionMutexName_CutThroughACharacter_CutsBackToItsStart()
-        {
-            string mutexName = "a" + new string('\u00E9', 120) + "SharedMemory_OwnerMutex";
-            Assert.AreEqual("a" + new string('\u00E9', 99) + "~2PWMGRLF55B7KMPKMEYWLSMZ5Z", UnixFiles.ElectionMutexName(mutexName));
-        }
-
-        [TestMethod]
-        public void ElectionMutexName_LongGlobalName_KeepsThePrefixAnd200BytesAfterIt()
-        {
-            string mutexName = "Global\\" + new string('g', 230) + "SharedMemory_OwnerMutex";
-            Assert.AreEqual("Global\\" + new string('g', 200) + "~VCF5ECESAODNTBRBS4WAQKPIME", UnixFiles.ElectionMutexName(mutexName));
+            string election = new string('k', 220) + "SharedMemory_OwnerMutex";
+            Assert.AreEqual("SharedMemory.u1000." + new string('k', 181) + "~QY32P6T3T6Q7W2JPQIT6V3IZR4", UnixFiles.FileName(election, Uid));
+            Assert.AreEqual("/var/tmp/.SharedMemory-uid502/" + new string('k', 200) + "~D2IPKYW2BKLJKUWLIESPIIQ2TU",
+                UnixFiles.LockFolder(election, MacUid) + UnixFiles.LockFileName(election));
         }
     }
 }
