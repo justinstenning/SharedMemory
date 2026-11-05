@@ -47,6 +47,8 @@ On Linux and macOS, a name with no prefix, or with `Local\`, belongs to your use
 
 A `Global\` name is one name for the whole machine, as on Windows, but for now only the user who created a buffer can read or write it. Processes running as different users can't share memory through it, so on Linux and macOS a `Global\` name works like an unprefixed one, except that while you hold it, another user who tries to use the name gets an exception. It's there so that code written for Windows runs unchanged.
 
+`RpcBuffer` channels follow these rules too. The two ends of a channel find each other from any terminal or session, whichever .NET 10 version each one runs on.
+
 ### Where the memory lives
 
 On Linux, each buffer is a file in `/dev/shm`, so `ls /dev/shm` shows you what's in use. A name becomes `SharedMemory.u{uid}.{name}`, or `SharedMemory.global.{name}` for a `Global\` name, and only you can read or write the file (mode 0600). The events a buffer uses are small 64-byte files next to it, named as Windows names them: `{name}_evt_write`, `{name}_evt_read`, `{name}_evt_dataexists` and `{name}_evt_nodeavail`. The library escapes names to make valid file names (`a/b%c` becomes `a%2Fb%25c`), and shortens a very long name, adding a hash.
@@ -54,6 +56,8 @@ On Linux, each buffer is a file in `/dev/shm`, so `ls /dev/shm` shows you what's
 The library reserves a buffer's full size when it creates it, so if `/dev/shm` doesn't have room you get an `IOException` straight away, rather than a crash part-way through a write later on.
 
 On macOS, each buffer and event is a POSIX shared memory object (`shm_open`). macOS has no way to list those, so the library keeps a small lock file for each one, in `/var/tmp/.SharedMemory-uid{uid}/` for your own names and in `/var/tmp/.SharedMemory-global/` for `Global\` names. A lock file is named after its buffer, followed by `~` and a hash. The hash is there because the macOS file system ignores case. Without it, `TEST` and `test` would collide, though on Windows and Linux they're two different buffers.
+
+An `RpcBuffer` channel uses seven of these names. Its two buffers, `{name}_Owner_SharedMemory_MMF` and `{name}_Opener_SharedMemory_MMF`, have two events each. Only the channel's owner holds the seventh, `{name}SharedMemory_OwnerMutex`, and while it does, the next `RpcBuffer` on the channel becomes the opener. On Linux that one is an empty file, `SharedMemory.u{uid}.{name}SharedMemory_OwnerMutex`. On macOS each of the seven has a lock file, as any buffer does.
 
 ### When a process ends
 
@@ -81,6 +85,8 @@ If your app can be stopped with SIGTERM or Ctrl+C, catch those signals and retur
     {
         // work with the buffer
     }
+
+If an `RpcBuffer` channel's owner is killed, the next `RpcBuffer` you create on the channel becomes its owner straight away. If the old opener is still open, though, it still holds the channel's buffers, and every new `RpcBuffer` on the channel throws `IOException` until that opener is disposed or its process ends.
 
 ### When users log out
 
