@@ -602,6 +602,10 @@ namespace SharedMemory
 
         private Mutex electionMutex;
         private Mutex previousElectionMutex;
+#if NET10_0_OR_GREATER
+        // On Linux and macOS the owner holds the channel's election file instead of a mutex
+        private IDisposable electionFile;
+#endif
         private long _disposed = 0;
 
         /// <summary>
@@ -838,15 +842,15 @@ namespace SharedMemory
                 .DeclaringType != typeof(RpcBuffer);
 
 #if NET10_0_OR_GREATER
-            // On Unix a named mutex that a thread holds keeps its name until that thread releases it or ends, even once every handle has
-            // been closed, and Dispose can close the owner's on its read thread. Which instance creates the mutex is all the election
-            // needs, so there the owner creates it without taking it.
+            // On Linux and macOS the owner is the instance that creates the channel's election file, as a buffer's file is created.
+            // .NET keeps a named mutex there in a folder that depends on its patch and the process's environment, which the two
+            // ends of a channel need not share.
             bool takeMutex = OperatingSystem.IsWindows();
             bool createdNew;
             if (takeMutex)
                 electionMutex = new Mutex(true, name + ElectionMutexSuffix, out createdNew);
             else
-                electionMutex = CreateUnixElectionMutex(name + ElectionMutexSuffix, out createdNew);
+                createdNew = CreateUnixElectionFile(name + ElectionMutexSuffix);
 
             if (createdNew && (!takeMutex || electionMutex.WaitOne(500)))
 #else
@@ -918,6 +922,9 @@ namespace SharedMemory
                 // 2.3's name before the election mutex, as in Dispose
                 previousElectionMutex?.Close();
                 electionMutex?.Close();
+#if NET10_0_OR_GREATER
+                electionFile?.Dispose();
+#endif
                 throw;
             }
 
@@ -1763,6 +1770,14 @@ namespace SharedMemory
                     electionMutex.Dispose();
                     electionMutex = null;
                 }
+#if NET10_0_OR_GREATER
+                // On Linux and macOS the election file, after the buffers, as the mutex on Windows
+                if (electionFile != null)
+                {
+                    electionFile.Dispose();
+                    electionFile = null;
+                }
+#endif
 
                 // Mark as DisposeFinished
                 Interlocked.Exchange(ref _disposed, 2);
@@ -1781,30 +1796,42 @@ namespace SharedMemory
 
 #if NET10_0_OR_GREATER
         /// <summary>
-        /// Creates or opens the election mutex on Unix, unowned, with the scope of the channel's buffers: one user's processes in every POSIX
-        /// session for a name without a prefix or with <c>Local\</c>, every process on the machine for a <c>Global\</c> name.
+        /// The election on Linux and macOS: creates the channel's election file, <paramref name="electionName"/>, as a buffer's file is created,
+        /// and holds it if this instance published it.
         /// </summary>
+        /// <returns>True if this instance published the file and is the owner; false if another instance holds it, and this one is the opener.</returns>
         /// <remarks>
-        /// <para>Without options .NET gives a named mutex on Unix one POSIX session's scope, and every terminal is its own session, so two
-        /// programs started from two terminals would both become owners. <c>Local\</c> is dropped because .NET refuses it beside
-        /// <c>CurrentSessionOnly = false</c>; the buffers' files treat <c>Local\X</c> and <c>X</c> as one name too.</para>
-        /// <para>A <c>Global\</c> name is not given <c>CurrentUserOnly</c>: .NET would then make <c>Global\X</c> the same mutex as <c>X</c>,
-        /// whose buffers are other files, and an RpcBuffer on one would open the other's channel instead of owning its own.</para>
-        /// <para>On macOS the name ends with a hash of itself (<see cref="UnixFiles.ElectionMutexName"/>): .NET's mutex files there are on a volume that
-        /// folds case, where <c>TEST</c> and <c>test</c> would share one election, while their buffers are separate.</para>
+        /// <para>The file is the one a buffer named <paramref name="electionName"/> would have: in /dev/shm on Linux, of 0 bytes, and on macOS a lock
+        /// file under /var/tmp naming an object of 1 byte, since an object of 0 bytes cannot be mapped there. So the election follows the buffers'
+        /// rules: <c>Local\X</c> and <c>X</c> are one channel, <c>Global\X</c> is the machine's, names that differ only in case are two channels,
+        /// a long name is cut and hashed, and a file that nobody holds, left by an owner that was killed, is replaced. Nothing in it depends on the
+        /// .NET runtime or on the process's environment, so the two ends of a channel find each other whatever their .NET 10 patch,
+        /// <c>XDG_RUNTIME_DIR</c> or <c>TMPDIR</c>.</para>
+        /// <para>Only the owner holds the file: <see cref="Dispose()"/> closes it after the buffers, or else its finaliser or the process's normal
+        /// exit does. An opener lets go of it at once, as an opener on Windows closes its handle on the election mutex. The file belongs to the
+        /// process rather than to a thread, so an owner disposed on any thread leaves the channel to the next RpcBuffer.</para>
         /// </remarks>
-        static Mutex CreateUnixElectionMutex(string mutexName, out bool createdNew)
+        bool CreateUnixElectionFile(string electionName)
         {
-            const string LocalScope = "Local\\";
-            bool global = mutexName.StartsWith("Global\\", StringComparison.Ordinal);
-            // Only Local\X with no other backslash: Local\Global\X would become X's mutex, while its buffers are other files. Kept whole, it is
-            // refused by .NET, as a backslash after the prefix is on Windows.
-            if (mutexName.StartsWith(LocalScope, StringComparison.Ordinal) && mutexName.IndexOf('\\', LocalScope.Length) < 0)
-                mutexName = mutexName.Substring(LocalScope.Length);
-            if (OperatingSystem.IsMacOS())
-                mutexName = UnixFiles.ElectionMutexName(mutexName);
-            var options = new NamedWaitHandleOptions { CurrentUserOnly = !global, CurrentSessionOnly = false };
-            return new Mutex(false, mutexName, options, out createdNew);
+            if (LinuxSharedFile.IsSupported)
+            {
+                LinuxSharedFile linuxFile = LinuxSharedFile.TryCreate(electionName, 0);
+                if (linuxFile == null)
+                    return false;
+                linuxFile.CloseAtExit();
+                electionFile = linuxFile;
+                return true;
+            }
+            if (MacSharedObject.IsSupported)
+            {
+                MacSharedObject macObject = MacSharedObject.TryCreate(electionName, 1);
+                if (macObject == null)
+                    return false;
+                macObject.CloseAtExit();
+                electionFile = macObject;
+                return true;
+            }
+            throw PlatformSupport.NotSupported("named shared memory");
         }
 #endif
     }

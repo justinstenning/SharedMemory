@@ -172,6 +172,20 @@ namespace SharedMemory
         [SupportedOSPlatform("macos")]
         internal static MacSharedObject Create(string name, long size)
         {
+            MacSharedObject created = TryCreate(name, size);
+            if (created == null)
+                throw new IOException("The shared memory name '" + name + "' is already in use (" + UnixFiles.LockFolder(name, GetEffectiveUserId()) + UnixFiles.LockFileName(name) + ").");
+            return created;
+        }
+
+        /// <summary>
+        /// Creates the object for <paramref name="name"/>, <paramref name="size"/> bytes of zeros, and its lock file, or returns null if the name is in use.
+        /// </summary>
+        /// <exception cref="IOException">There is no memory for the object.</exception>
+        /// <exception cref="UnauthorizedAccessException">The lock folder or a lock file under the name is not private to this user.</exception>
+        [SupportedOSPlatform("macos")]
+        internal static MacSharedObject TryCreate(string name, long size)
+        {
             uint uid = GetEffectiveUserId();
             bool perUser = !UnixFiles.IsGlobal(name);
             string folder = Folder(name, uid, perUser, true);
@@ -216,7 +230,10 @@ namespace SharedMemory
                         {
                             // In use. Let go of it as any holder does, which removes it if its holders closed meanwhile.
                             CloseStep(existing, path, status, existingObject);
-                            throw new IOException("The shared memory name '" + name + "' is already in use (" + path + ").");
+                            memory.Dispose();
+                            ShmUnlink(objectName);
+                            handle.Dispose();
+                            return null;
                         }
                     }
                 }
