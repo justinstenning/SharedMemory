@@ -1,5 +1,6 @@
 #if NET && HAS_RPC_BUFFER
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.Versioning;
@@ -11,8 +12,9 @@ namespace SharedMemoryTests
     /// <summary>
     /// RpcBuffer between two processes: one owner and one opener per channel, calls answered both ways, and a channel
     /// started again after its owner was killed. On Linux and macOS the other process runs in a POSIX session of its own,
-    /// as a program started from another terminal does, and the tests also cover Global\ names and what a process that ends
-    /// while it holds a channel leaves: files in /dev/shm on Linux, lock files and the objects they name on macOS.
+    /// as a program started from another terminal does, and the tests also cover a peer whose environment differs where
+    /// .NET's own named objects would follow it, Global\ names, and what a process that ends while it holds a channel
+    /// leaves: files in /dev/shm on Linux, lock files and the objects they name on macOS.
     /// </summary>
     [TestClass]
     public class RpcBufferAcrossProcessesTests
@@ -63,10 +65,9 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// On Linux a killed process's lock on the election mutex's file can outlast the process by some tens of milliseconds, until
-        /// the kernel has torn down its mappings (about 25 ms when measured). An RpcBuffer made meanwhile becomes an opener and finds the
-        /// dead owner's buffers abandoned (FileNotFoundException), so the test tries again for up to 5 s and prints how long it took.
-        /// Windows closes the dead owner's handles before its process counts as ended.
+        /// A killed owner's channel goes to the next RpcBuffer at once: one made as soon as the owner's process has ended is the
+        /// owner, at its first attempt, and a new peer opens the channel and is answered. By then Windows has closed the dead
+        /// owner's handles, and Linux and macOS have let go of its locks.
         /// </summary>
         [TestMethod]
         public void OwnerKilled_NextRpcBufferBecomesOwnerAndIsAnswered()
@@ -78,24 +79,7 @@ namespace SharedMemoryTests
                 peer.Kill();
             }
 
-            var watch = System.Diagnostics.Stopwatch.StartNew();
-            int attempts = 0;
-            RpcEndpoint created = null;
-            while (created == null)
-            {
-                attempts++;
-                try
-                {
-                    created = new RpcEndpoint(name, Increment);
-                }
-                catch (FileNotFoundException) when (watch.ElapsedMilliseconds < 5000)
-                {
-                    System.Threading.Thread.Sleep(10);
-                }
-            }
-            Console.WriteLine("An RpcBuffer was made on the channel " + watch.ElapsedMilliseconds + " ms after the owner's process ended, at attempt " + attempts + ".");
-
-            using (var owner = created)
+            using (var owner = new RpcEndpoint(name, Increment))
             using (var peer = StartPeerInOwnSession())
             {
                 Assert.IsTrue(owner.IsChannelOwner, "Once the owner's process has died, the next RpcBuffer on the channel is its owner.");
@@ -103,6 +87,70 @@ namespace SharedMemoryTests
                 CallsAnsweredBothWays(owner, peer);
                 peer.Ok("close");
                 peer.Exit();
+            }
+        }
+
+        /// <summary>
+        /// A killed owner's opener still holds the channel's buffers. The next RpcBuffer on the channel becomes its owner and
+        /// cannot create them, so it throws IOException rather than joining the opener as a second opener of a channel
+        /// nobody answers.
+        /// </summary>
+        [TestMethod]
+        public void OwnerKilled_OpenerStillHolds_NextRpcBufferThrowsIOException()
+        {
+            string name = NewName();
+            using (var owner = StartPeerInOwnSession())
+            using (var opener = StartPeerInOwnSession())
+            {
+                Assert.AreEqual("owner", owner.Ok("open " + name));
+                Assert.AreEqual("opener", opener.Ok("open " + name));
+                owner.Kill();
+
+                IOException thrown = Assert.ThrowsExactly<IOException>(() => new RpcEndpoint(name, Increment));
+                Console.WriteLine(thrown.Message);
+                opener.Ok("close");
+                opener.Exit();
+            }
+        }
+
+        /// <summary>
+        /// On Linux .NET keeps its named mutexes under XDG_RUNTIME_DIR from 10.0.13, and elsewhere when it is unset. A peer
+        /// started without it, as a service or a cron job may be, still finds the channel: one owner and one opener, whichever
+        /// starts first, and calls answered both ways.
+        /// </summary>
+        [TestMethod]
+        [OSCondition(OperatingSystems.Linux)]
+        [DataRow("peer first")]
+        [DataRow("this process first")]
+        public void PeerWithoutXdgRuntimeDir_OneOwnerOneOpener(string order)
+        {
+            Console.WriteLine("This process runs on .NET " + Environment.Version + " with XDG_RUNTIME_DIR " +
+                (Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") ?? "unset") + "; the peer starts from the same dotnet host without it.");
+            OneOwnerOneOpener(order == "peer first", new Dictionary<string, string> { { "XDG_RUNTIME_DIR", null } });
+        }
+
+        /// <summary>
+        /// On macOS .NET keeps its named mutexes under the process's TMPDIR. A peer started with another TMPDIR still finds
+        /// the channel: one owner and one opener, whichever starts first, and calls answered both ways.
+        /// </summary>
+        [TestMethod]
+        [OSCondition(OperatingSystems.OSX)]
+        [DataRow("peer first")]
+        [DataRow("this process first")]
+        public void PeerWithAnotherTmpdir_OneOwnerOneOpener(string order)
+        {
+            // Short, as .NET's diagnostics socket in it must fit a socket path
+            string tmpdir = "/tmp/RpcTmpdir" + Guid.NewGuid().ToString("N").Substring(0, 12);
+            Directory.CreateDirectory(tmpdir);
+            try
+            {
+                Console.WriteLine("This process runs on .NET " + Environment.Version + " with TMPDIR " +
+                    (Environment.GetEnvironmentVariable("TMPDIR") ?? "unset") + "; the peer starts from the same dotnet host with TMPDIR " + tmpdir + ".");
+                OneOwnerOneOpener(order == "peer first", new Dictionary<string, string> { { "TMPDIR", tmpdir } });
+            }
+            finally
+            {
+                Directory.Delete(tmpdir, true);
             }
         }
 
@@ -140,23 +188,36 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
-        /// Local\Global\X names a per-user buffer whose name holds a backslash, not X's or Global\X's. With Local\ dropped its
-        /// election would be Global\X's, which .NET folds into X's for one user, so it is refused instead, as Windows refuses a
-        /// backslash after the prefix. X's channel goes on electing as before.
+        /// Local\Global\X names a per-user buffer whose name holds a backslash, not X's or Global\X's, and so a channel of its
+        /// own, as its buffers are: X, Global\X and Local\Global\X each have an owner, and a second RpcBuffer on each is that
+        /// channel's opener.
         /// </summary>
         [TestMethod]
         [OSCondition(OperatingSystems.Linux | OperatingSystems.OSX)]
-        public void LocalPrefixFollowedByGlobal_IsRefused()
+        public void LocalPrefixFollowedByGlobal_IsAChannelOfItsOwn()
         {
             string name = NewName();
-            using (var owner = new RpcEndpoint(name, Increment))
+            string[] names = { name, "Global\\" + name, "Local\\Global\\" + name };
+            var owners = new List<RpcEndpoint>();
+            var openers = new List<RpcEndpoint>();
+            try
             {
-                Assert.ThrowsExactly<ArgumentException>(() => new RpcEndpoint("Local\\Global\\" + name, Increment));
-                using (var opener = new RpcEndpoint(name, Increment))
+                foreach (string channel in names)
+                    owners.Add(new RpcEndpoint(channel, Increment));
+                foreach (string channel in names)
+                    openers.Add(new RpcEndpoint(channel, Increment));
+                for (int i = 0; i < names.Length; i++)
                 {
-                    Assert.IsTrue(owner.IsChannelOwner);
-                    Assert.IsFalse(opener.IsChannelOwner, name + " still has one owner.");
+                    Assert.IsTrue(owners[i].IsChannelOwner, names[i] + " has an owner of its own.");
+                    Assert.IsFalse(openers[i].IsChannelOwner, "A second RpcBuffer on " + names[i] + " is its opener.");
                 }
+            }
+            finally
+            {
+                foreach (RpcEndpoint endpoint in openers)
+                    endpoint.Dispose();
+                foreach (RpcEndpoint endpoint in owners)
+                    endpoint.Dispose();
             }
         }
 
@@ -179,7 +240,7 @@ namespace SharedMemoryTests
             using (var peer = RpcPeerProcess.Start(ownSession: false))
             {
                 peer.Ok("pair " + name);
-                Assert.AreEqual(6, FilesOf(name).Length, "While the peer holds the channel: its two buffers and their four event files. " + string.Join(", ", FilesOf(name)));
+                Assert.AreEqual(7, FilesOf(name).Length, "While the peer holds the channel: its election file, its two buffers and their four event files. " + string.Join(", ", FilesOf(name)));
                 if (OperatingSystem.IsMacOS())
                     objects = FilesOf(name).Select(UnixBufferTests.Files.ObjectNamedBy).ToArray();
                 if (ending == "dispose, then exit")
@@ -199,17 +260,50 @@ namespace SharedMemoryTests
                 "This process answered the other process's call.");
         }
 
+        /// <summary>
+        /// One owner and one opener, the peer started with <paramref name="environment"/> changed, and calls answered both ways.
+        /// </summary>
+        static void OneOwnerOneOpener(bool peerFirst, IDictionary<string, string> environment)
+        {
+            string name = NewName();
+            using (var peer = StartPeerInOwnSession(environment))
+            {
+                if (peerFirst)
+                {
+                    Assert.AreEqual("owner", peer.Ok("open " + name));
+                    using (var opener = new RpcEndpoint(name, Increment))
+                    {
+                        Assert.IsFalse(opener.IsChannelOwner, "A second RpcBuffer on a channel is its opener.");
+                        CallsAnsweredBothWays(opener, peer);
+                    }
+                    peer.Ok("close");
+                }
+                else
+                {
+                    using (var owner = new RpcEndpoint(name, Increment))
+                    {
+                        Assert.IsTrue(owner.IsChannelOwner, "The first RpcBuffer on a channel is its owner.");
+                        Assert.AreEqual("opener", peer.Ok("open " + name));
+                        CallsAnsweredBothWays(owner, peer);
+                        peer.Ok("close");
+                    }
+                }
+                peer.Exit();
+            }
+        }
+
         static string NewName()
         {
             return "RpcAcross" + Guid.NewGuid().ToString("N");
         }
 
         /// <summary>
-        /// Starts the peer, on Linux and macOS in a POSIX session of its own, checked.
+        /// Starts the peer, on Linux and macOS in a POSIX session of its own, checked, with <paramref name="environment"/>
+        /// changed if given.
         /// </summary>
-        static RpcPeerProcess StartPeerInOwnSession()
+        static RpcPeerProcess StartPeerInOwnSession(IDictionary<string, string> environment = null)
         {
-            var peer = RpcPeerProcess.Start(ownSession: true);
+            var peer = RpcPeerProcess.Start(ownSession: true, environment);
             try
             {
                 if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
