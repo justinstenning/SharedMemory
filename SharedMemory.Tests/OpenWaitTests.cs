@@ -324,7 +324,7 @@ namespace SharedMemoryTests
 
         /// <summary>
         /// An owner caught between making its shared memory and writing the header: it creates the buffer as every owner does, then
-        /// sets the header's size back to 0, as an opener finds it in that window, until <see cref="WriteSize"/>.
+        /// sets the header's size and layout marker back to 0, as an opener finds them in that window, until <see cref="WriteSize"/>.
         /// </summary>
         sealed unsafe class UnwrittenHeader : SharedBuffer
         {
@@ -333,6 +333,9 @@ namespace SharedMemoryTests
             {
                 Open();
                 Header->SharedMemorySize = 0;
+                // From 2.4.0 the owner has also set a ready layout marker in bytes 12 to 15 by now, and a ready marker with a size of
+                // 0 reads as a damaged buffer, not as one whose header is not written yet: so the marker goes back to 0 as well
+                *(int*)((byte*)Header + 12) = 0;
             }
 
             public void WriteSize()
