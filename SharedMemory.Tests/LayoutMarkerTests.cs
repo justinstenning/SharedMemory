@@ -407,6 +407,7 @@ namespace SharedMemoryTests
                 StringAssert.Contains(e.Message, name);
                 StringAssert.Contains(e.Message, "version " + version);
                 StringAssert.Contains(e.Message, "lock mode " + lockMode);
+                StringAssert.Contains(e.Message, "reads only layout version 1 with lock mode 0");
             }
         }
 
