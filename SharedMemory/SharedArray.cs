@@ -117,7 +117,11 @@ namespace SharedMemory
         /// Opens an existing shared memory array with the name as specified by <paramref name="name"/>.
         /// </summary>
         /// <param name="name">The name of the shared memory array to open.</param>
+        /// <remarks>If the owner is still creating the array, this waits up to 1 s for it to finish.</remarks>
         /// <exception cref="ArgumentOutOfRangeException">If the shared memory location specified by <paramref name="name"/> does not have a <see cref="SharedBuffer.BufferSize"/> that is evenly divisible by the size of <typeparamref name="T"/>.</exception>
+        /// <exception cref="InvalidOperationException">The array is not ready: its owner had not finished creating it after 1 s, or closed
+        /// it first. -or- It was created by a later version of SharedMemory, with a layout this version cannot read. -or- Its header is
+        /// damaged.</exception>
         public SharedArray(string name)
             : base(name, 0, false)
         {

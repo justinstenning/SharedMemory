@@ -287,9 +287,12 @@ namespace SharedMemory
         /// Opens an existing <see cref="CircularBuffer"/> with the specified name.
         /// </summary>
         /// <param name="name">The name of an existing <see cref="CircularBuffer"/> previously created with <see cref="SharedBuffer.IsOwnerOfSharedMemory"/>=true</param>
-        /// <remarks>If the owner is still initialising the buffer, this waits up to 1 s for it to finish.</remarks>
-        /// <exception cref="InvalidOperationException">The owner had not finished initialising the buffer after 1 s, or its node header does
-        /// not describe at least 2 nodes of at least 1 byte that fit in the buffer.</exception>
+        /// <remarks>If the owner is still creating the buffer, this waits up to 1 s for it to finish. A buffer created by SharedMemory 2.3.x
+        /// or earlier records no ready flag, and this waits up to 1 s for its size, then up to 1 s for its node count.</remarks>
+        /// <exception cref="InvalidOperationException">The buffer is not ready: its owner had not finished creating it after 1 s, or closed
+        /// it first. -or- It is not a circular buffer: it was created as another kind, such as a <see cref="BufferReadWrite"/>. -or- It was
+        /// created by a later version of SharedMemory, with a layout this version cannot read. -or- Its header is damaged, or its node header
+        /// does not describe at least 2 nodes of at least 1 byte that fit in the buffer.</exception>
         public CircularBuffer(string name)
             : this(name, 0, 0, false)
         {

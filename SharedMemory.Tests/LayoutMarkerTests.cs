@@ -145,6 +145,45 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
+        /// Between writing the marker and writing the size, the creator's header holds the marker without the ready flag and a size
+        /// of 0: read through a raw mapping from the creator's test callback, which runs there.
+        /// </summary>
+        [TestMethod]
+        [DataRow("BufferReadWrite", 0x00000011)]
+        [DataRow("SharedArray", 0x00000021)]
+        [DataRow("CircularBuffer", 0x00000031)]
+        [DataRow("SharedBuffer", 0x00000001)]
+        public void Creator_WritesTheMarkerBeforeTheSize(string kind, int marker)
+        {
+            string name = Guid.NewGuid().ToString();
+            int calls = 0, markerSeen = -1;
+            long sizeSeen = -1;
+            SharedBuffer.LayoutMarkerWritten = written =>
+            {
+                if (written != name)
+                    return;
+                calls++;
+                using (var raw = new RawHeader(name))
+                {
+                    markerSeen = raw.Marker;
+                    sizeSeen = raw.Size;
+                }
+            };
+            try
+            {
+                Create(kind, name).Dispose();
+            }
+            finally
+            {
+                SharedBuffer.LayoutMarkerWritten = null;
+            }
+
+            Assert.AreEqual(1, calls, kind + ": the creator's callbacks between the marker and the size");
+            AssertMarker(marker, markerSeen, kind + ": the marker before the size, without the ready flag");
+            Assert.AreEqual(0L, sizeSeen, kind + ": the size, once the marker is written");
+        }
+
+        /// <summary>
         /// A word of 0 with a size is a buffer from 2.3.x or earlier: each class opens it as before, with the creator's size and
         /// data, and leaves the word at 0.
         /// </summary>

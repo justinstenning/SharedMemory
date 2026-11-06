@@ -47,14 +47,17 @@ namespace SharedMemory
     /// <see cref="SharedBuffer"/> or <see cref="BufferWithLocks"/> subclass, 1 <see cref="BufferReadWrite"/>, 2 <see cref="SharedArray{T}"/>,
     /// 3 <see cref="CircularBuffer"/>, 4 one of an <c>RpcBuffer</c> channel's two circular buffers.</description></item>
     /// <item><term>8 to 11</term><description>The lock mode, 0: the locks every version up to 2.4.0 uses.</description></item>
-    /// <item><term>12</term><description>Ready, set by the creator.</description></item>
+    /// <item><term>12</term><description>Ready, set by the creator once it has finished creating the buffer, after <c>DoOpen</c>.</description></item>
     /// <item><term>13 to 15</term><description>Spare flags, written 0 and ignored by 2.4.0.</description></item>
     /// <item><term>16 to 31</term><description>Reserved, written 0 and ignored by 2.4.0.</description></item>
     /// </list>
     /// <para>As bytes 12 to 15 of a ready buffer: <c>11 10 00 00</c> for a <see cref="BufferReadWrite"/>, <c>21 10 00 00</c> for a
     /// <see cref="SharedArray{T}"/>, <c>31 10 00 00</c> for a <see cref="CircularBuffer"/>, <c>41 10 00 00</c> for an <c>RpcBuffer</c>'s
-    /// circular buffer and <c>01 10 00 00</c> for another subclass. An opener refuses a version other than 1 or a lock mode other than 0, and
-    /// a <see cref="CircularBuffer"/> opener a kind other than 3 or 4. SharedMemory 2.3.x and earlier never read these bytes.</para>
+    /// circular buffer and <c>01 10 00 00</c> for another subclass.</para>
+    /// <para>The creator writes the marker without the ready flag, then <see cref="SharedMemorySize"/>, then the buffer's own state in
+    /// <c>DoOpen</c>, and sets the ready flag last. An opener waits up to 1 s for the ready flag, and refuses at once a version other than 1 or
+    /// a lock mode other than 0, and as a <see cref="CircularBuffer"/> a kind other than 3 or 4. SharedMemory 2.3.x and earlier never read
+    /// these bytes.</para>
     /// <para>Every later version keeps these rules: bits 0 to 3 are the version, and a word of 0 is no marker; a kind's value is never
     /// reused for another class; spare flags and reserved bits carry only what a 2.4.0 opener may ignore, and anything it must not miss
     /// comes with a new version or lock mode, which 2.4.0 refuses.</para>

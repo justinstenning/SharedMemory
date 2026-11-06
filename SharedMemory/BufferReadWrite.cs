@@ -67,6 +67,10 @@ namespace SharedMemory
         /// Opens an existing shared memory buffer with the specified name
         /// </summary>
         /// <param name="name">The name of the shared memory to open</param>
+        /// <remarks>If the owner is still creating the buffer, this waits up to 1 s for it to finish.</remarks>
+        /// <exception cref="InvalidOperationException">The buffer is not ready: its owner had not finished creating it after 1 s, or closed
+        /// it first. -or- It was created by a later version of SharedMemory, with a layout this version cannot read. -or- Its header is
+        /// damaged.</exception>
         public BufferReadWrite(string name)
             : base(name, 0, false)
         {

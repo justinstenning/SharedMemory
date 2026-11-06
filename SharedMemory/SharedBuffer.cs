@@ -181,6 +181,11 @@ namespace SharedMemory
         private const int Unmapped = int.MinValue;
         private int _leases = Unmapped;
 
+        /// <summary>
+        /// For the tests alone: a creator calls it with its name between writing the layout marker and writing the size. Null outside the tests.
+        /// </summary>
+        internal static Action<string> LayoutMarkerWritten;
+
         #endregion
 
         #region Constructor / destructor
@@ -238,11 +243,19 @@ namespace SharedMemory
         /// Creates a new or opens an existing shared memory buffer with the name of <see cref="Name"/> depending on the value of <see cref="IsOwnerOfSharedMemory"/>. 
         /// </summary>
         /// <returns>True if the memory was successfully mapped</returns>
-        /// <remarks>If <see cref="IsOwnerOfSharedMemory"/> is true then the shared memory buffer will be created, opening will fail in this case if the shared memory already exists. Otherwise if IsOwnerOfSharedMemory is false then the shared memory buffer will be opened, which will fail if it doesn't already exist.</remarks>
+        /// <remarks>
+        /// <para>If <see cref="IsOwnerOfSharedMemory"/> is true then the shared memory buffer will be created, opening will fail in this case if the shared memory already exists. Otherwise if IsOwnerOfSharedMemory is false then the shared memory buffer will be opened, which will fail if it doesn't already exist.</para>
+        /// <para>A creator records in the header the layout version, the buffer's kind and the lock mode, and once <see cref="DoOpen"/> has
+        /// returned true, that the buffer is ready (<see cref="SharedHeader"/>). An opener waits up to 1 s for the ready flag, or for a buffer
+        /// created by SharedMemory 2.3.x or earlier, which records none, for its size.</para>
+        /// </remarks>
         /// <exception cref="System.IO.IOException">If trying to create a new shared memory buffer with a duplicate name as buffer owner.</exception>
         /// <exception cref="System.IO.FileNotFoundException">If trying to open a new shared memory buffer that does not exist as a consumer of existing buffer.</exception>
         /// <exception cref="System.ArgumentOutOfRangeException">If trying to create a new shared memory buffer with a size larger than the logical addressable space.</exception>
-        /// <exception cref="System.InvalidOperationException">A read or write on the earlier mapping of this instance is still running, for example on another thread or in the callback that calls Open.</exception>
+        /// <exception cref="System.InvalidOperationException">A read or write on the earlier mapping of this instance is still running, for example on another thread or in the callback that calls Open.
+        /// -or- Opening: the buffer is not ready, because its owner had not finished creating it after 1 s, or closed it first; it was created
+        /// by a later version of SharedMemory with a layout version or lock mode this version cannot read; it is not a circular buffer, and
+        /// this is a <see cref="CircularBuffer"/>; or its header is damaged.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA2202:Do not dispose objects multiple times")]
         protected bool Open()
         {
@@ -327,6 +340,8 @@ namespace SharedMemory
                 }
                 else
                 {
+                    if (IsOwnerOfSharedMemory)
+                        SetReady();
                     return true;
                 }
             }
@@ -338,27 +353,51 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Reads the total size from the header, waiting up to 1 s while it is 0 because the owner has made the shared memory but not yet
-        /// written its header, and refuses a layout marker this version cannot read (<see cref="CheckLayoutMarker"/>).
+        /// Reads the header an opener found, and returns the total size once the owner has finished creating the buffer, looking every
+        /// 1 ms for up to 1 s: once the layout marker's ready flag is set, or for a buffer without a marker, from SharedMemory 2.3.x or
+        /// earlier, once the size is written. A marker this version cannot read is refused at once (<see cref="CheckLayoutMarker"/>).
         /// </summary>
-        /// <exception cref="InvalidOperationException">The size was still 0 after 1 s, or the layout marker is refused.</exception>
+        /// <exception cref="InvalidOperationException">The buffer was not ready after 1 s, or its owner closed it before it was; the layout
+        /// marker is refused; or the size of a ready buffer leaves no room after the header.</exception>
         private long WaitForHeader(SharedHeader* header)
         {
             System.Diagnostics.Stopwatch waited = null;
             while (true)
             {
-                // The size first, then the marker
+                // The size first, then the marker. The owner writes the marker before the size, so with a size read first, the marker
+                // read next is the owner's. Read the other way round, a word of 0 could be followed by a size, and a buffer still being
+                // created would be opened as one from 2.3.x. No test tells the two orders apart: keep this one.
                 long size = Interlocked.Read(ref header->SharedMemorySize);
+                // Shutdown before the marker too: an owner that finished set the ready flag before it could set Shutdown, so a Shutdown
+                // read here with no ready flag after it is an owner that closed before it finished
+                bool shutdown = header->Shutdown != 0;
                 int marker = Interlocked.CompareExchange(ref header->LayoutMarker, 0, 0);
                 if (marker != 0)
+                {
                     CheckLayoutMarker(marker);
-                if (size != 0)
+                    if (LayoutMarker.IsReady(marker))
+                    {
+                        // Everything the owner wrote before the ready flag is visible from here, the size included
+                        size = Interlocked.Read(ref header->SharedMemorySize);
+                        if (size <= HeaderOffset + Marshal.SizeOf(typeof(SharedHeader)))
+                            throw new InvalidOperationException(String.Format("The shared memory \"{0}\" is damaged: its header gives a size of {1} bytes, which leaves no room after the 16-byte header.", Name, size));
+                        return size;
+                    }
+                    if (shutdown)
+                        throw new InvalidOperationException(String.Format("The shared memory \"{0}\" is not ready: its owner closed it before it finished creating it.", Name));
+                }
+                else if (size != 0)
+                {
+                    // No marker, from 2.3.x or earlier: opened as they open it
                     return size;
+                }
 
                 if (waited == null)
                     waited = System.Diagnostics.Stopwatch.StartNew();
                 else if (waited.ElapsedMilliseconds >= 1000)
-                    throw new InvalidOperationException(String.Format("The shared memory \"{0}\" is not ready: its size was still 0 after waiting 1 s for its owner to write it.", Name));
+                    throw new InvalidOperationException(marker != 0
+                        ? String.Format("The shared memory \"{0}\" is not ready: its owner had not finished creating it after waiting 1 s.", Name)
+                        : String.Format("The shared memory \"{0}\" is not ready: its size was still 0 after waiting 1 s for its owner to write it.", Name));
                 Thread.Sleep(1);
             }
         }
@@ -387,7 +426,11 @@ namespace SharedMemory
         /// Allows any classes that inherit from <see cref="SharedBuffer"/> to perform additional open logic. There is no need to call base.DoOpen() from these implementations.
         /// </summary>
         /// <returns>True if successful, otherwise false.</returns>
-        /// <remarks>By throwing an exception or returning false, the call to <see cref="Open"/> will fail and <see cref="Close"/> will be called.</remarks>
+        /// <remarks>
+        /// <para>By throwing an exception or returning false, the call to <see cref="Open"/> will fail and <see cref="Close"/> will be called.</para>
+        /// <para>Openers wait for the owner's DoOpen to return true. Write what an opener reads here, not in the subclass's constructor after
+        /// <see cref="Open"/> returns, where an opener can find it half written.</para>
+        /// </remarks>
         protected virtual bool DoOpen()
         {
             return true;
@@ -396,17 +439,44 @@ namespace SharedMemory
         /// <summary>
         /// Initialises the header within the shared memory. Only applicable if <see cref="IsOwnerOfSharedMemory"/> is true.
         /// </summary>
+        /// <remarks>The layout marker is written only where there is none yet, so calling this again leaves it, and its ready flag, as they are.</remarks>
         protected void InitialiseHeader()
         {
             if (!IsOwnerOfSharedMemory)
                 return;
 
-            // Each field with Interlocked, a full fence on every build: the size, Shutdown, then the layout marker, ready included
+            // Each field with Interlocked, a full fence on every build, in the order openers rely on: the layout marker without the ready
+            // flag, then the size, so that an opener that reads the size finds the marker too. Open sets the ready flag after DoOpen.
+            Interlocked.CompareExchange(ref Header->LayoutMarker, LayoutMarker.Make(BufferKind), 0);
+            Action<string> markerWritten = LayoutMarkerWritten;
+            if (markerWritten != null)
+                markerWritten(Name);
             Interlocked.Exchange(ref Header->SharedMemorySize, SharedMemorySize);
 #pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
             Interlocked.Exchange(ref Header->Shutdown, 0);
 #pragma warning restore 0420
-            Interlocked.Exchange(ref Header->LayoutMarker, LayoutMarker.Make(BufferKind) | LayoutMarker.Ready);
+        }
+
+        /// <summary>
+        /// The creator's last step in <see cref="Open"/>, once <see cref="DoOpen"/> has returned true: sets the layout marker's ready flag,
+        /// keeping its other bits, and openers waiting for it go on.
+        /// </summary>
+        private void SetReady()
+        {
+            // A DoOpen that closed this instance and still returned true has nothing left to mark
+            if (!TryEnter())
+                return;
+            try
+            {
+                int marker = Interlocked.CompareExchange(ref Header->LayoutMarker, 0, 0);
+                int seen;
+                while ((seen = Interlocked.CompareExchange(ref Header->LayoutMarker, marker | LayoutMarker.Ready, marker)) != marker)
+                    marker = seen;
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         /// <summary>
