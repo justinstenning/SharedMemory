@@ -230,11 +230,13 @@ namespace SharedMemoryTests
         {
             string name = Guid.NewGuid().ToString();
             using (var owner = new HeldOwner(name, false, true))
+            using (var started = new ManualResetEventSlim())
             {
                 Assert.IsTrue(owner.InDoOpen.Wait(5000), "The owner did not reach DoOpen: " + owner.Failure);
                 long failedAt = -1;
                 Task<EventFreeBuffer> opening = Task.Factory.StartNew(() =>
                 {
+                    started.Set();
                     try
                     {
                         return new EventFreeBuffer(name);
@@ -246,6 +248,8 @@ namespace SharedMemoryTests
                 }, TaskCreationOptions.LongRunning);
                 try
                 {
+                    // Started before the owner is released, or it would find the name gone
+                    Assert.IsTrue(started.Wait(5000), "The opener did not start.");
                     Thread.Sleep(100);
                     Assert.IsFalse(opening.IsCompleted, "The opener should still be waiting for its owner, but " + Describe(opening));
                     owner.Release();
