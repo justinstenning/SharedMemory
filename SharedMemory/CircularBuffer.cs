@@ -168,6 +168,9 @@ namespace SharedMemory
         // a lease across it, as the override's node comes without one.
         private readonly bool _overridesGetNodeForWriting;
         private readonly bool _overridesGetNodeForReading;
+
+        // The kind a creator records in the layout marker: 3, or 4 for RpcBuffer's rings
+        private readonly int _kind = LayoutMarker.KindCircularBuffer;
         
         #endregion
 
@@ -293,6 +296,17 @@ namespace SharedMemory
             Open();
         }
 
+        /// <summary>
+        /// Creates and opens one of an <c>RpcBuffer</c> channel's two rings, which records <paramref name="kind"/> in the layout marker.
+        /// The kind is set before <see cref="SharedBuffer.Open"/> writes it.
+        /// </summary>
+        internal CircularBuffer(string name, int nodeCount, int nodeBufferSize, int kind)
+            : this(name, nodeCount, nodeBufferSize, true)
+        {
+            _kind = kind;
+            Open();
+        }
+
         private CircularBuffer(string name, int nodeCount, int nodeBufferSize, bool ownsSharedMemory)
             : base(name, Marshal.SizeOf(typeof(NodeHeader)) + (Marshal.SizeOf(typeof(Node)) * nodeCount) + (nodeCount * (long)nodeBufferSize), ownsSharedMemory)
         {
@@ -332,6 +346,20 @@ namespace SharedMemory
         #endregion
 
         #region Open / Close
+
+        internal override int BufferKind
+        {
+            get { return _kind; }
+        }
+
+        /// <summary>
+        /// A ring opener opens only a ring: a <see cref="CircularBuffer"/>, or one of an <c>RpcBuffer</c> channel's rings. It refuses
+        /// other kinds at once, before it waits for the node count.
+        /// </summary>
+        internal override bool AcceptsKind(int kind)
+        {
+            return kind == LayoutMarker.KindCircularBuffer || kind == LayoutMarker.KindRpcBufferRing;
+        }
 
         /// <summary>
         /// Attempts to create the <see cref="EventWaitHandle"/> handles and initialise the node header and buffers.

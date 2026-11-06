@@ -115,6 +115,24 @@ namespace SharedMemory
             }
         }
 
+        /// <summary>
+        /// The kind a creator of this class records in the layout marker (<see cref="SharedHeader"/>): the nearest library class's.
+        /// Internal, so that a subclass outside the library keeps its library base's kind.
+        /// </summary>
+        internal virtual int BufferKind
+        {
+            get { return LayoutMarker.KindSharedBuffer; }
+        }
+
+        /// <summary>
+        /// Whether an opener of this class opens a buffer whose layout marker records <paramref name="kind"/>. Every class but
+        /// <see cref="CircularBuffer"/> opens any kind as bytes.
+        /// </summary>
+        internal virtual bool AcceptsKind(int kind)
+        {
+            return true;
+        }
+
         #endregion
 
         #region Protected field members
@@ -150,8 +168,8 @@ namespace SharedMemory
         // it is finalised, which may be before this instance is
         private Microsoft.Win32.SafeHandles.SafeMemoryMappedViewHandle _viewHandle;
 #if NET10_0_OR_GREATER
-        // Where the memory is mapped without a MemoryMappedFile (macOS), this stands in for View: the header is written through it, and the
-        // struct reads and writes check their bounds against its capacity.
+        // Where the memory is mapped without a MemoryMappedFile (macOS), this stands in for View: made with the size the header gives,
+        // it checks that the size fits the mapping, as creating View does elsewhere.
         private System.IO.UnmanagedMemoryAccessor _mappedView;
 #endif
 
@@ -268,15 +286,16 @@ namespace SharedMemory
                     _mapping = NamedMapping.OpenExisting(Name);
                     Mmf = _mapping.File;
 
-                    // Retrieve the header from the shared memory in order to initialise the correct size
-                    using (var headerView = Mmf.CreateViewAccessor(0, HeaderOffset + Marshal.SizeOf(typeof(SharedHeader)), MemoryMappedFileAccess.Read))
+                    // Retrieve the header from the shared memory in order to initialise the correct size. The view is ReadWrite: the
+                    // header is read with interlocked instructions, which write, and fault on a read-only page
+                    using (var headerView = Mmf.CreateViewAccessor(0, HeaderOffset + Marshal.SizeOf(typeof(SharedHeader)), MemoryMappedFileAccess.ReadWrite))
                     {
                         byte* headerPtr = null;
                         headerView.SafeMemoryMappedViewHandle.AcquirePointer(ref headerPtr);
                         try
                         {
                             var header = (SharedHeader*)(headerPtr + HeaderOffset);
-                            BufferSize = WaitForSharedMemorySize(header) - Marshal.SizeOf(typeof(SharedHeader));
+                            BufferSize = WaitForHeader(header) - Marshal.SizeOf(typeof(SharedHeader));
                         }
                         finally
                         {
@@ -320,23 +339,48 @@ namespace SharedMemory
 
         /// <summary>
         /// Reads the total size from the header, waiting up to 1 s while it is 0 because the owner has made the shared memory but not yet
-        /// written its header.
+        /// written its header, and refuses a layout marker this version cannot read (<see cref="CheckLayoutMarker"/>).
         /// </summary>
-        /// <exception cref="InvalidOperationException">The size was still 0 after 1 s.</exception>
-        private long WaitForSharedMemorySize(SharedHeader* header)
+        /// <exception cref="InvalidOperationException">The size was still 0 after 1 s, or the layout marker is refused.</exception>
+        private long WaitForHeader(SharedHeader* header)
         {
-            long size = header->SharedMemorySize;
-            if (size != 0)
-                return size;
-
-            var waited = System.Diagnostics.Stopwatch.StartNew();
-            while ((size = header->SharedMemorySize) == 0)
+            System.Diagnostics.Stopwatch waited = null;
+            while (true)
             {
-                if (waited.ElapsedMilliseconds >= 1000)
+                // The size first, then the marker
+                long size = Interlocked.Read(ref header->SharedMemorySize);
+                int marker = Interlocked.CompareExchange(ref header->LayoutMarker, 0, 0);
+                if (marker != 0)
+                    CheckLayoutMarker(marker);
+                if (size != 0)
+                    return size;
+
+                if (waited == null)
+                    waited = System.Diagnostics.Stopwatch.StartNew();
+                else if (waited.ElapsedMilliseconds >= 1000)
                     throw new InvalidOperationException(String.Format("The shared memory \"{0}\" is not ready: its size was still 0 after waiting 1 s for its owner to write it.", Name));
                 Thread.Sleep(1);
             }
-            return size;
+        }
+
+        /// <summary>
+        /// An opener's check of the layout marker it found, which is not 0: a layout version or lock mode this version cannot read, or a
+        /// kind this class does not open (<see cref="AcceptsKind"/>), is refused at once. The creator writes all three in one word, before
+        /// anything else, so they hold whether the ready flag is set or not.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The marker is refused.</exception>
+        private void CheckLayoutMarker(int marker)
+        {
+            int version = LayoutMarker.Version(marker);
+            int lockMode = LayoutMarker.LockMode(marker);
+            if (version != LayoutMarker.CurrentVersion || lockMode != LayoutMarker.CurrentLockMode)
+                throw new InvalidOperationException(String.Format("The shared memory \"{0}\" has layout version {1} and lock mode {2} (marker 0x{3:X8}), but this version of SharedMemory reads only layout version {4} with lock mode {5}. It was created by a later version of SharedMemory; use that version here too.",
+                    Name, version, lockMode, marker, LayoutMarker.CurrentVersion, LayoutMarker.CurrentLockMode));
+
+            // Only a CircularBuffer opener refuses a kind
+            int kind = LayoutMarker.Kind(marker);
+            if (!AcceptsKind(kind))
+                throw new InvalidOperationException(String.Format("The shared memory \"{0}\" was created as {1}, not a circular buffer, so it cannot be opened as a CircularBuffer.", Name, LayoutMarker.Describe(kind)));
         }
 
         /// <summary>
@@ -357,14 +401,12 @@ namespace SharedMemory
             if (!IsOwnerOfSharedMemory)
                 return;
 
-            SharedHeader header = new SharedHeader();
-            header.SharedMemorySize = SharedMemorySize;
-            header.Shutdown = 0;
-#if NET10_0_OR_GREATER
-            (View ?? _mappedView).Write<SharedHeader>(HeaderOffset, ref header);
-#else
-            View.Write<SharedHeader>(HeaderOffset, ref header);
-#endif
+            // Each field with Interlocked, a full fence on every build: the size, Shutdown, then the layout marker, ready included
+            Interlocked.Exchange(ref Header->SharedMemorySize, SharedMemorySize);
+#pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
+            Interlocked.Exchange(ref Header->Shutdown, 0);
+#pragma warning restore 0420
+            Interlocked.Exchange(ref Header->LayoutMarker, LayoutMarker.Make(BufferKind) | LayoutMarker.Ready);
         }
 
         /// <summary>
@@ -1015,7 +1057,7 @@ namespace SharedMemory
         /// <summary>
         /// <see cref="Open"/>'s mapping where the memory is mapped without a <see cref="MemoryMappedFile"/> (macOS): <see cref="Mmf"/> and <see cref="View"/>
         /// stay null, the pointers come from the mapping, and an accessor of the same size as <see cref="View"/> would have stands in for it, so that
-        /// the header write and the struct reads and writes check their bounds as they do elsewhere.
+        /// the size the header gives is checked against the mapping as it is elsewhere.
         /// </summary>
         private void OpenWithoutFile()
         {
@@ -1031,7 +1073,7 @@ namespace SharedMemory
                 // Open an existing shared memory mapping, a whole number of pages, and size the buffer from its header
                 _mapping = NamedMapping.OpenExisting(Name);
                 ViewPtr = _mapping.Pointer;
-                BufferSize = WaitForSharedMemorySize((SharedHeader*)(ViewPtr + HeaderOffset)) - Marshal.SizeOf(typeof(SharedHeader));
+                BufferSize = WaitForHeader((SharedHeader*)(ViewPtr + HeaderOffset)) - Marshal.SizeOf(typeof(SharedHeader));
                 BufferStartPtr = ViewPtr + HeaderOffset + Marshal.SizeOf(typeof(SharedHeader));
             }
             _mappedView = new System.IO.UnmanagedMemoryAccessor(_mapping.Memory, 0, SharedMemorySize, System.IO.FileAccess.ReadWrite);

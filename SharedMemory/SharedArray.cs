@@ -154,6 +154,11 @@ namespace SharedMemory
             return true;
         }
 
+        internal override int BufferKind
+        {
+            get { return LayoutMarker.KindSharedArray; }
+        }
+
         #region Writing
 
         /// <summary>

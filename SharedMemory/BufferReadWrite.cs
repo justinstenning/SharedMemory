@@ -84,6 +84,11 @@ namespace SharedMemory
 
         #endregion
 
+        internal override int BufferKind
+        {
+            get { return LayoutMarker.KindBufferReadWrite; }
+        }
+
         #region Writing
 
         /// <summary>
