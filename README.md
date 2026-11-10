@@ -22,6 +22,225 @@ Classes
  * `SharedMemory.CircularBuffer` - lock-free FIFO circular buffer implementation (aka ring buffer). Supporting 2 or more nodes, this implementation supports multiple readers and writers, which compete for items: see [Circular buffer readers and capacity](#circular-buffer-readers-and-capacity). The lock-free approach is implemented using Interlocked.CompareExchange and named events.
  * `SharedMemory.RpcBuffer` - simple bi-directional RPC channel using `SharedMemory.CircularBuffer`. Each channel has two ends: the owner, which creates it, and the opener, which joins it. An `RpcBuffer` from 2.4.0 or later cannot share a channel with one from 2.3 or earlier, so upgrade both ends together. Every build has it except the .NET Framework 3.5 and 4.0 ones.
 
+Example Usage
+-------------
+
+Each example is two programs. To try one, create two console projects, add the `SharedMemory` package to both, paste one program into each `Program.cs`, and run them from two terminals.
+
+The constructor that takes a size creates a buffer, and the one that takes only a name opens a buffer that another process created. Opening a name that no process has open throws `FileNotFoundException`. A buffer lasts for as long as a process has it open, so the first program in each example waits for you to press Enter before it closes.
+
+The examples use top-level statements and `using var`. A .NET Framework project defaults to C# 7.3, so there set `<LangVersion>9.0</LangVersion>` or later in the project file, or move the code into `Main` and use `using` blocks.
+
+### SharedArray
+
+The first program creates an array of 10 integers and sets two of them:
+
+```csharp
+using System;
+using SharedMemory;
+
+using var numbers = new SharedArray<int>("MySharedArray", length: 10);
+numbers[0] = 123;
+numbers[numbers.Length - 1] = 456;
+
+Console.WriteLine("Start the second program, then press Enter here to close the array");
+Console.ReadLine();
+```
+
+The second opens the array by name and reads them back. It gets the length from the buffer:
+
+```csharp
+using System;
+using System.IO;
+using SharedMemory;
+
+try
+{
+    using var numbers = new SharedArray<int>("MySharedArray");
+    Console.WriteLine(numbers.Length);
+    Console.WriteLine(numbers[0]);
+    Console.WriteLine(numbers[numbers.Length - 1]);
+}
+catch (FileNotFoundException)
+{
+    Console.WriteLine("No process has MySharedArray open. Start the first program before this one.");
+}
+```
+
+The first program prints:
+
+```text
+Start the second program, then press Enter here to close the array
+```
+
+The second prints:
+
+```text
+10
+123
+456
+```
+
+If you start the second program while the first isn't running, it prints:
+
+```text
+No process has MySharedArray open. Start the first program before this one.
+```
+
+### BufferReadWrite
+
+A `BufferReadWrite` is a block of bytes that you read and write at the positions you choose. The first program creates one of 1,024 bytes and writes two integers to it:
+
+```csharp
+using System;
+using SharedMemory;
+
+using var buffer = new BufferReadWrite("MySharedBuffer", bufferSize: 1024);
+
+int first = 123;
+buffer.Write(ref first);                                   // at the start of the buffer
+int second = 456;
+buffer.Write(ref second, bufferPosition: sizeof(int));     // straight after the first
+
+Console.WriteLine("Start the second program, then press Enter here to close the buffer");
+Console.ReadLine();
+```
+
+The second opens the buffer and reads them from the same positions:
+
+```csharp
+using System;
+using SharedMemory;
+
+// Throws FileNotFoundException if no process has MySharedBuffer open
+using var buffer = new BufferReadWrite("MySharedBuffer");
+
+buffer.Read(out int first);
+buffer.Read(out int second, bufferPosition: sizeof(int));
+Console.WriteLine(first);
+Console.WriteLine(second);
+```
+
+The first program prints:
+
+```text
+Start the second program, then press Enter here to close the buffer
+```
+
+The second prints:
+
+```text
+123
+456
+```
+
+### CircularBuffer
+
+A `CircularBuffer` passes messages from its writers to its readers, in order. The producer creates one with 16 nodes of 1,024 bytes each and writes two messages:
+
+```csharp
+using System;
+using System.Text;
+using SharedMemory;
+
+using var producer = new CircularBuffer("MyChannel", nodeCount: 16, nodeBufferSize: 1024);
+
+foreach (string text in new[] { "hello", "world" })
+{
+    // Pass the timeout by name. A bare number here would be the index to start from in the array.
+    // Write returns the number of bytes it wrote, or 0 if no node came free in time.
+    if (producer.Write(Encoding.UTF8.GetBytes(text), timeout: 1000) == 0)
+        Console.WriteLine("The buffer stayed full for a second");
+}
+
+Console.WriteLine("Start the consumer, then press Enter here to close the buffer");
+Console.ReadLine();
+```
+
+The consumer opens the buffer and reads until the producer closes it:
+
+```csharp
+using System;
+using System.Text;
+using SharedMemory;
+
+// Throws FileNotFoundException if no process has MyChannel open
+using var consumer = new CircularBuffer("MyChannel");
+var message = new byte[consumer.NodeBufferSize];
+
+while (true)
+{
+    // Read returns the number of bytes it read, or 0 if nothing arrived in time
+    int length = consumer.Read(message, timeout: 1000);
+    if (length > 0)
+        Console.WriteLine(Encoding.UTF8.GetString(message, 0, length));
+    else if (consumer.ShuttingDown)
+        break;   // the producer has closed the buffer, and nothing is left in it
+}
+```
+
+The producer prints:
+
+```text
+Start the consumer, then press Enter here to close the buffer
+```
+
+The consumer prints the two messages, and ends when you press Enter in the producer:
+
+```text
+hello
+world
+```
+
+### RpcBuffer
+
+An `RpcBuffer` has no separate constructors for creating and opening. The first `RpcBuffer` on a channel becomes its owner and the second becomes its opener, and `IsChannelOwner` tells you which one you have. Start this program first. It owns the channel and answers each request with the sum of two numbers:
+
+```csharp
+using System;
+using SharedMemory;
+
+using var calculator = new RpcBuffer("MyCalculator", (msgId, payload) =>
+{
+    return BitConverter.GetBytes(payload[0] + payload[1]);
+});
+Console.WriteLine("Channel owner: " + calculator.IsChannelOwner);
+
+Console.WriteLine("Start the caller, then press Enter here to close the channel");
+Console.ReadLine();
+```
+
+The caller joins the channel as its opener and asks for 123 plus 10:
+
+```csharp
+using System;
+using SharedMemory;
+
+using var caller = new RpcBuffer("MyCalculator");
+Console.WriteLine("Channel owner: " + caller.IsChannelOwner);
+
+RpcResponse response = caller.RemoteRequest(new byte[] { 123, 10 }, timeoutMs: 5000);
+// Success is false if no answer came within the timeout
+if (response.Success)
+    Console.WriteLine(BitConverter.ToInt32(response.Data, 0));
+else
+    Console.WriteLine("No answer within 5 seconds");
+```
+
+The first program prints:
+
+```text
+Channel owner: True
+Start the caller, then press Enter here to close the channel
+```
+
+The caller prints:
+
+```text
+Channel owner: False
+133
+```
+
 Platforms
 ---------
 
@@ -173,92 +392,6 @@ To share `bool` and `char` data with 2.3.3 or earlier:
  * for plain `bool` or `char` elements, use `byte` or `ushort` and convert.
 
 The library's own structures and blittable types are unchanged, in 32-bit and 64-bit processes, apart from the 32-bit .NET Framework case listed above.
-
-Example Usage
--------------
-
-The output of the following examples is:
-
-    SharedMemory.SharedArray:
-    123
-    456
-    SharedMemory.CircularBuffer:
-    123
-    456
-    SharedMemory.BufferReadWrite:
-    123
-    456
-    SharedMemory.RpcBuffer:
-    133
-
-**SharedMemory.SharedArray**
-
-    Console.WriteLine("SharedMemory.SharedArray:");
-    using (var producer = new SharedMemory.SharedArray<int>("MySharedArray", 10))
-    using (var consumer = new SharedMemory.SharedArray<int>("MySharedArray"))
-    {
-        producer[0] = 123;
-        producer[producer.Length - 1] = 456;
-        
-        Console.WriteLine(consumer[0]);
-        Console.WriteLine(consumer[consumer.Length - 1]);
-    }
-
-**SharedMemory.CircularBuffer**
-
-    Console.WriteLine("SharedMemory.CircularBuffer:");
-    using (var producer = new SharedMemory.CircularBuffer(name: "MySharedMemory", nodeCount: 3, nodeBufferSize: 4))
-    using (var consumer = new SharedMemory.CircularBuffer(name: "MySharedMemory"))
-    {
-        // nodeCount must be one larger than the number
-        // of writes that must fit in the buffer at any one time
-        producer.Write<int>(new int[] { 123 });
-        producer.Write<int>(new int[] { 456 });
-       
-        int[] data = new int[1];
-        consumer.Read<int>(data);
-        Console.WriteLine(data[0]);
-        consumer.Read<int>(data);
-        Console.WriteLine(data[0]);
-    }
-
-**SharedMemory.BufferReadWrite**
-
-    Console.WriteLine("SharedMemory.BufferReadWrite:");
-    using (var producer = new SharedMemory.BufferReadWrite(name: "MySharedBuffer", bufferSize: 1024))
-    using (var consumer = new SharedMemory.BufferReadWrite(name: "MySharedBuffer"))
-    {
-        int data = 123;
-        producer.Write<int>(ref data);
-        data = 456;
-        producer.Write<int>(ref data, 1000);
-        
-        int readData;
-        consumer.Read<int>(out readData);
-        Console.WriteLine(readData);
-        consumer.Read<int>(out readData, 1000);
-        Console.WriteLine(readData);
-    }
-
-**SharedMemory.RpcBuffer**
-
-    Console.WriteLine("SharedMemory.RpcBuffer:");
-    // Ensure a unique channel name
-    var rpcName = "RpcTest" + Guid.NewGuid().ToString();
-    // The first instance on a channel is its owner; the second opens the owner's channel
-    using (var rpcOwner = new RpcBuffer(rpcName))
-    using (var rpcOpener = new RpcBuffer(rpcName, (msgId, payload) =>
-    {
-        // Add the two bytes together
-        return BitConverter.GetBytes((payload[0] + payload[1]));
-    }))
-    {
-        // Call the remote handler to add 123 and 10
-        var result = rpcOwner.RemoteRequest(new byte[] { 123, 10 });
-        // Success is false if no response came within the timeout (30 s by default)
-        if (result.Success)
-            Console.WriteLine(BitConverter.ToInt32(result.Data, 0)); // outputs 133
-    }
 
 Performance
 -----------

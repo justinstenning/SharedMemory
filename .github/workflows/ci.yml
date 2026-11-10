@@ -118,3 +118,34 @@ jobs:
         with:
           name: test-results-${{ matrix.os }}-${{ matrix.combination.framework }}-${{ matrix.combination.library }}
           path: TestResults
+
+  # Builds each program in the README's Example Usage from the README's own text, runs each sample as two processes, and
+  # compares what they print with what the README says.
+  readme-samples:
+    name: readme-samples (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Run the README's examples
+        run: dotnet run --project SharedMemory.Tests.ReadmeSamples -c Release -- README.md
+
+      # Each program as it was built, with what it printed.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: readme-samples-${{ matrix.os }}
+          path: |
+            TestResults/readme-samples/*/*/Program.cs
+            TestResults/readme-samples/*/*/*.csproj
+            TestResults/readme-samples/*/*/*.log
+            TestResults/readme-samples/*/*/*.txt
