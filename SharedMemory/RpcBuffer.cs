@@ -903,8 +903,9 @@ namespace SharedMemory
             {
                 if (instanceType == InstanceType.Owner)
                 {
-                    WriteBuffer = new CircularBuffer(name + OwnerWritesSuffix, bufferNodeCount, this.bufferCapacity);
-                    ReadBuffer = new CircularBuffer(name + OwnerReadsSuffix, bufferNodeCount, this.bufferCapacity);
+                    // Kind 4 in each ring's layout marker
+                    WriteBuffer = new CircularBuffer(name + OwnerWritesSuffix, bufferNodeCount, this.bufferCapacity, LayoutMarker.KindRpcBufferRing);
+                    ReadBuffer = new CircularBuffer(name + OwnerReadsSuffix, bufferNodeCount, this.bufferCapacity, LayoutMarker.KindRpcBufferRing);
                 }
                 else
                 {

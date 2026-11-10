@@ -32,16 +32,15 @@ using SharedMemory;
 namespace SharedMemoryTests
 {
     /// <summary>
-    /// Characterises the 4 spare bytes at the end of <see cref="SharedHeader"/>, bytes 12 to 15 of every buffer: the
-    /// creator writes 0 there and an opener never reads them. A process on another version can open the same buffer, so
-    /// these bytes are part of the layout. 2.4.0's layout marker is planned to go in these bytes, which changes these
-    /// tests deliberately.
+    /// Characterises the last 4 bytes of <see cref="SharedHeader"/>, bytes 12 to 15 of every buffer, which hold the layout
+    /// marker from 2.4.0: the creator writes version 1's marker there, with its kind and the ready flag, and an opener
+    /// ignores the marker's spare flags and reserved bits and never writes the bytes. A process on another version can open
+    /// the same buffer, so these bytes are part of the layout. Up to 2.3.x the creator wrote 0 there and openers never read them.
     /// </summary>
     [TestClass]
     public class SharedHeaderTests
     {
         const int SpareBytesOffset = 12;
-        static readonly byte[] Marker = new byte[] { 0xA5, 0x5A, 0xC3, 0x3C };
 
         /// <summary>
         /// Opens any buffer's shared memory by name, to read and write the bytes of its shared header directly
@@ -82,22 +81,23 @@ namespace SharedMemoryTests
         }
 
         [TestMethod]
-        public void Creator_WritesZeroToSpareBytes()
+        public void Creator_WritesTheLayoutMarker()
         {
+            // Version 1, the class's kind, lock mode 0 and the ready flag, as a little-endian int
             string name = Guid.NewGuid().ToString();
             using (var buffer = new BufferReadWrite(name, 1024))
-                AssertHeaderAsCreated(name, buffer.SharedMemorySize, "BufferReadWrite");
+                AssertHeaderAsCreated(name, buffer.SharedMemorySize, "BufferReadWrite", new byte[] { 0x11, 0x10, 0x00, 0x00 });
 
             name = Guid.NewGuid().ToString();
             using (var array = new SharedArray<int>(name, 10))
-                AssertHeaderAsCreated(name, array.SharedMemorySize, "SharedArray");
+                AssertHeaderAsCreated(name, array.SharedMemorySize, "SharedArray", new byte[] { 0x21, 0x10, 0x00, 0x00 });
 
             name = Guid.NewGuid().ToString();
             using (var ring = new CircularBuffer(name, 3, 64))
-                AssertHeaderAsCreated(name, ring.SharedMemorySize, "CircularBuffer");
+                AssertHeaderAsCreated(name, ring.SharedMemorySize, "CircularBuffer", new byte[] { 0x31, 0x10, 0x00, 0x00 });
         }
 
-        static void AssertHeaderAsCreated(string name, long sharedMemorySize, string type)
+        static void AssertHeaderAsCreated(string name, long sharedMemorySize, string type, byte[] marker)
         {
             using (var view = new HeaderView(name))
             {
@@ -105,13 +105,16 @@ namespace SharedMemoryTests
                 byte[] header = view.HeaderBytes();
                 Assert.AreEqual(sharedMemorySize, BitConverter.ToInt64(header, 0), type + ": bytes 0 to 7 hold SharedMemorySize");
                 Assert.AreEqual(0, BitConverter.ToInt32(header, 8), type + ": bytes 8 to 11 hold Shutdown, 0 while the creator is open");
-                CollectionAssert.AreEqual(new byte[4], view.SpareBytes(), type + ": the creator writes 0 to bytes 12 to 15");
+                CollectionAssert.AreEqual(marker, view.SpareBytes(), type + ": the creator writes version 1's marker to bytes 12 to 15, read ["
+                    + BitConverter.ToString(view.SpareBytes()) + "]");
             }
         }
 
         [TestMethod]
-        public void Opener_IgnoresSpareBytes()
+        public void Opener_IgnoresSpareFlagsAndReservedBits()
         {
+            // A ready version-1 marker of each class's kind, with the spare flags (bits 13 to 15) and the reserved bits (16 to 31) set
+            byte[] marker = { 0x11, 0xF0, 0xFF, 0xFF };
             string name = Guid.NewGuid().ToString();
             using (var creator = new BufferReadWrite(name, 1024))
             using (var view = new HeaderView(name))
@@ -120,7 +123,7 @@ namespace SharedMemoryTests
                 creator.Write(ref value);
                 value = 456;
                 creator.Write(ref value, 1000);
-                view.WriteSpareBytes(Marker);
+                view.WriteSpareBytes(marker);
 
                 using (var opener = new BufferReadWrite(name))
                 {
@@ -136,16 +139,17 @@ namespace SharedMemoryTests
                     creator.Read(out read, 500);
                     Assert.AreEqual(789, read);
                 }
-                CollectionAssert.AreEqual(Marker, view.SpareBytes(), "BufferReadWrite: the opener left bytes 12 to 15 as they were");
+                CollectionAssert.AreEqual(marker, view.SpareBytes(), "BufferReadWrite: the opener left bytes 12 to 15 as they were");
             }
 
+            marker = new byte[] { 0x21, 0xF0, 0xFF, 0xFF };
             name = Guid.NewGuid().ToString();
             using (var creator = new SharedArray<int>(name, 10))
             using (var view = new HeaderView(name))
             {
                 creator[0] = 123;
                 creator[9] = 456;
-                view.WriteSpareBytes(Marker);
+                view.WriteSpareBytes(marker);
 
                 using (var opener = new SharedArray<int>(name))
                 {
@@ -156,14 +160,15 @@ namespace SharedMemoryTests
                     opener[5] = 789;
                     Assert.AreEqual(789, creator[5]);
                 }
-                CollectionAssert.AreEqual(Marker, view.SpareBytes(), "SharedArray: the opener left bytes 12 to 15 as they were");
+                CollectionAssert.AreEqual(marker, view.SpareBytes(), "SharedArray: the opener left bytes 12 to 15 as they were");
             }
 
+            marker = new byte[] { 0x31, 0xF0, 0xFF, 0xFF };
             name = Guid.NewGuid().ToString();
             using (var creator = new CircularBuffer(name, 3, 64))
             using (var view = new HeaderView(name))
             {
-                view.WriteSpareBytes(Marker);
+                view.WriteSpareBytes(marker);
 
                 using (var opener = new CircularBuffer(name))
                 {
@@ -180,7 +185,7 @@ namespace SharedMemoryTests
                     Assert.AreEqual(4, creator.Read(read));
                     CollectionAssert.AreEqual(data, read);
                 }
-                CollectionAssert.AreEqual(Marker, view.SpareBytes(), "CircularBuffer: the opener left bytes 12 to 15 as they were");
+                CollectionAssert.AreEqual(marker, view.SpareBytes(), "CircularBuffer: the opener left bytes 12 to 15 as they were");
             }
         }
     }
