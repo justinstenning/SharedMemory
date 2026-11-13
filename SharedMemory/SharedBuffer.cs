@@ -72,6 +72,18 @@ namespace SharedMemory
         /// Indicates whether this instance owns the shared memory (i.e. creator of the shared memory)
         /// </summary>
         public bool IsOwnerOfSharedMemory { get; private set; }
+
+        /// <summary>
+        /// Whether this instance's open created the shared memory: true only for the instance that created the buffer, whichever
+        /// constructor it used, and false for one that opened a buffer that was already there.
+        /// </summary>
+        /// <remarks>Set by <see cref="Open"/> as soon as it has created the buffer, before <see cref="DoOpen"/> runs, and kept once the
+        /// instance has closed. A creator that writes starting contents can check it to tell a new buffer from one that was already
+        /// in use.</remarks>
+        public bool CreatedSharedMemory
+        {
+            get { throw new NotImplementedException(); }
+        }
         
         /// <summary>
         /// Returns true if the SharedMemory owner has/is shutting down, or if this instance is closed
@@ -225,6 +237,35 @@ namespace SharedMemory
             {
                 BufferSize = bufferSize;
             }
+        }
+
+        /// <summary>
+        /// Create a new <see cref="SharedBuffer"/> instance with the specified name, buffer size and options for opening it.
+        /// </summary>
+        /// <param name="name">The name of the shared memory</param>
+        /// <param name="bufferSize">The buffer size in bytes, when creating it. The total shared memory size will be <code>Marshal.SizeOf(SharedMemory.SharedHeader) + bufferSize</code></param>
+        /// <param name="ownsSharedMemory">true to create the shared memory, which with <see cref="SharedMemoryOpenMode.CreateOrOpen"/>
+        /// may open the buffer already there instead; false to open an existing one, which ignores <see cref="SharedMemoryOptions.OpenMode"/>.</param>
+        /// <param name="options">How <see cref="Open"/> creates or opens the buffer: the open mode, how long it waits, and on .NET Framework 4
+        /// and later the token that cancels the wait. Read once, here.</param>
+        /// <remarks>
+        /// <para>The constructor checks its arguments and the options, and creates and opens nothing; the subclass calls <see cref="Open"/>.</para>
+        /// <para>The shared memory layout on 32-bit and 64-bit is:<br />
+        /// <code>
+        /// |       Header       |    Buffer    |<br />
+        /// |      16-bytes      |  bufferSize  |
+        /// </code>
+        /// </para>
+        /// </remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="ownsSharedMemory"/> is true and <paramref name="bufferSize"/> is
+        /// not larger than zero. -or- <see cref="SharedMemoryOptions.OpenMode"/> is not a <see cref="SharedMemoryOpenMode"/> value, or
+        /// <see cref="SharedMemoryOptions.OpenTimeout"/> is below zero other than <c>Timeout.InfiniteTimeSpan</c>, or above
+        /// <see cref="int.MaxValue"/> milliseconds.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled.</exception>
+        protected SharedBuffer(string name, long bufferSize, bool ownsSharedMemory, SharedMemoryOptions options)
+        {
+            throw new NotImplementedException();
         }
 
         /// <summary>

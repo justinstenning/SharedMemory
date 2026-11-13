@@ -284,6 +284,25 @@ namespace SharedMemory
         }
 
         /// <summary>
+        /// Creates and opens a new <see cref="CircularBuffer"/> instance with the specified name, node count and buffer size per node,
+        /// as <paramref name="options"/> say.
+        /// </summary>
+        /// <param name="name">The name of the shared memory to be created</param>
+        /// <param name="nodeCount">The number of nodes within the circular linked-list (minimum of 2). The buffer holds at most <paramref name="nodeCount"/> - 1 unread items.</param>
+        /// <param name="nodeBufferSize">The buffer size per node in bytes (minimum of 1).</param>
+        /// <param name="options">The open mode, and the waits of an open. With the default options, this creates the buffer as
+        /// <see cref="CircularBuffer(string, int, int)"/> does.</param>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="nodeCount"/> is less than 2, or <paramref name="nodeBufferSize"/> is
+        /// less than 1. -or- An option is out of range: see <see cref="SharedMemoryOptions"/>.</exception>
+        /// <exception cref="System.IO.IOException">With <see cref="SharedMemoryOpenMode.CreateNew"/>, the name is already in use.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled.</exception>
+        public CircularBuffer(string name, int nodeCount, int nodeBufferSize, CircularBufferOptions options)
+            : base(name, 0, true, options)
+        {
+        }
+
+        /// <summary>
         /// Opens an existing <see cref="CircularBuffer"/> with the specified name.
         /// </summary>
         /// <param name="name">The name of an existing <see cref="CircularBuffer"/> previously created with <see cref="SharedBuffer.IsOwnerOfSharedMemory"/>=true</param>
@@ -297,6 +316,31 @@ namespace SharedMemory
             : this(name, 0, 0, false)
         {
             Open();
+        }
+
+        /// <summary>
+        /// Opens an existing <see cref="CircularBuffer"/> with the specified name, waiting for it as <paramref name="options"/> say.
+        /// </summary>
+        /// <param name="name">The name of an existing <see cref="CircularBuffer"/> previously created with <see cref="SharedBuffer.IsOwnerOfSharedMemory"/>=true</param>
+        /// <param name="options">The waits of the open: <see cref="SharedMemoryOptions.OpenTimeout"/>, and on .NET Framework 4 and later
+        /// <c>OpenCancellationToken</c>. <see cref="SharedMemoryOptions.OpenMode"/> is ignored. With the
+        /// default options, this opens the buffer as <see cref="CircularBuffer(string)"/> does.</param>
+        /// <remarks>With an <see cref="SharedMemoryOptions.OpenTimeout"/>, this waits within it for the name to appear and for the owner
+        /// to finish creating the buffer, a buffer created by SharedMemory 2.3.x or earlier included; without one, a missing name throws
+        /// at once, and the owner is waited for as <see cref="CircularBuffer(string)"/> waits.</remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">An option is out of range: see <see cref="SharedMemoryOptions"/>.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">The name does not exist, or did not appear within the open timeout.</exception>
+        /// <exception cref="InvalidOperationException">The buffer is not ready: its owner had not finished creating it after 1 s, or within
+        /// the open timeout, or closed it first. -or- It is not a circular buffer: it was created as another kind, such as a
+        /// <see cref="BufferReadWrite"/>. -or- It was created by a later version of SharedMemory, with a layout this version cannot read.
+        /// -or- Its header is damaged, or its node header does not describe at least 2 nodes of at least 1 byte that fit in the
+        /// buffer.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, was cancelled before or
+        /// during the open.</exception>
+        public CircularBuffer(string name, CircularBufferOptions options)
+            : base(name, 0, false, options)
+        {
         }
 
         /// <summary>

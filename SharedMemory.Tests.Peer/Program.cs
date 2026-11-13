@@ -13,7 +13,8 @@ namespace SharedMemoryTests.Peer
     /// <code>
     /// create eventfree|readwrite {name} {size}
     /// create circular {name} {node count} {node size}
-    /// open eventfree|readwrite|circular {name}
+    /// create array {name} {length}  a SharedArray&lt;int&gt;
+    /// open eventfree|readwrite|circular|array {name}
     /// write {hex}                  at offset 0, or one circular node; replies with the bytes written
     /// read {count} [{timeout ms}]  at offset 0, or one circular node; replies with the bytes as hex
     /// lock read|write              BufferWithLocks.AcquireReadLock or AcquireWriteLock
@@ -106,6 +107,7 @@ namespace SharedMemoryTests.Peer
                 case "eventfree": return new EventFreeBuffer(name, Number(args[3]));
                 case "readwrite": return new BufferReadWrite(name, Number(args[3]));
                 case "circular": return new CircularBuffer(name, Number(args[3]), Number(args[4]));
+                case "array": return new SharedArray<int>(name, Number(args[3]));
                 default: throw new ArgumentException("Unknown buffer kind: " + kind);
             }
         }
@@ -117,6 +119,7 @@ namespace SharedMemoryTests.Peer
                 case "eventfree": return new EventFreeBuffer(name);
                 case "readwrite": return new BufferReadWrite(name);
                 case "circular": return new CircularBuffer(name);
+                case "array": return new SharedArray<int>(name);
                 default: throw new ArgumentException("Unknown buffer kind: " + kind);
             }
         }

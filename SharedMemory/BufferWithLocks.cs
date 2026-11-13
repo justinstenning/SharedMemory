@@ -102,6 +102,28 @@ namespace SharedMemory
             }
         }
 
+        /// <summary>
+        /// Create a new <see cref="BufferWithLocks"/> instance with the specified name, buffer size and options for opening it.
+        /// </summary>
+        /// <param name="name">The name of the shared memory</param>
+        /// <param name="bufferSize">The buffer size in bytes, when creating it.</param>
+        /// <param name="ownsSharedMemory">true to create the shared memory, which with <see cref="SharedMemoryOpenMode.CreateOrOpen"/>
+        /// may open the buffer already there instead; false to open an existing one, which ignores <see cref="SharedMemoryOptions.OpenMode"/>.</param>
+        /// <param name="options">How <see cref="SharedBuffer.Open"/> creates or opens the buffer: the open mode, how long it waits, and on
+        /// .NET Framework 4 and later the token that cancels the wait. Read once, here.</param>
+        /// <remarks>The constructor checks the options before it makes the buffer's two events, and creates and opens no shared memory; the
+        /// subclass calls <see cref="SharedBuffer.Open"/>.</remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="ownsSharedMemory"/> is true and <paramref name="bufferSize"/> is
+        /// not larger than zero. -or- <see cref="SharedMemoryOptions.OpenMode"/> is not a <see cref="SharedMemoryOpenMode"/> value, or
+        /// <see cref="SharedMemoryOptions.OpenTimeout"/> is below zero other than <c>Timeout.InfiniteTimeSpan</c>, or above
+        /// <see cref="int.MaxValue"/> milliseconds.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled.</exception>
+        protected BufferWithLocks(string name, long bufferSize, bool ownsSharedMemory, SharedMemoryOptions options)
+            : base(name, bufferSize, ownsSharedMemory, options)
+        {
+        }
+
         #endregion
 
         #region Synchronisation

@@ -114,6 +114,24 @@ namespace SharedMemory
         }
 
         /// <summary>
+        /// Creates the shared memory array with the name specified by <paramref name="name"/>, as <paramref name="options"/> say.
+        /// </summary>
+        /// <param name="name">The name of the shared memory array to be created.</param>
+        /// <param name="length">The number of elements to make room for within the shared memory array.</param>
+        /// <param name="options">The open mode, and the waits of an open. With the default options, this creates the array as
+        /// <see cref="SharedArray{T}(string, int)"/> does.</param>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> elements of <typeparamref name="T"/> take more than
+        /// <see cref="Int32.MaxValue"/> bytes -or- <paramref name="length"/> is less than 1. -or- An option is out of range: see
+        /// <see cref="SharedMemoryOptions"/>.</exception>
+        /// <exception cref="System.IO.IOException">With <see cref="SharedMemoryOpenMode.CreateNew"/>, the name is already in use.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled.</exception>
+        public SharedArray(string name, int length, SharedMemoryOptions options)
+            : base(name, BufferSizeFor(length), true, options)
+        {
+        }
+
+        /// <summary>
         /// Opens an existing shared memory array with the name as specified by <paramref name="name"/>.
         /// </summary>
         /// <param name="name">The name of the shared memory array to open.</param>
@@ -136,6 +154,31 @@ namespace SharedMemory
                 DisposeEvents();
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Opens an existing shared memory array with the name as specified by <paramref name="name"/>, waiting for it as
+        /// <paramref name="options"/> say.
+        /// </summary>
+        /// <param name="name">The name of the shared memory array to open.</param>
+        /// <param name="options">The waits of the open: <see cref="SharedMemoryOptions.OpenTimeout"/>, and on .NET Framework 4 and later
+        /// <c>OpenCancellationToken</c>. <see cref="SharedMemoryOptions.OpenMode"/> is ignored. With the
+        /// default options, this opens the array as <see cref="SharedArray{T}(string)"/> does.</param>
+        /// <remarks>With an <see cref="SharedMemoryOptions.OpenTimeout"/>, this waits within it for the name to appear and for the owner
+        /// to finish creating the array; without one, a missing name throws at once, and the owner is waited for up to 1 s.</remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">If the shared memory location specified by <paramref name="name"/> does not have a
+        /// <see cref="SharedBuffer.BufferSize"/> that is evenly divisible by the size of <typeparamref name="T"/>. -or- An option is out of
+        /// range: see <see cref="SharedMemoryOptions"/>.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">The name does not exist, or did not appear within the open timeout.</exception>
+        /// <exception cref="InvalidOperationException">The array is not ready: its owner had not finished creating it after 1 s, or within
+        /// the open timeout, or closed it first. -or- It was created by a later version of SharedMemory, with a layout this version cannot
+        /// read. -or- Its header is damaged.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, was cancelled before or
+        /// during the open.</exception>
+        public SharedArray(string name, SharedMemoryOptions options)
+            : base(name, 0, false, options)
+        {
         }
 
         #endregion
