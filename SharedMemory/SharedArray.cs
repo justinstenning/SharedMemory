@@ -87,7 +87,25 @@ namespace SharedMemory
         /// <param name="length">The number of elements to make room for within the shared memory array.</param>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> elements of <typeparamref name="T"/> take more than <see cref="Int32.MaxValue"/> bytes -or- <paramref name="length"/> is less than 1.</exception>
         public SharedArray(string name, int length)
-            : base(name, BufferSizeFor(length), true)
+            : this(name, length, SharedMemoryOptions.Defaults)
+        {
+        }
+
+        /// <summary>
+        /// Creates the shared memory array with the name specified by <paramref name="name"/>, as <paramref name="options"/> say.
+        /// </summary>
+        /// <param name="name">The name of the shared memory array to be created.</param>
+        /// <param name="length">The number of elements to make room for within the shared memory array.</param>
+        /// <param name="options">The open mode, and the waits of an open. With the default options, this creates the array as
+        /// <see cref="SharedArray{T}(string, int)"/> does.</param>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> elements of <typeparamref name="T"/> take more than
+        /// <see cref="Int32.MaxValue"/> bytes -or- <paramref name="length"/> is less than 1. -or- An option is out of range: see
+        /// <see cref="SharedMemoryOptions"/>.</exception>
+        /// <exception cref="System.IO.IOException">With <see cref="SharedMemoryOpenMode.CreateNew"/>, the name is already in use.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled.</exception>
+        public SharedArray(string name, int length, SharedMemoryOptions options)
+            : base(name, BufferSizeFor(length), true, options)
         {
             Length = length;
             _elementSize = FastStructure.SizeOf<T>();
@@ -114,24 +132,6 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Creates the shared memory array with the name specified by <paramref name="name"/>, as <paramref name="options"/> say.
-        /// </summary>
-        /// <param name="name">The name of the shared memory array to be created.</param>
-        /// <param name="length">The number of elements to make room for within the shared memory array.</param>
-        /// <param name="options">The open mode, and the waits of an open. With the default options, this creates the array as
-        /// <see cref="SharedArray{T}(string, int)"/> does.</param>
-        /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> elements of <typeparamref name="T"/> take more than
-        /// <see cref="Int32.MaxValue"/> bytes -or- <paramref name="length"/> is less than 1. -or- An option is out of range: see
-        /// <see cref="SharedMemoryOptions"/>.</exception>
-        /// <exception cref="System.IO.IOException">With <see cref="SharedMemoryOpenMode.CreateNew"/>, the name is already in use.</exception>
-        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled.</exception>
-        public SharedArray(string name, int length, SharedMemoryOptions options)
-            : base(name, BufferSizeFor(length), true, options)
-        {
-        }
-
-        /// <summary>
         /// Opens an existing shared memory array with the name as specified by <paramref name="name"/>.
         /// </summary>
         /// <param name="name">The name of the shared memory array to open.</param>
@@ -141,19 +141,8 @@ namespace SharedMemory
         /// it first. -or- It was created by a later version of SharedMemory, with a layout this version cannot read. -or- Its header is
         /// damaged.</exception>
         public SharedArray(string name)
-            : base(name, 0, false)
+            : this(name, SharedMemoryOptions.Defaults)
         {
-            try
-            {
-                _elementSize = FastStructure.SizeOf<T>();
-                Open();
-            }
-            catch
-            {
-                // Nobody can dispose an instance whose constructor threw
-                DisposeEvents();
-                throw;
-            }
         }
 
         /// <summary>
@@ -179,6 +168,17 @@ namespace SharedMemory
         public SharedArray(string name, SharedMemoryOptions options)
             : base(name, 0, false, options)
         {
+            try
+            {
+                _elementSize = FastStructure.SizeOf<T>();
+                Open();
+            }
+            catch
+            {
+                // Nobody can dispose an instance whose constructor threw
+                DisposeEvents();
+                throw;
+            }
         }
 
         #endregion

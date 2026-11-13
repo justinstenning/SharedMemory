@@ -49,18 +49,8 @@ namespace SharedMemory
         /// <param name="name">The name of the shared memory to create</param>
         /// <param name="bufferSize">The size of the buffer</param>
         public BufferReadWrite(string name, int bufferSize)
-            : base(name, bufferSize, true)
+            : this(name, bufferSize, SharedMemoryOptions.Defaults)
         {
-            try
-            {
-                Open();
-            }
-            catch
-            {
-                // Nobody can dispose an instance whose constructor threw
-                DisposeEvents();
-                throw;
-            }
         }
 
         /// <summary>
@@ -78,6 +68,16 @@ namespace SharedMemory
         public BufferReadWrite(string name, int bufferSize, SharedMemoryOptions options)
             : base(name, bufferSize, true, options)
         {
+            try
+            {
+                Open();
+            }
+            catch
+            {
+                // Nobody can dispose an instance whose constructor threw
+                DisposeEvents();
+                throw;
+            }
         }
 
         /// <summary>
@@ -89,18 +89,8 @@ namespace SharedMemory
         /// it first. -or- It was created by a later version of SharedMemory, with a layout this version cannot read. -or- Its header is
         /// damaged.</exception>
         public BufferReadWrite(string name)
-            : base(name, 0, false)
+            : this(name, SharedMemoryOptions.Defaults)
         {
-            try
-            {
-                Open();
-            }
-            catch
-            {
-                // Nobody can dispose an instance whose constructor threw
-                DisposeEvents();
-                throw;
-            }
         }
 
         /// <summary>
@@ -123,6 +113,16 @@ namespace SharedMemory
         public BufferReadWrite(string name, SharedMemoryOptions options)
             : base(name, 0, false, options)
         {
+            try
+            {
+                Open();
+            }
+            catch
+            {
+                // Nobody can dispose an instance whose constructor threw
+                DisposeEvents();
+                throw;
+            }
         }
 
         #endregion

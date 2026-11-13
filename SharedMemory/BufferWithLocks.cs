@@ -88,18 +88,8 @@ namespace SharedMemory
         /// <param name="bufferSize">The buffer size in bytes.</param>
         /// <param name="ownsSharedMemory">Whether or not the current instance owns the shared memory. If true a new shared memory will be created and initialised otherwise an existing one is opened.</param>
         protected BufferWithLocks(string name, long bufferSize, bool ownsSharedMemory)
-            : base(name, bufferSize, ownsSharedMemory)
+            : this(name, bufferSize, ownsSharedMemory, SharedMemoryOptions.Defaults)
         {
-            _writeEvent = NamedEvent.CreateOrOpen(Name + "_evt_write", true, EventResetMode.ManualReset);
-            try
-            {
-                _readEvent = NamedEvent.CreateOrOpen(Name + "_evt_read", true, EventResetMode.ManualReset);
-            }
-            catch
-            {
-                _writeEvent.Dispose();
-                throw;
-            }
         }
 
         /// <summary>
@@ -122,6 +112,16 @@ namespace SharedMemory
         protected BufferWithLocks(string name, long bufferSize, bool ownsSharedMemory, SharedMemoryOptions options)
             : base(name, bufferSize, ownsSharedMemory, options)
         {
+            _writeEvent = NamedEvent.CreateOrOpen(Name + "_evt_write", true, EventResetMode.ManualReset);
+            try
+            {
+                _readEvent = NamedEvent.CreateOrOpen(Name + "_evt_read", true, EventResetMode.ManualReset);
+            }
+            catch
+            {
+                _writeEvent.Dispose();
+                throw;
+            }
         }
 
         #endregion

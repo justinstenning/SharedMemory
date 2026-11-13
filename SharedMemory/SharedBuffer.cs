@@ -69,8 +69,12 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Indicates whether this instance owns the shared memory (i.e. creator of the shared memory)
+        /// Indicates whether this instance owns the shared memory: true for the instance that created it. The owner sets
+        /// <see cref="ShuttingDown"/> for every instance when it closes.
         /// </summary>
+        /// <remarks>Set by the constructor, from whether it creates the buffer, and kept once the instance has closed. An instance that
+        /// opened a buffer another instance created is not its owner, and its close writes nothing to the shared memory.
+        /// <see cref="CreatedSharedMemory"/> tells whether this instance's open created the buffer.</remarks>
         public bool IsOwnerOfSharedMemory { get; private set; }
 
         /// <summary>
@@ -80,10 +84,7 @@ namespace SharedMemory
         /// <remarks>Set by <see cref="Open"/> as soon as it has created the buffer, before <see cref="DoOpen"/> runs, and kept once the
         /// instance has closed. A creator that writes starting contents can check it to tell a new buffer from one that was already
         /// in use.</remarks>
-        public bool CreatedSharedMemory
-        {
-            get { throw new NotImplementedException(); }
-        }
+        public bool CreatedSharedMemory { get; private set; }
         
         /// <summary>
         /// Returns true if the SharedMemory owner has/is shutting down, or if this instance is closed
@@ -198,6 +199,11 @@ namespace SharedMemory
         /// </summary>
         internal static Action<string> LayoutMarkerWritten;
 
+        // The options the constructor read, which every Open of this instance uses
+        private OpenOptions _openOptions;
+        // The waits of the Open that is running, for a subclass's DoOpen in this library; null outside Open
+        private OpenWait _openWait;
+
         #endregion
 
         #region Constructor / destructor
@@ -218,25 +224,8 @@ namespace SharedMemory
         /// </para>
         /// </remarks>
         protected SharedBuffer(string name, long bufferSize, bool ownsSharedMemory)
+            : this(name, bufferSize, ownsSharedMemory, SharedMemoryOptions.Defaults)
         {
-            #region Argument validation
-            if (name == String.Empty || name == null)
-                throw new ArgumentException("Cannot be String.Empty or null", "name");
-            if (ownsSharedMemory && bufferSize <= 0)
-                throw new ArgumentOutOfRangeException("bufferSize", bufferSize, "Buffer size must be larger than zero when creating a new shared memory buffer.");
-#if DEBUG
-            else if (!ownsSharedMemory && bufferSize > 0)
-                System.Diagnostics.Debug.Write("Buffer size is ignored when opening an existing shared memory buffer.", "Warning");
-#endif
-            #endregion
-
-            IsOwnerOfSharedMemory = ownsSharedMemory;
-            Name = name;
-
-            if (IsOwnerOfSharedMemory)
-            {
-                BufferSize = bufferSize;
-            }
         }
 
         /// <summary>
@@ -265,7 +254,26 @@ namespace SharedMemory
         /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled.</exception>
         protected SharedBuffer(string name, long bufferSize, bool ownsSharedMemory, SharedMemoryOptions options)
         {
-            throw new NotImplementedException();
+            #region Argument validation
+            if (name == String.Empty || name == null)
+                throw new ArgumentException("Cannot be String.Empty or null", "name");
+            if (ownsSharedMemory && bufferSize <= 0)
+                throw new ArgumentOutOfRangeException("bufferSize", bufferSize, "Buffer size must be larger than zero when creating a new shared memory buffer.");
+#if DEBUG
+            else if (!ownsSharedMemory && bufferSize > 0)
+                System.Diagnostics.Debug.Write("Buffer size is ignored when opening an existing shared memory buffer.", "Warning");
+#endif
+            // Read once and checked, the token included, before a subclass makes anything
+            _openOptions = OpenOptions.Read(options);
+            #endregion
+
+            IsOwnerOfSharedMemory = ownsSharedMemory;
+            Name = name;
+
+            if (IsOwnerOfSharedMemory)
+            {
+                BufferSize = bufferSize;
+            }
         }
 
         /// <summary>
@@ -289,14 +297,22 @@ namespace SharedMemory
         /// <para>A creator records in the header the layout version, the buffer's kind and the lock mode, and once <see cref="DoOpen"/> has
         /// returned true, that the buffer is ready (<see cref="SharedHeader"/>). An opener waits up to 1 s for the ready flag, or for a buffer
         /// created by SharedMemory 2.3.x or earlier, which records none, for its size.</para>
+        /// <para>The options the constructor took change the waits: with <see cref="SharedMemoryOptions.OpenTimeout"/>, an opener waits
+        /// for the name to appear and for the ready flag within that time in all, counted from the start of this call, and on .NET Framework 4
+        /// and later <c>OpenCancellationToken</c> cancels the waits. A creator sets
+        /// <see cref="CreatedSharedMemory"/> once it has created the buffer.</para>
         /// </remarks>
         /// <exception cref="System.IO.IOException">If trying to create a new shared memory buffer with a duplicate name as buffer owner.</exception>
-        /// <exception cref="System.IO.FileNotFoundException">If trying to open a new shared memory buffer that does not exist as a consumer of existing buffer.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">If trying to open a new shared memory buffer that does not exist as a consumer of existing buffer.
+        /// With <see cref="SharedMemoryOptions.OpenTimeout"/>, the name did not appear within it.</exception>
         /// <exception cref="System.ArgumentOutOfRangeException">If trying to create a new shared memory buffer with a size larger than the logical addressable space.</exception>
         /// <exception cref="System.InvalidOperationException">A read or write on the earlier mapping of this instance is still running, for example on another thread or in the callback that calls Open.
-        /// -or- Opening: the buffer is not ready, because its owner had not finished creating it after 1 s, or closed it first; it was created
-        /// by a later version of SharedMemory with a layout version or lock mode this version cannot read; it is not a circular buffer, and
-        /// this is a <see cref="CircularBuffer"/>; or its header is damaged.</exception>
+        /// -or- Opening: the buffer is not ready, because its owner had not finished creating it after 1 s, or within
+        /// <see cref="SharedMemoryOptions.OpenTimeout"/>, or closed it first; it was created by a later version of SharedMemory with a layout
+        /// version or lock mode this version cannot read; it is not a circular buffer, and this is a <see cref="CircularBuffer"/>; or its header
+        /// is damaged.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, was cancelled while the open
+        /// waited.</exception>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA2202:Do not dispose objects multiple times")]
         protected bool Open()
         {
@@ -311,18 +327,25 @@ namespace SharedMemory
             if (Interlocked.CompareExchange(ref _leases, Opened, Unmapped) != Unmapped)
                 throw StillInUse();
 
+            OpenOptions options = _openOptions ?? OpenOptions.Defaults;
+            var wait = new OpenWait(options);
+            CreatedSharedMemory = false;
             try
             {
+                if (IsOwnerOfSharedMemory && options.Mode == SharedMemoryOpenMode.CreateOrOpen)
+                    throw new NotImplementedException();
+
                 // Attempts to create or open the shared memory with a name of this.Name
 #if NET10_0_OR_GREATER
                 if (NamedMapping.MapsWithoutFile)
-                    OpenWithoutFile();
+                    OpenWithoutFile(wait);
                 else
 #endif
                 if (IsOwnerOfSharedMemory)
                 {
                     // Create a new shared memory mapping
                     _mapping = NamedMapping.CreateNew(Name, SharedMemorySize);
+                    CreatedSharedMemory = true;
                     Mmf = _mapping.File;
 
                     // Create a view to the entire region of the shared memory
@@ -336,8 +359,8 @@ namespace SharedMemory
                 }
                 else
                 {
-                    // Open an existing shared memory mapping
-                    _mapping = NamedMapping.OpenExisting(Name);
+                    // Open an existing shared memory mapping, waiting for its name within the open's timeout
+                    _mapping = OpenExisting(wait);
                     Mmf = _mapping.File;
 
                     // Retrieve the header from the shared memory in order to initialise the correct size. The view is ReadWrite: the
@@ -349,7 +372,7 @@ namespace SharedMemory
                         try
                         {
                             var header = (SharedHeader*)(headerPtr + HeaderOffset);
-                            BufferSize = WaitForHeader(header) - Marshal.SizeOf(typeof(SharedHeader));
+                            BufferSize = WaitForHeader(header, wait) - Marshal.SizeOf(typeof(SharedHeader));
                         }
                         finally
                         {
@@ -372,6 +395,7 @@ namespace SharedMemory
             }
 
             // Complete any additional open logic
+            _openWait = wait;
             try
             {
                 if (!DoOpen())
@@ -391,16 +415,58 @@ namespace SharedMemory
                 Close();
                 throw;
             }
+            finally
+            {
+                _openWait = null;
+            }
+        }
+
+        /// <summary>
+        /// The waits of the <see cref="Open"/> that is running, for a subclass in this library that waits for its owner in
+        /// <see cref="DoOpen"/>; outside Open, those of an open without a timeout.
+        /// </summary>
+        internal OpenWait CurrentOpenWait
+        {
+            get { return _openWait ?? new OpenWait(OpenOptions.Defaults); }
+        }
+
+        /// <summary>
+        /// An opener's open of the name. Without a timeout, a name that does not exist throws at once. With one, the name is looked
+        /// for again after 1 ms, then twice as long each time up to 16 ms, until it appears or the timeout runs out; on Linux and
+        /// macOS a look that finds an abandoned buffer removes it, and the wait goes on.
+        /// </summary>
+        /// <exception cref="System.IO.FileNotFoundException">The name does not exist, or did not appear within the timeout.</exception>
+        private NamedMapping OpenExisting(OpenWait wait)
+        {
+            for (int pause = 1; ; pause = Math.Min(pause * 2, 16))
+            {
+                wait.ThrowIfCancelled();
+                try
+                {
+                    return NamedMapping.OpenExisting(Name);
+                }
+                catch (System.IO.FileNotFoundException notFound)
+                {
+                    if (!wait.HasTimeout)
+                        throw;
+                    int left = wait.Left;
+                    if (left == 0)
+                        throw new System.IO.FileNotFoundException(String.Format("The shared memory \"{0}\" does not exist: it did not appear after waiting {1}.", Name, wait.Waited(0)), Name, notFound);
+                    wait.Pause(left == Timeout.Infinite ? pause : Math.Min(pause, left));
+                }
+            }
         }
 
         /// <summary>
         /// Reads the header an opener found, and returns the total size once the owner has finished creating the buffer, looking every
-        /// 1 ms for up to 1 s: once the layout marker's ready flag is set, or for a buffer without a marker, from SharedMemory 2.3.x or
-        /// earlier, once the size is written. A marker this version cannot read is refused at once (<see cref="CheckLayoutMarker"/>).
+        /// 1 ms for up to 1 s, or until the open's timeout runs out where it has one: once the layout marker's ready flag is set, or for
+        /// a buffer without a marker, from SharedMemory 2.3.x or earlier, once the size is written. A marker this version cannot read is
+        /// refused at once (<see cref="CheckLayoutMarker"/>).
         /// </summary>
-        /// <exception cref="InvalidOperationException">The buffer was not ready after 1 s, or its owner closed it before it was; the layout
-        /// marker is refused; or the size of a ready buffer leaves no room after the header.</exception>
-        private long WaitForHeader(SharedHeader* header)
+        /// <exception cref="InvalidOperationException">The buffer was not ready after 1 s, or within the open's timeout, or its owner closed
+        /// it before it was; the layout marker is refused; or the size of a ready buffer leaves no room after the header.</exception>
+        /// <exception cref="OperationCanceledException">The open's token was cancelled.</exception>
+        private long WaitForHeader(SharedHeader* header, OpenWait wait)
         {
             System.Diagnostics.Stopwatch waited = null;
             while (true)
@@ -435,11 +501,11 @@ namespace SharedMemory
 
                 if (waited == null)
                     waited = System.Diagnostics.Stopwatch.StartNew();
-                else if (waited.ElapsedMilliseconds >= 1000)
+                if (wait.IsOver(waited, 1000))
                     throw new InvalidOperationException(marker != 0
-                        ? String.Format("The shared memory \"{0}\" is not ready: its owner had not finished creating it after waiting 1 s.", Name)
-                        : String.Format("The shared memory \"{0}\" is not ready: its size was still 0 after waiting 1 s for its owner to write it.", Name));
-                Thread.Sleep(1);
+                        ? String.Format("The shared memory \"{0}\" is not ready: its owner had not finished creating it after waiting {1}.", Name, wait.Waited(1000))
+                        : String.Format("The shared memory \"{0}\" is not ready: its size was still 0 after waiting {1} for its owner to write it.", Name, wait.Waited(1000)));
+                wait.Pause(1);
             }
         }
 
@@ -1170,21 +1236,23 @@ namespace SharedMemory
         /// stay null, the pointers come from the mapping, and an accessor of the same size as <see cref="View"/> would have stands in for it, so that
         /// the size the header gives is checked against the mapping as it is elsewhere.
         /// </summary>
-        private void OpenWithoutFile()
+        private void OpenWithoutFile(OpenWait wait)
         {
             if (IsOwnerOfSharedMemory)
             {
                 // Create a new shared memory mapping
                 _mapping = NamedMapping.CreateNew(Name, SharedMemorySize);
+                CreatedSharedMemory = true;
                 ViewPtr = _mapping.Pointer;
                 BufferStartPtr = ViewPtr + BufferOffset;
             }
             else
             {
-                // Open an existing shared memory mapping, a whole number of pages, and size the buffer from its header
-                _mapping = NamedMapping.OpenExisting(Name);
+                // Open an existing shared memory mapping, a whole number of pages, waiting for its name within the open's timeout,
+                // and size the buffer from its header
+                _mapping = OpenExisting(wait);
                 ViewPtr = _mapping.Pointer;
-                BufferSize = WaitForHeader((SharedHeader*)(ViewPtr + HeaderOffset)) - Marshal.SizeOf(typeof(SharedHeader));
+                BufferSize = WaitForHeader((SharedHeader*)(ViewPtr + HeaderOffset), wait) - Marshal.SizeOf(typeof(SharedHeader));
                 BufferStartPtr = ViewPtr + HeaderOffset + Marshal.SizeOf(typeof(SharedHeader));
             }
             _mappedView = new System.IO.UnmanagedMemoryAccessor(_mapping.Memory, 0, SharedMemorySize, System.IO.FileAccess.ReadWrite);

@@ -278,9 +278,8 @@ namespace SharedMemory
         /// </remarks>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="nodeCount"/> is less than 2, or <paramref name="nodeBufferSize"/> is less than 1.</exception>
         public CircularBuffer(string name, int nodeCount, int nodeBufferSize)
-            : this(name, nodeCount, nodeBufferSize, true)
+            : this(name, nodeCount, nodeBufferSize, CircularBufferOptions.Defaults)
         {
-            Open();
         }
 
         /// <summary>
@@ -298,8 +297,9 @@ namespace SharedMemory
         /// <exception cref="System.IO.IOException">With <see cref="SharedMemoryOpenMode.CreateNew"/>, the name is already in use.</exception>
         /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled.</exception>
         public CircularBuffer(string name, int nodeCount, int nodeBufferSize, CircularBufferOptions options)
-            : base(name, 0, true, options)
+            : this(name, nodeCount, nodeBufferSize, true, options)
         {
+            Open();
         }
 
         /// <summary>
@@ -313,9 +313,8 @@ namespace SharedMemory
         /// created by a later version of SharedMemory, with a layout this version cannot read. -or- Its header is damaged, or its node header
         /// does not describe at least 2 nodes of at least 1 byte that fit in the buffer.</exception>
         public CircularBuffer(string name)
-            : this(name, 0, 0, false)
+            : this(name, CircularBufferOptions.Defaults)
         {
-            Open();
         }
 
         /// <summary>
@@ -339,8 +338,9 @@ namespace SharedMemory
         /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, was cancelled before or
         /// during the open.</exception>
         public CircularBuffer(string name, CircularBufferOptions options)
-            : base(name, 0, false, options)
+            : this(name, 0, 0, false, options)
         {
+            Open();
         }
 
         /// <summary>
@@ -348,14 +348,14 @@ namespace SharedMemory
         /// The kind is set before <see cref="SharedBuffer.Open"/> writes it.
         /// </summary>
         internal CircularBuffer(string name, int nodeCount, int nodeBufferSize, int kind)
-            : this(name, nodeCount, nodeBufferSize, true)
+            : this(name, nodeCount, nodeBufferSize, true, CircularBufferOptions.Defaults)
         {
             _kind = kind;
             Open();
         }
 
-        private CircularBuffer(string name, int nodeCount, int nodeBufferSize, bool ownsSharedMemory)
-            : base(name, Marshal.SizeOf(typeof(NodeHeader)) + (Marshal.SizeOf(typeof(Node)) * nodeCount) + (nodeCount * (long)nodeBufferSize), ownsSharedMemory)
+        private CircularBuffer(string name, int nodeCount, int nodeBufferSize, bool ownsSharedMemory, SharedMemoryOptions options)
+            : base(name, Marshal.SizeOf(typeof(NodeHeader)) + (Marshal.SizeOf(typeof(Node)) * nodeCount) + (nodeCount * (long)nodeBufferSize), ownsSharedMemory, options)
         {
             #region Argument validation
             if (ownsSharedMemory && nodeCount < 2)
@@ -462,9 +462,12 @@ namespace SharedMemory
         }
 
         /// <summary>
-        /// Reads the node count from the node header, waiting up to 1 s while it is 0 because the owner is still initialising the buffer.
+        /// Reads the node count from the node header, waiting up to 1 s while it is 0 because the owner is still initialising the buffer,
+        /// or where the open has a timeout, until it runs out. Only a buffer created by SharedMemory 2.3.x or earlier, which records no
+        /// ready flag, can be opened before its node count is written.
         /// </summary>
-        /// <exception cref="InvalidOperationException">The node count was still 0 after 1 s.</exception>
+        /// <exception cref="InvalidOperationException">The node count was still 0 after 1 s, or at the end of the open's timeout.</exception>
+        /// <exception cref="OperationCanceledException">The open's token was cancelled.</exception>
         private int WaitForNodeCount()
         {
             // A fenced read, so that the node list and NodeBufferSize written before NodeCount are read after it
@@ -472,12 +475,13 @@ namespace SharedMemory
             if (nodeCount != 0)
                 return nodeCount;
 
+            OpenWait wait = CurrentOpenWait;
             var waited = System.Diagnostics.Stopwatch.StartNew();
             while ((nodeCount = Interlocked.CompareExchange(ref _nodeHeader->NodeCount, 0, 0)) == 0)
             {
-                if (waited.ElapsedMilliseconds >= 1000)
-                    throw new InvalidOperationException(String.Format("The circular buffer \"{0}\" is not ready: its node count was still 0 after waiting 1 s for its owner to initialise it.", Name));
-                Thread.Sleep(1);
+                if (wait.IsOver(waited, 1000))
+                    throw new InvalidOperationException(String.Format("The circular buffer \"{0}\" is not ready: its node count was still 0 after waiting {1} for its owner to initialise it.", Name, wait.Waited(1000)));
+                wait.Pause(1);
             }
             return nodeCount;
         }
