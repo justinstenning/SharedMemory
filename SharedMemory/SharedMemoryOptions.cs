@@ -180,11 +180,14 @@ namespace SharedMemory
             int? timeout = null;
             if (openTimeout.HasValue)
             {
-                // As WaitHandle.WaitOne(TimeSpan) reads a timeout
-                long milliseconds = (long)openTimeout.Value.TotalMilliseconds;
-                if ((milliseconds < 0 && milliseconds != Timeout.Infinite) || milliseconds > int.MaxValue)
+                // Checked in ticks, before rounding to whole milliseconds, so that no value out of range rounds into it
+                long ticks = openTimeout.Value.Ticks;
+                if (ticks == -TimeSpan.TicksPerMillisecond)
+                    timeout = Timeout.Infinite;
+                else if (ticks < 0 || ticks > int.MaxValue * TimeSpan.TicksPerMillisecond)
                     throw new ArgumentOutOfRangeException("options", openTimeout.Value, "OpenTimeout must be from zero to Int32.MaxValue milliseconds, or Timeout.InfiniteTimeSpan to wait without limit.");
-                timeout = (int)milliseconds;
+                else
+                    timeout = (int)(ticks / TimeSpan.TicksPerMillisecond);
             }
 
 #if NET40Plus

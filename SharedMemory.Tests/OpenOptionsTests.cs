@@ -141,7 +141,10 @@ namespace SharedMemoryTests
         [TestMethod]
         [DataRow("OpenMode 7")]
         [DataRow("OpenTimeout -2 ms")]
+        [DataRow("OpenTimeout -1.5 ms")]
+        [DataRow("OpenTimeout -0.5 ms")]
         [DataRow("OpenTimeout Int32.MaxValue + 1 ms")]
+        [DataRow("OpenTimeout Int32.MaxValue ms + 1 tick")]
         public void Constructor_OptionsOutOfRange_Throw(string option)
         {
             foreach (string constructor in Constructors)
@@ -152,6 +155,12 @@ namespace SharedMemoryTests
                     options.OpenMode = (SharedMemoryOpenMode)7;
                 else if (option == "OpenTimeout -2 ms")
                     options.OpenTimeout = TimeSpan.FromTicks(-2 * TimeSpan.TicksPerMillisecond);
+                else if (option == "OpenTimeout -1.5 ms")
+                    options.OpenTimeout = TimeSpan.FromTicks(-3 * TimeSpan.TicksPerMillisecond / 2);
+                else if (option == "OpenTimeout -0.5 ms")
+                    options.OpenTimeout = TimeSpan.FromTicks(-TimeSpan.TicksPerMillisecond / 2);
+                else if (option == "OpenTimeout Int32.MaxValue ms + 1 tick")
+                    options.OpenTimeout = TimeSpan.FromTicks(int.MaxValue * TimeSpan.TicksPerMillisecond + 1);
                 else
                     options.OpenTimeout = TimeSpan.FromTicks((int.MaxValue + 1L) * TimeSpan.TicksPerMillisecond);
 
