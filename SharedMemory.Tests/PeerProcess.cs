@@ -87,6 +87,24 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
+        /// Sends a command without waiting for its reply, so that several peers can run commands at once; <see cref="ReplyTo"/>
+        /// takes the reply.
+        /// </summary>
+        public void Post(string command)
+        {
+            process.StandardInput.WriteLine(command);
+            process.StandardInput.Flush();
+        }
+
+        /// <summary>
+        /// The reply to a command sent with <see cref="Post"/>.
+        /// </summary>
+        public string ReplyTo(string command, int timeout = ReplyTimeout)
+        {
+            return Receive(command, timeout);
+        }
+
+        /// <summary>
         /// Sends a command that must succeed, and returns its result, or an empty string if it has none.
         /// </summary>
         public string Ok(string command, int timeout = ReplyTimeout)

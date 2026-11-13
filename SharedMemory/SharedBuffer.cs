@@ -199,6 +199,12 @@ namespace SharedMemory
         /// </summary>
         internal static Action<string> LayoutMarkerWritten;
 
+        /// <summary>
+        /// For the tests alone: create-or-open calls it with its name when a create has found the name in use, before it opens the
+        /// buffer there. Null outside the tests.
+        /// </summary>
+        internal static Action<string> CreateFoundNameInUse;
+
         // The options the constructor read, which every Open of this instance uses
         private OpenOptions _openOptions;
         // The waits of the Open that is running, for a subclass's DoOpen in this library; null outside Open
@@ -785,6 +791,30 @@ namespace SharedMemory
         /// <remarks>It is possible for <see cref="Close"/> to be called before <see cref="Open"/> has completed successfully, in this situation <see cref="DoClose"/> should fail gracefully.</remarks>
         protected virtual void DoClose()
         {
+        }
+
+        #endregion
+
+        #region Information
+
+        /// <summary>
+        /// Reads the header of the buffer named <paramref name="name"/> without opening it for use: its kind, its layout, whether its
+        /// owner has finished creating it or has closed it, and its sizes.
+        /// </summary>
+        /// <param name="name">The name of the buffer.</param>
+        /// <param name="info">What the header said, or null if nothing has the name.</param>
+        /// <returns>true if a buffer has the name, ready or not; false if nothing has it.</returns>
+        /// <remarks>
+        /// <para>A snapshot that does not wait: the buffer can change, or go, at any time after. It creates no event and writes
+        /// nothing to the shared memory.</para>
+        /// <para>On Linux and macOS, a buffer whose last holder died without closing it is removed, as any open removes it, and
+        /// this returns false.</para>
+        /// </remarks>
+        /// <exception cref="ArgumentException"><paramref name="name"/> is null or empty.</exception>
+        /// <exception cref="UnauthorizedAccessException">The buffer cannot be opened by this user.</exception>
+        public static bool TryGetInfo(string name, out SharedBufferInfo info)
+        {
+            throw new NotImplementedException();
         }
 
         #endregion
