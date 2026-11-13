@@ -102,8 +102,17 @@ namespace SharedMemory
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> elements of <typeparamref name="T"/> take more than
         /// <see cref="Int32.MaxValue"/> bytes -or- <paramref name="length"/> is less than 1. -or- An option is out of range: see
         /// <see cref="SharedMemoryOptions"/>.</exception>
+        /// <remarks>With <see cref="SharedMemoryOpenMode.CreateOrOpen"/>, if the name is already in use, this opens the array there,
+        /// which must be a SharedArray with the same length in bytes, waiting for its owner to finish creating it. <see cref="SharedBuffer.CreatedSharedMemory"/>
+        /// is then false. If its owner had closed it, this instance takes it over and becomes its owner
+        /// (<see cref="SharedBuffer.IsOwnerOfSharedMemory"/>); its contents are kept.</remarks>
         /// <exception cref="System.IO.IOException">With <see cref="SharedMemoryOpenMode.CreateNew"/>, the name is already in use.</exception>
-        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled.</exception>
+        /// <exception cref="InvalidOperationException">With <see cref="SharedMemoryOpenMode.CreateOrOpen"/>, the array already there is
+        /// another kind of buffer, or has other sizes; or it is not ready: its owner had not finished creating it within the open
+        /// timeout, or 1 s without one, or closed it first; or it was created by a later version of SharedMemory, with a layout this
+        /// version cannot read.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled, or
+        /// is cancelled while create-or-open waits.</exception>
         public SharedArray(string name, int length, SharedMemoryOptions options)
             : base(name, BufferSizeFor(length), true, options)
         {
@@ -182,6 +191,18 @@ namespace SharedMemory
         }
 
         #endregion
+
+        /// <summary>
+        /// Create-or-open's check of the array it attached to: its size must be what <see cref="Length"/> elements of
+        /// <typeparamref name="T"/> take. The element type itself is not recorded, so it cannot be checked.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The sizes differ.</exception>
+        internal override void CheckAttachedSize(long requestedBufferSize)
+        {
+            if (BufferSize != requestedBufferSize)
+                throw new InvalidOperationException(String.Format("The shared array \"{0}\" already exists with {1} bytes, not the {2} that {3} elements of {4} take.",
+                    Name, BufferSize, requestedBufferSize, Length, typeof(T).Name));
+        }
 
         /// <summary>
         /// Perform any initialisation required when opening the shared memory array

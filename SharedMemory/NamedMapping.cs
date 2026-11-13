@@ -75,6 +75,50 @@ namespace SharedMemory
         }
 
         /// <summary>
+        /// Creates shared memory of <paramref name="size"/> bytes under <paramref name="name"/>, or returns null if the name is in use,
+        /// keeping nothing of it: create-or-open's create, which then opens the name.
+        /// </summary>
+        /// <param name="name">The name.</param>
+        /// <param name="size">The size in bytes.</param>
+        /// <param name="failure">Null, but on Windows where the framework's <see cref="MemoryMappedFile"/> creates the memory: the
+        /// <see cref="IOException"/> its create threw. It throws one for a name in use and for other failures alike, so every one
+        /// returns null here; the caller's open of the name then tells the two apart.</param>
+        /// <exception cref="System.IO.IOException">Linux, macOS and the .NET Framework 3.5 build: the create failed other than for a
+        /// name in use.</exception>
+        internal static NamedMapping TryCreateNew(string name, long size, out IOException failure)
+        {
+            failure = null;
+#if NET10_0_OR_GREATER
+            if (LinuxSharedFile.IsSupported)
+            {
+                LinuxSharedFile linuxFile = LinuxSharedFile.TryCreate(name, size);
+                return linuxFile == null ? null : Map(linuxFile, size);
+            }
+            if (MacSharedObject.IsSupported)
+            {
+                MacSharedObject macObject = MacSharedObject.TryCreate(name, size);
+                return macObject == null ? null : Map(macObject);
+            }
+            if (!OperatingSystem.IsWindows())
+                throw PlatformSupport.NotSupported("named shared memory");
+#endif
+#if NET40Plus
+            try
+            {
+                return new NamedMapping(MemoryMappedFile.CreateNew(name, size));
+            }
+            catch (IOException e)
+            {
+                failure = e;
+                return null;
+            }
+#else
+            MemoryMappedFile file = MemoryMappedFile.TryCreateNew(name, size);
+            return file == null ? null : new NamedMapping(file);
+#endif
+        }
+
+        /// <summary>
         /// Opens the shared memory another instance created under <paramref name="name"/>.
         /// </summary>
         /// <exception cref="System.IO.FileNotFoundException">Nothing exists under the name.</exception>

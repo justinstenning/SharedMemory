@@ -250,6 +250,18 @@ namespace SharedMemory
         }
 
         /// <summary>
+        /// The milliseconds left of the open's whole budget, counted from its start: the timeout, or without one
+        /// <paramref name="fixedMilliseconds"/>. 0 once it has run out, or <see cref="Timeout.Infinite"/> for no limit.
+        /// </summary>
+        internal int LeftOf(int fixedMilliseconds)
+        {
+            if (HasTimeout)
+                return Left;
+            long left = fixedMilliseconds - _clock.ElapsedMilliseconds;
+            return left > 0 ? (int)left : 0;
+        }
+
+        /// <summary>
         /// Whether a wait for the owner is over: with a timeout, once it has run out since the open started; without one, once
         /// <paramref name="waited"/> has run for <paramref name="fixedMilliseconds"/>.
         /// </summary>

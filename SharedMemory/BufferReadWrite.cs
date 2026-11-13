@@ -63,8 +63,17 @@ namespace SharedMemory
         /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferSize"/> is not larger than zero. -or- An option is out of
         /// range: see <see cref="SharedMemoryOptions"/>.</exception>
+        /// <remarks>With <see cref="SharedMemoryOpenMode.CreateOrOpen"/>, if the name is already in use, this opens the buffer there,
+        /// which must be a BufferReadWrite with the same size, waiting for its owner to finish creating it. <see cref="SharedBuffer.CreatedSharedMemory"/>
+        /// is then false. If its owner had closed it, this instance takes it over and becomes its owner
+        /// (<see cref="SharedBuffer.IsOwnerOfSharedMemory"/>); its contents are kept.</remarks>
         /// <exception cref="System.IO.IOException">With <see cref="SharedMemoryOpenMode.CreateNew"/>, the name is already in use.</exception>
-        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled.</exception>
+        /// <exception cref="InvalidOperationException">With <see cref="SharedMemoryOpenMode.CreateOrOpen"/>, the buffer already there is
+        /// another kind of buffer, or has other sizes; or it is not ready: its owner had not finished creating it within the open
+        /// timeout, or 1 s without one, or closed it first; or it was created by a later version of SharedMemory, with a layout this
+        /// version cannot read.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled, or
+        /// is cancelled while create-or-open waits.</exception>
         public BufferReadWrite(string name, int bufferSize, SharedMemoryOptions options)
             : base(name, bufferSize, true, options)
         {

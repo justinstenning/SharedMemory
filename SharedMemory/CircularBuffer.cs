@@ -171,6 +171,9 @@ namespace SharedMemory
 
         // The kind a creator records in the layout marker: 3, or 4 for RpcBuffer's rings
         private readonly int _kind = LayoutMarker.KindCircularBuffer;
+        // The node count and node size the constructor asked for, which create-or-open checks against the ring already there
+        private readonly int _requestedNodeCount;
+        private readonly int _requestedNodeBufferSize;
         
         #endregion
 
@@ -294,8 +297,17 @@ namespace SharedMemory
         /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="nodeCount"/> is less than 2, or <paramref name="nodeBufferSize"/> is
         /// less than 1. -or- An option is out of range: see <see cref="SharedMemoryOptions"/>.</exception>
+        /// <remarks>With <see cref="SharedMemoryOpenMode.CreateOrOpen"/>, if the name is already in use, this opens the circular buffer there,
+        /// which must be a CircularBuffer with the same node count and node size, waiting for its owner to finish creating it. <see cref="SharedBuffer.CreatedSharedMemory"/>
+        /// is then false. If its owner had closed it, this instance takes it over and becomes its owner
+        /// (<see cref="SharedBuffer.IsOwnerOfSharedMemory"/>); its contents are kept.</remarks>
         /// <exception cref="System.IO.IOException">With <see cref="SharedMemoryOpenMode.CreateNew"/>, the name is already in use.</exception>
-        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled.</exception>
+        /// <exception cref="InvalidOperationException">With <see cref="SharedMemoryOpenMode.CreateOrOpen"/>, the circular buffer already there is
+        /// another kind of buffer, or has other sizes; or it is not ready: its owner had not finished creating it within the open
+        /// timeout, or 1 s without one, or closed it first; or it was created by a later version of SharedMemory, with a layout this
+        /// version cannot read.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled, or
+        /// is cancelled while create-or-open waits.</exception>
         public CircularBuffer(string name, int nodeCount, int nodeBufferSize, CircularBufferOptions options)
             : this(name, nodeCount, nodeBufferSize, true, options)
         {
@@ -372,6 +384,8 @@ namespace SharedMemory
             {
                 NodeCount = nodeCount;
                 NodeBufferSize = nodeBufferSize;
+                _requestedNodeCount = nodeCount;
+                _requestedNodeBufferSize = nodeBufferSize;
             }
 
             _overridesGetNodeForWriting = Overrides("GetNodeForWriting");
@@ -409,6 +423,25 @@ namespace SharedMemory
         }
 
         /// <summary>
+        /// Create-or-open checks a ring's node count and node size once <see cref="DoOpen"/> has read them
+        /// (<see cref="CheckAttachedGeometry"/>), so not its size in bytes, which follows from them.
+        /// </summary>
+        internal override void CheckAttachedSize(long requestedBufferSize)
+        {
+        }
+
+        /// <summary>
+        /// Create-or-open's check of the ring it attached to: the node count and node size it read must be the constructor's.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">They differ.</exception>
+        internal override void CheckAttachedGeometry()
+        {
+            if (NodeCount != _requestedNodeCount || NodeBufferSize != _requestedNodeBufferSize)
+                throw new InvalidOperationException(String.Format("The circular buffer \"{0}\" already exists with {1} nodes of {2} bytes, not {3} nodes of {4} bytes.",
+                    Name, NodeCount, NodeBufferSize, _requestedNodeCount, _requestedNodeBufferSize));
+        }
+
+        /// <summary>
         /// Attempts to create the <see cref="EventWaitHandle"/> handles and initialise the node header and buffers.
         /// </summary>
         /// <returns>True if the events and nodes were initialised successfully.</returns>
@@ -422,6 +455,10 @@ namespace SharedMemory
 
             if (IsOwnerOfSharedMemory)
             {
+                // The constructor's sizes, which an earlier open that attached to a ring already there replaced with the ones it found
+                NodeCount = _requestedNodeCount;
+                NodeBufferSize = _requestedNodeBufferSize;
+
                 // Retrieve pointer to node header
                 _nodeHeader = (NodeHeader*)(BufferStartPtr + NodeHeaderOffset);
                 _nodeBufferOffset = NodeBufferOffset;
