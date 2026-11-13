@@ -959,9 +959,141 @@ namespace SharedMemory
         /// </remarks>
         /// <exception cref="ArgumentException"><paramref name="name"/> is null or empty.</exception>
         /// <exception cref="UnauthorizedAccessException">The buffer cannot be opened by this user.</exception>
+        /// <exception cref="PlatformNotSupportedException">This build has no named shared memory on this platform.</exception>
+        /// <exception cref="System.IO.IOException">The buffer's name could not be opened for another reason.</exception>
         public static bool TryGetInfo(string name, out SharedBufferInfo info)
         {
-            throw new NotImplementedException();
+            if (name == String.Empty || name == null)
+                throw new ArgumentException("Cannot be String.Empty or null", "name");
+
+            info = null;
+            NamedMapping mapping;
+            try
+            {
+                // As an opener opens it: on Linux and macOS an abandoned buffer is removed here
+                mapping = NamedMapping.OpenExisting(name);
+            }
+            catch (System.IO.FileNotFoundException)
+            {
+                return false;
+            }
+
+            try
+            {
+#if NET10_0_OR_GREATER
+                if (NamedMapping.MapsWithoutFile)
+                {
+                    info = ReadInfo(name, mapping.Pointer, (long)mapping.Memory.ByteLength);
+                    return true;
+                }
+#endif
+                using (MemoryMappedFile file = mapping.File)
+                {
+                    // The shared header first; a ring's node header after it only where the header says it is there
+                    int headerSize = Marshal.SizeOf(typeof(SharedHeader));
+                    int ringHeaderSize = headerSize + Marshal.SizeOf(typeof(CircularBuffer.NodeHeader));
+                    info = ReadInfo(name, file, headerSize);
+                    if (info.NodeCount < 0)
+                        info = ReadInfo(name, file, ringHeaderSize);
+                    return true;
+                }
+            }
+            finally
+            {
+                mapping.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// <see cref="TryGetInfo"/>'s read through a view of the first <paramref name="length"/> bytes. The view is ReadWrite: the header
+        /// is read with interlocked instructions, which write, and fault on a read-only page.
+        /// </summary>
+        private static SharedBufferInfo ReadInfo(string name, MemoryMappedFile file, long length)
+        {
+            using (var view = file.CreateViewAccessor(0, length, MemoryMappedFileAccess.ReadWrite))
+            {
+                byte* pointer = null;
+                view.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
+                try
+                {
+                    return ReadInfo(name, pointer, length);
+                }
+                finally
+                {
+                    view.SafeMemoryMappedViewHandle.ReleasePointer();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Reads the shared header at <paramref name="pointer"/>, and a ring's node header after it if <paramref name="length"/> takes
+        /// it in. Where the header says a ring's node header is there to read but the length does not take it in, the info's
+        /// NodeCount is -1, to read again with a longer view.
+        /// </summary>
+        private static SharedBufferInfo ReadInfo(string name, byte* pointer, long length)
+        {
+            var header = (SharedHeader*)pointer;
+            int headerSize = Marshal.SizeOf(typeof(SharedHeader));
+            int ringHeaderSize = headerSize + Marshal.SizeOf(typeof(CircularBuffer.NodeHeader));
+
+            // In an opener's order: the size, Shutdown, then the marker (WaitForHeader)
+            long size = Interlocked.Read(ref header->SharedMemorySize);
+            bool shutdown = header->Shutdown != 0;
+            int marker = Interlocked.CompareExchange(ref header->LayoutMarker, 0, 0);
+
+            SharedBufferKind kind = SharedBufferKind.Unknown;
+            int version = 0;
+            bool supported = true, ready = size != 0;
+            if (marker != 0)
+            {
+                version = LayoutMarker.Version(marker);
+                supported = version == LayoutMarker.CurrentVersion && LayoutMarker.LockMode(marker) == LayoutMarker.CurrentLockMode;
+                ready = LayoutMarker.IsReady(marker);
+                kind = KindOf(LayoutMarker.Kind(marker));
+                if (ready)
+                {
+                    // Everything the owner wrote before the ready flag is visible from here, the size included
+                    size = Interlocked.Read(ref header->SharedMemorySize);
+                }
+            }
+
+            int nodeCount = 0, nodeBufferSize = 0;
+            if (ready && supported && (kind == SharedBufferKind.CircularBuffer || kind == SharedBufferKind.RpcBufferRing) && size >= ringHeaderSize)
+            {
+                if (length < ringHeaderSize)
+                    nodeCount = -1;
+                else
+                {
+                    // NodeCount with a fence, as an opener reads it, and the node size written before it
+                    var nodeHeader = (CircularBuffer.NodeHeader*)(pointer + headerSize);
+                    nodeCount = Interlocked.CompareExchange(ref nodeHeader->NodeCount, 0, 0);
+                    nodeBufferSize = nodeHeader->NodeBufferSize;
+                }
+            }
+
+            return new SharedBufferInfo(name, kind, version, supported, ready, shutdown, size > headerSize ? size - headerSize : 0, nodeCount, nodeBufferSize);
+        }
+
+        /// <summary>
+        /// The public kind for a layout marker's kind; <see cref="SharedBufferKind.Unknown"/> for one this version does not know.
+        /// </summary>
+        private static SharedBufferKind KindOf(int kind)
+        {
+            switch (kind)
+            {
+                case LayoutMarker.KindSharedBuffer:
+                    return SharedBufferKind.Other;
+                case LayoutMarker.KindBufferReadWrite:
+                    return SharedBufferKind.BufferReadWrite;
+                case LayoutMarker.KindSharedArray:
+                    return SharedBufferKind.SharedArray;
+                case LayoutMarker.KindCircularBuffer:
+                    return SharedBufferKind.CircularBuffer;
+                case LayoutMarker.KindRpcBufferRing:
+                    return SharedBufferKind.RpcBufferRing;
+                default:
+                    return SharedBufferKind.Unknown;
+            }
         }
 
         #endregion
