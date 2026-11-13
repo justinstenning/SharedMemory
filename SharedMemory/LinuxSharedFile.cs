@@ -42,8 +42,9 @@ namespace SharedMemory
     /// <para>The file names come from <see cref="UnixFiles.FileName"/>. Every process that has a buffer open holds a shared lock on its file, so that a file
     /// nobody holds a lock on is one whose last holder died without closing it. The rules give the same lifetime as a named mapping on Windows:</para>
     /// <list type="bullet">
-    /// <item>Create: write the whole file, 0600 and preallocated, under a temporary name, take the shared lock, and publish it with <c>link()</c>, which fails if
-    /// the name is taken. A taken name whose file nobody holds is removed and the link tried again; otherwise the name is in use.</item>
+    /// <item>Create: a name whose file somebody holds is in use, and nothing is written. Otherwise write the whole file, 0600 and preallocated, under a temporary
+    /// name, take the shared lock, and publish it with <c>link()</c>, which fails if the name is taken. A taken name whose file nobody holds is removed and the
+    /// link tried again; otherwise the name is in use.</item>
     /// <item>Open: a file nobody holds is removed, and the name does not exist. Otherwise take the shared lock, then check that the name still leads to the
     /// same file, which a process removing it may have unlinked meanwhile.</item>
     /// <item>Close: whoever gets an exclusive lock was the last holder, and removes the file.</item>
@@ -186,8 +187,12 @@ namespace SharedMemory
             uint uid = GetEffectiveUserId();
             string path = Folder + UnixFiles.FileName(name, uid);
             bool perUser = !UnixFiles.IsGlobal(name);
-            string temporary = Folder + UnixFiles.TemporaryPrefix + UnixFiles.Base32(RandomNumberGenerator.GetBytes(17), 26);
 
+            // A name in use needs no file of its own, which takes as much of /dev/shm as the buffer: look before writing one.
+            if (IsInUse(path, name, perUser, uid))
+                return null;
+
+            string temporary = Folder + UnixFiles.TemporaryPrefix + UnixFiles.Base32(RandomNumberGenerator.GetBytes(17), 26);
             SafeFileHandle handle = CreateTemporary(temporary, name, size);
             try
             {
@@ -203,28 +208,10 @@ namespace SharedMemory
                         throw KeptChanging(name, path);
 
                     // The name is taken, by a buffer in use or by a file whose last holder died without closing it.
-                    Statx status;
-                    SafeFileHandle existing = OpenFile(path, name, perUser, uid, out status);
-                    if (existing == null)
-                        continue;
-                    using (existing)
+                    if (IsInUse(path, name, perUser, uid))
                     {
-                        if (TryLock(existing, LOCK_EX | LOCK_NB, path))
-                        {
-                            // Nobody holds it: remove it, and publish this one.
-                            RemoveIfNamed(path, status, true);
-                            continue;
-                        }
-
-                        // Somebody holds it. It is in use, unless that somebody is removing it: wait for a shared lock to find out.
-                        Lock(existing, LOCK_SH, path);
-                        if (IsNamed(path, status))
-                        {
-                            // In use. Let go of it as any holder does, which removes it if its holders closed meanwhile.
-                            CloseStep(existing, path, status);
-                            handle.Dispose();
-                            return null;
-                        }
+                        handle.Dispose();
+                        return null;
                     }
                 }
             }
@@ -236,6 +223,36 @@ namespace SharedMemory
             finally
             {
                 Unlink(temporary);
+            }
+        }
+
+        /// <summary>
+        /// Whether a buffer in use holds <paramref name="path"/>. A file there whose last holder died without closing it is removed.
+        /// </summary>
+        [SupportedOSPlatform("linux")]
+        static bool IsInUse(string path, string name, bool perUser, uint uid)
+        {
+            Statx status;
+            SafeFileHandle existing = OpenFile(path, name, perUser, uid, out status);
+            if (existing == null)
+                return false;
+            using (existing)
+            {
+                if (TryLock(existing, LOCK_EX | LOCK_NB, path))
+                {
+                    // Nobody holds it: remove it.
+                    RemoveIfNamed(path, status, true);
+                    return false;
+                }
+
+                // Somebody holds it. It is in use, unless that somebody is removing it: wait for a shared lock to find out.
+                Lock(existing, LOCK_SH, path);
+                if (!IsNamed(path, status))
+                    return false;
+
+                // In use. Let go of it as any holder does, which removes it if its holders closed meanwhile.
+                CloseStep(existing, path, status);
+                return true;
             }
         }
 
