@@ -512,6 +512,7 @@ namespace SharedMemoryTests
         [DataRow(IntArray, "CreateOrOpen", 300)]
         [DataRow(Ring, "CreateOrOpen", 300)]
         [DataRow(ReadWrite, "open", 0)]
+        [DataRow(IntArray, "open", 0)]
         [DataRow(Ring, "open", 0)]
         public void NeverReady_WithTimeout_ThrowsNotReady(string kind, string how, int timeout)
         {
