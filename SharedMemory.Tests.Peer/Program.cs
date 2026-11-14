@@ -18,11 +18,14 @@ namespace SharedMemoryTests.Peer
     /// createoropen readwrite {name} {size} [after {path}]
     /// createoropen circular {name} {node count} {node size} [after {path}]
     /// createoropen array {name} {length} [after {path}]
-    ///                              with SharedMemoryOpenMode.CreateOrOpen, once the file {path} exists if given;
+    ///                              with SharedMemoryOpenMode.CreateOrOpen; with after, it first writes {path}.waiting.{pid},
+    ///                              then waits for the file {path};
     ///                              replies created={CreatedSharedMemory} owner={IsOwnerOfSharedMemory}
     /// info {name}                  SharedBuffer.TryGetInfo: replies False, or the info's properties as name=value
-    /// write {hex}                  at offset 0, or one circular node; replies with the bytes written
-    /// read {count} [{timeout ms}]  at offset 0, or one circular node; replies with the bytes as hex
+    /// write {hex}                  at offset 0 (an array's first elements, whole ints), or one circular node; replies with the
+    ///                              bytes written
+    /// read {count} [{timeout ms}]  at offset 0 (an array's first elements, whole ints), or one circular node; replies with the
+    ///                              bytes as hex
     /// lock read|write              BufferWithLocks.AcquireReadLock or AcquireWriteLock
     /// unlock read|write            BufferWithLocks.ReleaseReadLock or ReleaseWriteLock
     /// shuttingdown                 replies True or False
@@ -130,8 +133,10 @@ namespace SharedMemoryTests.Peer
             int sizes = kind == "circular" ? 2 : 1;
             if (args.Length == 3 + sizes + 2 && args[3 + sizes] == "after")
             {
-                // The start barrier of a race: every peer waits for the same file, then creates or opens at once
+                // The start barrier of a race: every peer says it is waiting, with a file of its own beside the start file, then
+                // waits for the same start file, and creates or opens at once
                 string path = args[4 + sizes];
+                System.IO.File.WriteAllText(path + ".waiting." + System.Diagnostics.Process.GetCurrentProcess().Id, "");
                 if (!System.Threading.SpinWait.SpinUntil(() => System.IO.File.Exists(path), 60000))
                     throw new TimeoutException("The start file did not appear within 60 s.");
             }
@@ -177,6 +182,12 @@ namespace SharedMemoryTests.Peer
                 return ((CircularBuffer)held).Write(data);
             if (held is BufferReadWrite)
                 ((BufferReadWrite)held).Write(data);
+            else if (held is SharedArray<int>)
+            {
+                var array = (SharedArray<int>)held;
+                for (int i = 0; i < data.Length / sizeof(int); i++)
+                    array[i] = BitConverter.ToInt32(data, i * sizeof(int));
+            }
             else
                 ((EventFreeBuffer)held).WriteBytes(data);
             return data.Length;
@@ -193,6 +204,12 @@ namespace SharedMemoryTests.Peer
             }
             else if (held is BufferReadWrite)
                 ((BufferReadWrite)held).Read(data);
+            else if (held is SharedArray<int>)
+            {
+                var array = (SharedArray<int>)held;
+                for (int i = 0; i < count / sizeof(int); i++)
+                    BitConverter.GetBytes(array[i]).CopyTo(data, i * sizeof(int));
+            }
             else
                 data = ((EventFreeBuffer)held).ReadBytes(count);
             return data;

@@ -185,6 +185,68 @@ namespace SharedMemoryTests
         }
 
         /// <summary>
+        /// A buffer without a layout marker whose size is not written yet, as a SharedMemory 2.3.x creator leaves it until it has
+        /// made the buffer: kind Unknown, layout version 0, not ready, and size 0.
+        /// </summary>
+        [TestMethod]
+        public void TryGetInfo_23xBufferBeforeItsSize()
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = CreateToday(ReadWrite, name))
+            using (var raw = new RawHeader(name))
+            {
+                int marker = raw.Marker;
+                long size = raw.Size;
+                raw.Marker = 0;
+                raw.Size = 0;
+                try
+                {
+                    SharedBufferInfo info;
+                    Assert.IsTrue(SharedBuffer.TryGetInfo(name, out info));
+                    Assert.AreEqual(SharedBufferKind.Unknown, info.Kind, "Kind");
+                    Assert.AreEqual(0, info.LayoutVersion, "LayoutVersion");
+                    Assert.IsFalse(info.IsReady, "IsReady");
+                    Assert.AreEqual(0L, info.BufferSize, "BufferSize");
+                }
+                finally
+                {
+                    raw.Size = size;
+                    raw.Marker = marker;
+                }
+            }
+        }
+
+        /// <summary>
+        /// A marker whose kind this version does not know, as a later version may write: kind Unknown, with its layout version 1
+        /// telling it from a buffer without a marker, ready, and its size.
+        /// </summary>
+        [TestMethod]
+        public void TryGetInfo_UnknownKind()
+        {
+            string name = Guid.NewGuid().ToString();
+            using (var owner = CreateToday(ReadWrite, name))
+            using (var raw = new RawHeader(name))
+            {
+                int marker = raw.Marker;
+                // Layout version 1, kind 7, ready
+                raw.Marker = 0x00001071;
+                try
+                {
+                    SharedBufferInfo info;
+                    Assert.IsTrue(SharedBuffer.TryGetInfo(name, out info));
+                    Assert.AreEqual(SharedBufferKind.Unknown, info.Kind, "Kind");
+                    Assert.AreEqual(1, info.LayoutVersion, "LayoutVersion");
+                    Assert.IsTrue(info.IsReady, "IsReady");
+                    Assert.AreEqual(owner.BufferSize, info.BufferSize, "BufferSize");
+                }
+                finally
+                {
+                    raw.Marker = marker;
+                }
+            }
+        }
+
+        /// <summary>
         /// A marker from a later version, with layout version 2, or with lock mode 1: not supported, where an open would refuse it,
         /// and a ring's node header, whose layout this version cannot know, not read.
         /// </summary>
@@ -244,6 +306,47 @@ namespace SharedMemoryTests
         }
 
 #if NET
+        /// <summary>
+        /// Linux: TryGetInfo makes no file under the name at any moment, an event's included, not even one it removes again before
+        /// it returns: /dev/shm is watched while it runs.
+        /// </summary>
+        [TestMethod]
+        [OSCondition(OperatingSystems.Linux)]
+        [DataRow(ReadWrite)]
+        [DataRow(Ring)]
+        [DataRow(EventFree)]
+        [SupportedOSPlatform("linux")]
+        public void TryGetInfo_MakesNoFile(string kind)
+        {
+            string name = Guid.NewGuid().ToString();
+            string sentinel = "/dev/shm/.sentinel-" + name;
+            var made = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            using (var owner = kind == EventFree ? new EventFreeBuffer(name, Size) : CreateToday(kind, name))
+            using (var watcher = new FileSystemWatcher("/dev/shm", "*" + name + "*"))
+            using (var seen = new System.Threading.ManualResetEventSlim())
+            {
+                watcher.NotifyFilter = NotifyFilters.FileName;
+                watcher.Created += (sender, e) =>
+                {
+                    if (e.FullPath == sentinel)
+                        seen.Set();
+                    else
+                        made.Enqueue(e.Name);
+                };
+                watcher.Renamed += (sender, e) => made.Enqueue(e.Name);
+                watcher.EnableRaisingEvents = true;
+
+                SharedBufferInfo info;
+                Assert.IsTrue(SharedBuffer.TryGetInfo(name, out info), kind);
+
+                // The watcher reports in order: once it has seen the sentinel, it has seen any file TryGetInfo made
+                File.WriteAllText(sentinel, "");
+                File.Delete(sentinel);
+                Assert.IsTrue(seen.Wait(5000), "The watcher did not report the sentinel file.");
+                CollectionAssert.AreEqual(new string[0], made.ToArray(), kind + ": files made under the name while TryGetInfo ran");
+            }
+        }
+
         /// <summary>
         /// Linux and macOS: a buffer whose holder was killed is removed, as an open removes it, and TryGetInfo returns false.
         /// </summary>
