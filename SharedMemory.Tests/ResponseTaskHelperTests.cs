@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SharedMemory;
 
+#pragma warning disable CS0618 // TimeoutOrCancel is obsolete, and tested until 3.0 removes it
 namespace SharedMemoryTests
 {
     /// <summary>

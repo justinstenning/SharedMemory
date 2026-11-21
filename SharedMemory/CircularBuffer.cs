@@ -26,6 +26,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Reflection;
@@ -117,7 +118,9 @@ namespace SharedMemory
         {
             get
             {
+#pragma warning disable CS0618 // NodeHeader is obsolete for callers, and still the ring's layout
                 return NodeHeaderOffset + Marshal.SizeOf(typeof(NodeHeader));
+#pragma warning restore CS0618
             }
         }
 
@@ -152,7 +155,9 @@ namespace SharedMemory
 
         #region Private field members
 
+#pragma warning disable CS0618 // NodeHeader is obsolete for callers, and still the ring's layout
         private NodeHeader* _nodeHeader = null;
+#pragma warning restore CS0618
 
         // Where the node buffers start, read from NodeBufferOffset once each Open, when the node count is known. A node's buffer is
         // computed from it and the node's index, never read from the node's Offset (BufferAndRingSafety FR-010).
@@ -184,6 +189,8 @@ namespace SharedMemory
         /// </summary>
         /// <remarks>This structure is the same size on 32-bit and 64-bit architectures.</remarks>
         [StructLayout(LayoutKind.Sequential)]
+        [Obsolete("Use CircularBuffer's NodeCount and NodeBufferSize for the ring's sizes. It will be removed in 3.0.")]
+        [EditorBrowsable(EditorBrowsableState.Never)]
         public struct NodeHeader
         {
             /// <summary>
@@ -366,8 +373,10 @@ namespace SharedMemory
             Open();
         }
 
+#pragma warning disable CS0618 // NodeHeader is obsolete for callers, and still the ring's layout
         private CircularBuffer(string name, int nodeCount, int nodeBufferSize, bool ownsSharedMemory, SharedMemoryOptions options)
             : base(name, Marshal.SizeOf(typeof(NodeHeader)) + (Marshal.SizeOf(typeof(Node)) * nodeCount) + (nodeCount * (long)nodeBufferSize), ownsSharedMemory, options)
+#pragma warning restore CS0618
         {
             #region Argument validation
             if (ownsSharedMemory && nodeCount < 2)
@@ -460,7 +469,9 @@ namespace SharedMemory
                 NodeBufferSize = _requestedNodeBufferSize;
 
                 // Retrieve pointer to node header
+#pragma warning disable CS0618 // NodeHeader is obsolete for callers, and still the ring's layout
                 _nodeHeader = (NodeHeader*)(BufferStartPtr + NodeHeaderOffset);
+#pragma warning restore CS0618
                 _nodeBufferOffset = NodeBufferOffset;
 
                 // Initialise nodes entries first: an opener takes a non-zero NodeCount to mean the buffer is ready
@@ -472,7 +483,9 @@ namespace SharedMemory
             else
             {
                 // Load the NodeHeader, waiting for the owner to finish initialising it, and check it before using it
+#pragma warning disable CS0618 // NodeHeader is obsolete for callers, and still the ring's layout
                 _nodeHeader = (NodeHeader*)(BufferStartPtr + NodeHeaderOffset);
+#pragma warning restore CS0618
                 NodeCount = WaitForNodeCount();
                 NodeBufferSize = _nodeHeader->NodeBufferSize;
                 _nodeBufferOffset = NodeBufferOffset;
@@ -531,6 +544,7 @@ namespace SharedMemory
             if (!IsOwnerOfSharedMemory)
                 return;
 
+#pragma warning disable CS0618 // NodeHeader is obsolete for callers, and still the ring's layout
             NodeHeader header = new NodeHeader();
             header.ReadStart = 0;
             header.ReadEnd = 0;
@@ -539,6 +553,7 @@ namespace SharedMemory
             header.NodeBufferSize = NodeBufferSize;
             header.NodeCount = 0;
             base.Write<NodeHeader>(ref header, NodeHeaderOffset);
+#pragma warning restore CS0618
 
             // NodeCount goes last, with a full fence, so an opener that reads it non-zero also sees everything written before it
             Interlocked.Exchange(ref _nodeHeader->NodeCount, NodeCount);
@@ -1105,6 +1120,8 @@ namespace SharedMemory
         /// Returns a copy of the shared memory header
         /// </summary>
         /// <exception cref="ObjectDisposedException">This instance is closed.</exception>
+        [Obsolete("Use NodeCount and NodeBufferSize for the ring's sizes. It will be removed in 3.0.")]
+        [EditorBrowsable(EditorBrowsableState.Never)]
         public NodeHeader ReadNodeHeader()
         {
             Enter();

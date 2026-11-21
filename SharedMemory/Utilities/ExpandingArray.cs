@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Text;
 
@@ -15,6 +16,8 @@ namespace SharedMemory.Utilities
     ///       leaving holes that have to be freed/reallocated.
     /// </summary>
     /// <typeparam name="T"></typeparam>
+    [Obsolete("SharedMemory does not use this type. It will be removed in 3.0.")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public class ExpandingArray<T> : IList<T>
     {
         /// <summary>

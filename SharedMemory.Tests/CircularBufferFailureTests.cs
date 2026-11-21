@@ -109,10 +109,12 @@ namespace SharedMemoryTests
             {
                 // An item to read, so that a read would take a node
                 Assert.AreEqual(queued.Length, ring.Write(queued));
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
                 string before = Describe(ring.ReadNodeHeader());
 
                 Part(problems, "the exception", () => AssertThrows(BadCalls[call].Key, () => BadCalls[call].Value(ring), call));
                 Part(problems, "the indices", () => Assert.AreEqual(before, Describe(ring.ReadNodeHeader())));
+#pragma warning restore CS0618
                 Part(problems, "the item written before", () => AssertReads(ring, queued, "the item written before"));
                 AssertRingWorks(ring, name, problems);
             }
@@ -132,7 +134,9 @@ namespace SharedMemoryTests
             {
                 Assert.ThrowsExactly<CallbackException>(() => ring.Write(p => { Marshal.WriteInt32(p, 5); throw new CallbackException(); }));
 
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
                 CircularBuffer.NodeHeader header = ring.ReadNodeHeader();
+#pragma warning restore CS0618
                 Assert.AreEqual(header.WriteStart, header.WriteEnd, "The failed write's node is still reserved: " + Describe(header));
                 Assert.AreEqual(0, ring.Read(new byte[NodeSize], timeout: 100), "A read got data from the failed write");
                 AssertRingWorks(ring, name, problems);
@@ -155,7 +159,9 @@ namespace SharedMemoryTests
 
                 Assert.ThrowsExactly<CallbackException>(() => ring.Read(p => { throw new CallbackException(); }));
 
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
                 CircularBuffer.NodeHeader header = ring.ReadNodeHeader();
+#pragma warning restore CS0618
                 Assert.AreEqual(header.ReadStart, header.ReadEnd, "The failed read's node is still reserved: " + Describe(header));
                 AssertRingWorks(ring, name, problems);
             }
@@ -373,7 +379,9 @@ namespace SharedMemoryTests
         // How many posted items the ring holds
         static int Queued(CircularBuffer ring)
         {
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
             CircularBuffer.NodeHeader header = ring.ReadNodeHeader();
+#pragma warning restore CS0618
             return (header.WriteEnd - header.ReadStart + NodeCount) % NodeCount;
         }
 
@@ -450,7 +458,9 @@ namespace SharedMemoryTests
             Assert.Fail(what + " did not throw");
         }
 
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
         static string Describe(CircularBuffer.NodeHeader header)
+#pragma warning restore CS0618
         {
             return String.Format("ReadStart {0}, ReadEnd {1}, WriteStart {2}, WriteEnd {3}", header.ReadStart, header.ReadEnd, header.WriteStart, header.WriteEnd);
         }

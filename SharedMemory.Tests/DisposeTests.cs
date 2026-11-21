@@ -157,7 +157,9 @@ namespace SharedMemoryTests
                     AssertDisposed(name, () => { int read; ring.Read(out read, 0); }, "Read(out T)" + after);
                     AssertDisposed(name, () => ring.Read(memory, 16, 0), "Read(IntPtr)" + after);
                     AssertDisposed(name, () => ring.Read(p => 0, 0), "Read(Func)" + after);
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
                     AssertDisposed(name, () => ring.ReadNodeHeader(), "ReadNodeHeader" + after);
+#pragma warning restore CS0618
                 }
             }
             finally

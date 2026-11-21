@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SharedMemory.Utilities;
 
+#pragma warning disable CS0618 // ExpandingArray is obsolete, and tested until 3.0 removes it
 namespace SharedMemoryTests
 {
     [TestClass]
