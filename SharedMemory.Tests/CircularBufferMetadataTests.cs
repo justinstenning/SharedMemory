@@ -17,7 +17,9 @@ namespace SharedMemoryTests
     {
         const int NodeCount = 3;
         const int NodeSize = 64;
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
         static readonly int NodeHeaderSize = Marshal.SizeOf(typeof(CircularBuffer.NodeHeader));
+#pragma warning restore CS0618
         static readonly int NodeStructSize = Marshal.SizeOf(typeof(CircularBuffer.Node));
 
         // 64 bytes: a whole node
@@ -420,7 +422,9 @@ namespace SharedMemoryTests
         // Where things are in a ring of NodeCount nodes of NodeSize bytes, from the start of its buffer
         static long HeaderField(string field)
         {
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
             return Marshal.OffsetOf(typeof(CircularBuffer.NodeHeader), field).ToInt64();
+#pragma warning restore CS0618
         }
 
         static long NodeField(int node, string field)

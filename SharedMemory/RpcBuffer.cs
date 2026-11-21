@@ -62,7 +62,8 @@ namespace SharedMemory
     /// <summary>
     /// Extension methods for adorning RPC tasks
     /// </summary>
-
+    [Obsolete("RemoteRequestAsync takes a timeout and a cancellation token. It will be removed in 3.0.")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public static class ResponseTaskHelper
     {
         static readonly RpcResponse CancelledRpcResponse = new RpcResponse(false, null);
@@ -75,6 +76,8 @@ namespace SharedMemory
         /// <param name="millisecondsTimeout"></param>
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
+        [Obsolete("RemoteRequestAsync takes a timeout and a cancellation token. It will be removed in 3.0.")]
+        [EditorBrowsable(EditorBrowsableState.Never)]
         public static async Task<RpcResponse> TimeoutOrCancel(this Task<RpcResponse> task, int millisecondsTimeout, CancellationToken cancellationToken = default)
         {
             if (task.IsCompleted)

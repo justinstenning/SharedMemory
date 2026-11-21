@@ -254,7 +254,9 @@ namespace SharedMemoryTests
         [TestMethod]
         public void StructSize_SharedMemoryNodeHeader_Is24bytes()
         {
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
             Assert.AreEqual(24, Marshal.SizeOf(typeof(CircularBuffer.NodeHeader)));
+#pragma warning restore CS0618
         }
 
         #endregion
@@ -281,7 +283,9 @@ namespace SharedMemoryTests
                 for (var i = 0; i < data.Length; i++)
                     Assert.AreEqual(data[i], readBuf[i], String.Format("Data written does not match data read at index {0}", i));
 
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
                 CircularBuffer.NodeHeader header = smr.ReadNodeHeader();
+#pragma warning restore CS0618
                 Assert.AreEqual(1, header.WriteStart);
                 Assert.AreEqual(1, header.WriteEnd);
                 Assert.AreEqual(1, header.ReadStart);
@@ -300,6 +304,7 @@ namespace SharedMemoryTests
             int bufSize = 1024;
             byte[] data = new byte[bufSize];
             byte[] readBuf = new byte[bufSize];
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
             CircularBuffer.NodeHeader header;
 
             // Fill with random data
@@ -337,6 +342,7 @@ namespace SharedMemoryTests
                     }), String.Format("Failed to read {0} bytes", bufSize));
 
                 header = smr.ReadNodeHeader();
+#pragma warning restore CS0618
                 Assert.AreEqual(1, header.ReadStart, "After single read ReadStart");
                 Assert.AreEqual(1, header.ReadEnd, "After single read ReadEnd");
             }
@@ -648,6 +654,7 @@ namespace SharedMemoryTests
             int bufSize = 1024;
             byte[] data = new byte[bufSize];
             byte[] readBuf = new byte[bufSize];
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
             CircularBuffer.NodeHeader header;
 
             // Fill with random data
@@ -734,6 +741,7 @@ namespace SharedMemoryTests
                 }), String.Format("Failed to read {0} bytes", bufSize));
 
                 header = smr.ReadNodeHeader();
+#pragma warning restore CS0618
                 Assert.AreEqual(3, header.ReadStart, "After nested out of order read (1,2,3) ReadStart");
                 Assert.AreEqual(3, header.ReadEnd, "After nested out of order read (1,2,3) ReadEnd");
             }
@@ -983,9 +991,11 @@ namespace SharedMemoryTests
                 }
             }
 
+#pragma warning disable CS0618 // NodeHeader and ReadNodeHeader are obsolete, and tested until 3.0 removes them
             NodeHeader* SharedNodeHeader
             {
                 get { return (NodeHeader*)(BufferStartPtr + NodeHeaderOffset); }
+#pragma warning restore CS0618
             }
 
             /// <summary>

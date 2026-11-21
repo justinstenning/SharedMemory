@@ -27,6 +27,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Security.Permissions;
 
 namespace SharedMemory.Utilities
@@ -39,6 +40,8 @@ namespace SharedMemory.Utilities
     [PermissionSet(SecurityAction.LinkDemand)]
     [PermissionSet(SecurityAction.InheritanceDemand)]
 #endif
+    [Obsolete("SharedMemory does not use this type. For an array, use ArraySegment<T>. It will be removed in 3.0.")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public struct ArraySlice<T> : IList<T>
     {
         private readonly IList<T> _list;

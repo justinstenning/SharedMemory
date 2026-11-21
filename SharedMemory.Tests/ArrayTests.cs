@@ -67,6 +67,7 @@ namespace SharedMemoryTests
                 }
 
                 list[3] = 68;
+#pragma warning disable CS0618 // ArraySlice is obsolete, and tested until 3.0 removes it
                 IList<int> arraySlice = new ArraySlice<int>(list, 1, 8);
                 arraySlice[0] = 67;
 
@@ -74,6 +75,7 @@ namespace SharedMemoryTests
                 {
                     IList<int> r = smr;
                     IList<int> rarraySlice = new ArraySlice<int>(r, 1, 8);
+#pragma warning restore CS0618
 
                     Assert.AreEqual(67, rarraySlice[0], "");
                     Assert.AreEqual(68, rarraySlice[2], "");

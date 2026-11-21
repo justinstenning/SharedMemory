@@ -30,6 +30,7 @@ using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SharedMemory.Utilities;
 
+#pragma warning disable CS0618 // ArraySlice is obsolete, and tested until 3.0 removes it
 namespace SharedMemoryTests
 {
     [TestClass]

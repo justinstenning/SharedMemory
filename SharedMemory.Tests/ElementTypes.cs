@@ -99,7 +99,9 @@ namespace SharedMemoryTests
             check.Check<UIntPtr>("UIntPtr", IntPtr.Size);
             check.Check<Guid>("Guid", 16);
             check.Check<SharedHeader>("SharedHeader", 16);
+#pragma warning disable CS0618 // NodeHeader is obsolete, but its layout stays pinned until 3.0 removes it
             check.Check<CircularBuffer.NodeHeader>("CircularBuffer.NodeHeader", 24);
+#pragma warning restore CS0618
             check.Check<CircularBuffer.Node>("CircularBuffer.Node", 32);
             check.Check<Pack1>("Pack1", 15);
             check.Check<Pack2>("Pack2", 16);

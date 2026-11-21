@@ -990,7 +990,9 @@ namespace SharedMemory
                 {
                     // The shared header first; a ring's node header after it only where the header says it is there
                     int headerSize = Marshal.SizeOf(typeof(SharedHeader));
+#pragma warning disable CS0618 // NodeHeader is obsolete for callers, and still the ring's layout
                     int ringHeaderSize = headerSize + Marshal.SizeOf(typeof(CircularBuffer.NodeHeader));
+#pragma warning restore CS0618
                     info = ReadInfo(name, file, headerSize);
                     if (info.NodeCount < 0)
                         info = ReadInfo(name, file, ringHeaderSize);
@@ -1033,7 +1035,9 @@ namespace SharedMemory
         {
             var header = (SharedHeader*)pointer;
             int headerSize = Marshal.SizeOf(typeof(SharedHeader));
+#pragma warning disable CS0618 // NodeHeader is obsolete for callers, and still the ring's layout
             int ringHeaderSize = headerSize + Marshal.SizeOf(typeof(CircularBuffer.NodeHeader));
+#pragma warning restore CS0618
 
             // In an opener's order: the size, Shutdown, then the marker (WaitForHeader)
             long size = Interlocked.Read(ref header->SharedMemorySize);
@@ -1064,7 +1068,9 @@ namespace SharedMemory
                 else
                 {
                     // NodeCount with a fence, as an opener reads it, and the node size written before it
+#pragma warning disable CS0618 // NodeHeader is obsolete for callers, and still the ring's layout
                     var nodeHeader = (CircularBuffer.NodeHeader*)(pointer + headerSize);
+#pragma warning restore CS0618
                     nodeCount = Interlocked.CompareExchange(ref nodeHeader->NodeCount, 0, 0);
                     nodeBufferSize = nodeHeader->NodeBufferSize;
                 }
