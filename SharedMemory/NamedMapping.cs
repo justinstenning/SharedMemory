@@ -80,14 +80,9 @@ namespace SharedMemory
         /// </summary>
         /// <param name="name">The name.</param>
         /// <param name="size">The size in bytes.</param>
-        /// <param name="failure">Null, but on Windows where the framework's <see cref="MemoryMappedFile"/> creates the memory: the
-        /// <see cref="IOException"/> its create threw. It throws one for a name in use and for other failures alike, so every one
-        /// returns null here; the caller's open of the name then tells the two apart.</param>
-        /// <exception cref="System.IO.IOException">Linux, macOS and the .NET Framework 3.5 build: the create failed other than for a
-        /// name in use.</exception>
-        internal static NamedMapping TryCreateNew(string name, long size, out IOException failure)
+        /// <exception cref="System.IO.IOException">The create failed other than for a name in use.</exception>
+        internal static NamedMapping TryCreateNew(string name, long size)
         {
-            failure = null;
 #if NET10_0_OR_GREATER
             if (LinuxSharedFile.IsSupported)
             {
@@ -109,7 +104,9 @@ namespace SharedMemory
             }
             catch (IOException e)
             {
-                failure = e;
+                // The framework's create throws IOException for a name in use and for other failures alike; only its HResult tells them apart
+                if (HResultOf(e) != ErrorAlreadyExists)
+                    throw;
                 return null;
             }
 #else
@@ -118,6 +115,24 @@ namespace SharedMemory
 #endif
         }
 
+#if NET40Plus
+        /// <summary>
+        /// ERROR_ALREADY_EXISTS as an HResult: what the framework's <see cref="MemoryMappedFile.CreateNew(string, long)"/> throws
+        /// for a name in use, on every build that uses it.
+        /// </summary>
+        private const int ErrorAlreadyExists = unchecked((int)0x800700B7);
+
+        private static int HResultOf(Exception e)
+        {
+#if NET40
+            // Exception.HResult is protected before .NET Framework 4.5
+            return System.Runtime.InteropServices.Marshal.GetHRForException(e);
+#else
+            return e.HResult;
+#endif
+        }
+
+#endif
         /// <summary>
         /// Opens the shared memory another instance created under <paramref name="name"/>.
         /// </summary>

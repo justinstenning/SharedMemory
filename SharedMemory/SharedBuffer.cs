@@ -496,8 +496,7 @@ namespace SharedMemory
             for (int pause = 1; ; pause = Math.Min(pause * 2, 16))
             {
                 wait.ThrowIfCancelled();
-                System.IO.IOException createFailed;
-                NamedMapping created = NamedMapping.TryCreateNew(Name, SharedMemorySize, out createFailed);
+                NamedMapping created = NamedMapping.TryCreateNew(Name, SharedMemorySize);
                 if (created != null)
                 {
                     CreatedSharedMemory = true;
@@ -515,13 +514,7 @@ namespace SharedMemory
                 {
                     int left = wait.LeftOf(1000);
                     if (left == 0)
-                    {
-                        // Where the create cannot tell a name in use from another failure (Windows), an open that never finds the
-                        // name means the create failed for that other reason
-                        if (createFailed != null)
-                            throw createFailed;
                         throw new System.IO.IOException(String.Format("The shared memory \"{0}\" could not be created or opened: each create found the name in use, and each open found it gone, for {1}.", Name, wait.Waited(1000)), notFound);
-                    }
                     wait.Pause(left == Timeout.Infinite ? pause : Math.Min(pause, left));
                 }
             }
