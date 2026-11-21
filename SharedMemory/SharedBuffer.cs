@@ -217,6 +217,9 @@ namespace SharedMemory
         private readonly long _requestedBufferSize;
         // The waits of the Open that is running, for a subclass's DoOpen in this library; null outside Open
         private OpenWait _openWait;
+        // 1 once Close has set Shutdown, until the next Open. An owner sets the flag once: a Close that comes again while a call still
+        // holds the mapping must not set it over an instance that has taken the buffer over since.
+        private int _shutdownSet;
 
         #endregion
 
@@ -353,6 +356,7 @@ namespace SharedMemory
             OpenOptions options = _openOptions ?? OpenOptions.Defaults;
             var wait = new OpenWait(options);
             CreatedSharedMemory = false;
+            Interlocked.Exchange(ref _shutdownSet, 0);
             // Each open starts as the constructor asked: an earlier open may have attached as an opener, with the size it found
             IsOwnerOfSharedMemory = _createsSharedMemory;
             if (_createsSharedMemory)
@@ -737,7 +741,8 @@ namespace SharedMemory
         /// MemoryMappedFile and MemoryMappedViewAccessor.<br />
         /// Close returns at once. A read or write still running on another thread, or a callback that called Close, keeps the memory
         /// mapped until it returns, and the memory is released then. Reads and writes that start after Close throw
-        /// <see cref="ObjectDisposedException"/>. Close may be called again, and <see cref="Dispose()"/> after it.
+        /// <see cref="ObjectDisposedException"/>. Close may be called again, and <see cref="Dispose()"/> after it; only the first sets
+        /// the <see cref="ShuttingDown"/> flag.
         /// </summary>
         public virtual void Close()
         {
@@ -747,9 +752,10 @@ namespace SharedMemory
                 WaitWhileUnmapping();
             try
             {
-                if (held && IsOwnerOfSharedMemory && Header != null)
+                if (held && IsOwnerOfSharedMemory && Header != null && Interlocked.Exchange(ref _shutdownSet, 1) == 0)
                 {
-                    // Indicates to any open instances that the owner is no longer open
+                    // Indicates to any open instances that the owner is no longer open. Once only: by a later Close, another instance
+                    // may have taken the buffer over (SharedMemoryOpenMode.CreateOrOpen) and cleared the flag
 #pragma warning disable 0420 // ignore ref to volatile warning - Interlocked API
                     Interlocked.Exchange(ref Header->Shutdown, 1);
 #pragma warning restore 0420
