@@ -87,7 +87,34 @@ namespace SharedMemory
         /// <param name="length">The number of elements to make room for within the shared memory array.</param>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> elements of <typeparamref name="T"/> take more than <see cref="Int32.MaxValue"/> bytes -or- <paramref name="length"/> is less than 1.</exception>
         public SharedArray(string name, int length)
-            : base(name, BufferSizeFor(length), true)
+            : this(name, length, SharedMemoryOptions.Defaults)
+        {
+        }
+
+        /// <summary>
+        /// Creates the shared memory array with the name specified by <paramref name="name"/>, as <paramref name="options"/> say.
+        /// </summary>
+        /// <param name="name">The name of the shared memory array to be created.</param>
+        /// <param name="length">The number of elements to make room for within the shared memory array.</param>
+        /// <param name="options">The open mode, and the waits of an open. With the default options, this creates the array as
+        /// <see cref="SharedArray{T}(string, int)"/> does.</param>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> elements of <typeparamref name="T"/> take more than
+        /// <see cref="Int32.MaxValue"/> bytes -or- <paramref name="length"/> is less than 1. -or- An option is out of range: see
+        /// <see cref="SharedMemoryOptions"/>.</exception>
+        /// <remarks>With <see cref="SharedMemoryOpenMode.CreateOrOpen"/>, if the name is already in use, this opens the array there,
+        /// which must be a SharedArray with the same length in bytes, waiting for its owner to finish creating it. <see cref="SharedBuffer.CreatedSharedMemory"/>
+        /// is then false. If its owner had closed it, this instance takes it over and becomes its owner
+        /// (<see cref="SharedBuffer.IsOwnerOfSharedMemory"/>); its contents are kept.</remarks>
+        /// <exception cref="System.IO.IOException">With <see cref="SharedMemoryOpenMode.CreateNew"/>, the name is already in use.</exception>
+        /// <exception cref="InvalidOperationException">With <see cref="SharedMemoryOpenMode.CreateOrOpen"/>, the array already there is
+        /// another kind of buffer, or has other sizes; or it is not ready: its owner had not finished creating it within the open
+        /// timeout, or 1 s without one, or closed it first; or it was created by a later version of SharedMemory, with a layout this
+        /// version cannot read.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, is already cancelled, or
+        /// is cancelled while create-or-open waits.</exception>
+        public SharedArray(string name, int length, SharedMemoryOptions options)
+            : base(name, BufferSizeFor(length), true, options)
         {
             Length = length;
             _elementSize = FastStructure.SizeOf<T>();
@@ -123,7 +150,32 @@ namespace SharedMemory
         /// it first. -or- It was created by a later version of SharedMemory, with a layout this version cannot read. -or- Its header is
         /// damaged.</exception>
         public SharedArray(string name)
-            : base(name, 0, false)
+            : this(name, SharedMemoryOptions.Defaults)
+        {
+        }
+
+        /// <summary>
+        /// Opens an existing shared memory array with the name as specified by <paramref name="name"/>, waiting for it as
+        /// <paramref name="options"/> say.
+        /// </summary>
+        /// <param name="name">The name of the shared memory array to open.</param>
+        /// <param name="options">The waits of the open: <see cref="SharedMemoryOptions.OpenTimeout"/>, and on .NET Framework 4 and later
+        /// <c>OpenCancellationToken</c>. <see cref="SharedMemoryOptions.OpenMode"/> is ignored. With the
+        /// default options, this opens the array as <see cref="SharedArray{T}(string)"/> does.</param>
+        /// <remarks>With an <see cref="SharedMemoryOptions.OpenTimeout"/>, this waits within it for the name to appear and for the owner
+        /// to finish creating the array; without one, a missing name throws at once, and the owner is waited for up to 1 s.</remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">If the shared memory location specified by <paramref name="name"/> does not have a
+        /// <see cref="SharedBuffer.BufferSize"/> that is evenly divisible by the size of <typeparamref name="T"/>. -or- An option is out of
+        /// range: see <see cref="SharedMemoryOptions"/>.</exception>
+        /// <exception cref="System.IO.FileNotFoundException">The name does not exist, or did not appear within the open timeout.</exception>
+        /// <exception cref="InvalidOperationException">The array is not ready: its owner had not finished creating it after 1 s, or within
+        /// the open timeout, or closed it first. -or- It was created by a later version of SharedMemory, with a layout this version cannot
+        /// read. -or- Its header is damaged.</exception>
+        /// <exception cref="OperationCanceledException">The options' <c>OpenCancellationToken</c>, in every build but .NET Framework 3.5, was cancelled before or
+        /// during the open.</exception>
+        public SharedArray(string name, SharedMemoryOptions options)
+            : base(name, 0, false, options)
         {
             try
             {
@@ -139,6 +191,18 @@ namespace SharedMemory
         }
 
         #endregion
+
+        /// <summary>
+        /// Create-or-open's check of the array it attached to: its size must be what <see cref="Length"/> elements of
+        /// <typeparamref name="T"/> take. The element type itself is not recorded, so it cannot be checked.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The sizes differ.</exception>
+        internal override void CheckAttachedSize(long requestedBufferSize)
+        {
+            if (BufferSize != requestedBufferSize)
+                throw new InvalidOperationException(String.Format("The shared array \"{0}\" already exists with {1} bytes, not the {2} that {3} elements of {4} take.",
+                    Name, BufferSize, requestedBufferSize, Length, typeof(T).Name));
+        }
 
         /// <summary>
         /// Perform any initialisation required when opening the shared memory array

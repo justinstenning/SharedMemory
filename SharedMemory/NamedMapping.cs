@@ -75,6 +75,65 @@ namespace SharedMemory
         }
 
         /// <summary>
+        /// Creates shared memory of <paramref name="size"/> bytes under <paramref name="name"/>, or returns null if the name is in use,
+        /// keeping nothing of it: create-or-open's create, which then opens the name.
+        /// </summary>
+        /// <param name="name">The name.</param>
+        /// <param name="size">The size in bytes.</param>
+        /// <exception cref="System.IO.IOException">The create failed other than for a name in use.</exception>
+        internal static NamedMapping TryCreateNew(string name, long size)
+        {
+#if NET10_0_OR_GREATER
+            if (LinuxSharedFile.IsSupported)
+            {
+                LinuxSharedFile linuxFile = LinuxSharedFile.TryCreate(name, size);
+                return linuxFile == null ? null : Map(linuxFile, size);
+            }
+            if (MacSharedObject.IsSupported)
+            {
+                MacSharedObject macObject = MacSharedObject.TryCreate(name, size);
+                return macObject == null ? null : Map(macObject);
+            }
+            if (!OperatingSystem.IsWindows())
+                throw PlatformSupport.NotSupported("named shared memory");
+#endif
+#if NET40Plus
+            try
+            {
+                return new NamedMapping(MemoryMappedFile.CreateNew(name, size));
+            }
+            catch (IOException e)
+            {
+                // The framework's create throws IOException for a name in use and for other failures alike; only its HResult tells them apart
+                if (HResultOf(e) != ErrorAlreadyExists)
+                    throw;
+                return null;
+            }
+#else
+            MemoryMappedFile file = MemoryMappedFile.TryCreateNew(name, size);
+            return file == null ? null : new NamedMapping(file);
+#endif
+        }
+
+#if NET40Plus
+        /// <summary>
+        /// ERROR_ALREADY_EXISTS as an HResult: what the framework's <see cref="MemoryMappedFile.CreateNew(string, long)"/> throws
+        /// for a name in use, on every build that uses it.
+        /// </summary>
+        private const int ErrorAlreadyExists = unchecked((int)0x800700B7);
+
+        private static int HResultOf(Exception e)
+        {
+#if NET40
+            // Exception.HResult is protected before .NET Framework 4.5
+            return System.Runtime.InteropServices.Marshal.GetHRForException(e);
+#else
+            return e.HResult;
+#endif
+        }
+
+#endif
+        /// <summary>
         /// Opens the shared memory another instance created under <paramref name="name"/>.
         /// </summary>
         /// <exception cref="System.IO.FileNotFoundException">Nothing exists under the name.</exception>

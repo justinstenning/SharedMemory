@@ -85,15 +85,31 @@ namespace System.IO.MemoryMappedFiles
         /// <returns></returns>
         public static MemoryMappedFile CreateNew(String mapName, long capacity)
         {
+            MemoryMappedFile created = TryCreateNew(mapName, capacity);
+            if (created == null)
+                throw new System.IO.IOException(UnsafeNativeMethods.GetMessage(UnsafeNativeMethods.ERROR_ALREADY_EXISTS));
+            return created;
+        }
+
+        /// <summary>
+        /// Creates a new memory-mapped file, or returns null if the name is already in use, keeping no handle on it.
+        /// </summary>
+        internal static MemoryMappedFile TryCreateNew(String mapName, long capacity)
+        {
             if (String.IsNullOrEmpty(mapName))
                 throw new ArgumentException("mapName cannot be null or empty.");
             if (capacity <= 0)
                 throw new ArgumentOutOfRangeException("capacity", "Value must be larger than 0.");
             if (IntPtr.Size == 4 && capacity > ((1024*1024*1024) * (long)4))
                 throw new ArgumentOutOfRangeException("capacity", "The capacity cannot be greater than the size of the system's logical address space.");
-            return new MemoryMappedFile(DoCreate(mapName, capacity));
+            SafeMemoryMappedFileHandle handle = DoCreate(mapName, capacity);
+            return handle == null ? null : new MemoryMappedFile(handle);
         }
 
+        /// <summary>
+        /// Creates the mapping, or returns null if the name is already in use. CreateFileMapping then returns a handle on the
+        /// mapping that has the name, which is closed at once, so that the name goes when its holders close it.
+        /// </summary>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Interoperability", "CA1404:CallGetLastErrorImmediatelyAfterPInvoke"), SecurityCritical]
         [SecurityPermission(SecurityAction.Demand, Flags = SecurityPermissionFlag.UnmanagedCode)]
         private static SafeMemoryMappedFileHandle DoCreate(string mapName, long capacity)
@@ -105,10 +121,12 @@ namespace System.IO.MemoryMappedFiles
             var lastWin32Error = Marshal.GetLastWin32Error();
             if (!safeHandle.IsInvalid && (lastWin32Error == UnsafeNativeMethods.ERROR_ALREADY_EXISTS))
             {
-                throw new System.IO.IOException(UnsafeNativeMethods.GetMessage(lastWin32Error));
+                safeHandle.Dispose();
+                return null;
             }
             else if (safeHandle.IsInvalid && lastWin32Error > 0)
             {
+                safeHandle.Dispose();
                 throw new System.IO.IOException(UnsafeNativeMethods.GetMessage(lastWin32Error));
             }
 
