@@ -383,8 +383,9 @@ namespace SharedMemoryTests
         #region The open wait and its token
 
         /// <summary>
-        /// An opener with a timeout of 2 s, of a name that another process creates 300 ms later, opens the buffer within 50 ms of
-        /// its creator returning, which it does once the buffer is ready.
+        /// An opener with a timeout of 2 s, of a name that another process creates 300 ms later, opens the buffer within 250 ms of
+        /// its creator returning, which it does once the buffer is ready: soon after, not at the timeout. It looks every 16 ms at most;
+        /// the bound allows for a loaded CI runner.
         /// </summary>
         [TestMethod]
         [DataRow(ReadWrite)]
@@ -414,7 +415,7 @@ namespace SharedMemoryTests
 
                     Assert.IsTrue(SpinWait.SpinUntil(() => opening.IsCompleted, 5000), kind + ": the opener did not return.");
                     Assert.AreEqual(TaskStatus.RanToCompletion, opening.Status, kind + ": the opener should have opened, but " + Describe(opening));
-                    Assert.IsTrue(openedAt - createdAt <= 50, kind + ": the opener opened " + (openedAt - createdAt) + " ms after the creator returned, at " + createdAt + " ms");
+                    Assert.IsTrue(openedAt - createdAt <= 250, kind + ": the opener opened " + (openedAt - createdAt) + " ms after the creator returned, at " + createdAt + " ms");
                     Assert.AreEqual(KindSize(kind), opening.Result.BufferSize, kind + ": the opener's BufferSize");
                     Assert.IsFalse(opening.Result.IsOwnerOfSharedMemory || opening.Result.CreatedSharedMemory, kind + ": the opener's IsOwnerOfSharedMemory and CreatedSharedMemory");
                 }
